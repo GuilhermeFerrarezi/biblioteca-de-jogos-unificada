@@ -1,6 +1,6 @@
-# Checkpoint - Biblioteca de Jogos Unificada
+﻿# Checkpoint - Biblioteca de Jogos Unificada
 
-Data: 2026-05-10
+Data: 2026-05-11
 
 ## Objetivo do projeto
 
@@ -47,6 +47,18 @@ Atualizacao em 2026-05-10: foi criada a skill `safe-local-executable-launch` par
 Atualizacao em 2026-05-10: foi implementado o primeiro corte de lancamento seguro de executaveis locais. O frontend envia apenas o `entryId` para o comando Tauri `launch_library_entry`; o backend busca a acao persistida no SQLite, exige jogo manual, acao primaria `executable`, caminho absoluto, arquivo existente, arquivo local nao remoto e extensao `.exe`, canonicaliza o caminho e executa via `std::process::Command` sem shell. Jogos mockados/importados com acao `executable` ainda exibem mensagem de provider futuro, pois nao estao persistidos no SQLite. Foram adicionados testes Rust de validacao de caminho vazio, relativo, inexistente, diretorio, remoto, extensao invalida, `.exe` existente e diretorio de trabalho padrao. Validacoes passaram: `cargo test` com `CARGO_TARGET_DIR` local, `cargo check`, `npm run lint`, `npm run build` e `npm run tauri:dev`.
 
 Atualizacao em 2026-05-10: a navegacao lateral da biblioteca foi corrigida. Os itens `Biblioteca`, `Steam` e `Locais` deixaram de ser links para `/` e passaram a atuar como botoes conectados ao mesmo estado dos filtros rapidos, limpando busca/mensagens ao trocar de contexto. O item `Contas` permanece como acao de feedback para fase futura de integracoes. Validacoes passaram: `npm run lint` e `npm run build`.
+
+Atualizacao em 2026-05-11: foi criada a versao de trabalho `Biblioteca de Jogos Unificada - v2` e o frontend foi migrado de TypeScript/TSX para JavaScript/JSX. Foram removidos `tsconfig*`, arquivos de tipos em `src/domain`, dependencias TypeScript do `package.json`, e o build passou a usar apenas `vite build`. O backend Tauri permanece em Rust, pois e a camada nativa exigida pela arquitetura Tauri atual.
+
+Atualizacao em 2026-05-11: apos teste manual confirmado de persistencia, foi implementado o proximo corte da Fase 2. O backend Tauri ganhou o comando `list_library_entries`, que retorna a biblioteca unificada sem filtrar apenas jogos manuais. A abertura do banco agora executa seed idempotente dos 4 mocks no SQLite (Steam, local e manual), preservando jogos criados pelo usuario. O frontend passou a carregar a biblioteca por `listLibraryEntries()`; no Tauri esse servico chama `list_library_entries`, e no navegador comum usa `mockLibrary.js` como fallback de desenvolvimento. Foram adicionados estados de carregamento/vazio para evitar quebra quando a listagem ainda nao retornou. Validacoes passaram: `cargo fmt`, `cargo check`, `cargo test` (13 testes), `npm run lint` e `npm run build`.
+
+Atualizacao em 2026-05-11: foi adicionado o arquivamento da biblioteca com o campo booleano `is_archived` em `library_entries`. O backend agora marca entradas arquivadas, exclui arquivados de `list_library_entries`, protege `launch_library_entry` contra jogos arquivados e manteve compatibilidade com bancos existentes via coluna incremental. O frontend ganhou acao de arquivar/reativar na lateral de detalhes e exibe o estado atual do item. Foram adicionados testes Rust para toggles de arquivamento e a validacao completa passou com `cargo fmt`, `cargo test`, `npm run lint` e `npm run build`.
+
+Atualizacao em 2026-05-11: foi implementada a edicao de jogos manuais. O backend ganhou o comando `update_manual_game`, que atualiza `games`, `library_entries`, `launch_actions` e `game_genres` em transacao, preservando `is_archived` e os ids existentes. O frontend passou a reutilizar o modal manual em modo adicionar/editar, com pre-preenchimento dos campos para entradas manuais selecionadas. Foram adicionados testes Rust para update normal e update de entrada arquivada sem reativacao. Validacoes passaram: `cargo fmt`, `cargo check`, `cargo test` (16 testes), `npm run lint` e `npm run build`.
+
+Atualizacao em 2026-05-11: o boot do aplicativo foi desacoplado do seed da biblioteca. O backend agora aplica migration e compatibilidade de schema no caminho critico e executa apenas o seed idempotente dos 4 mocks em background, emitindo um evento quando termina. A sincronizacao de jogos locais passou a ser manual, via comando `sync_local_games` e acao dedicada na interface, para nao impactar o tempo de abertura. O aplicativo ganhou o `LocalGamesProvider` inicial com importacao incremental de executaveis locais. Foram adicionados testes para banco vazio antes do bootstrap, seed manual explicito, upgrade de schema legado e importacao local. Validacoes passaram: `cargo fmt`, `cargo check`, `cargo test` (20 testes), `npm run lint` e `npm run build`.
+
+Atualizacao em 2026-05-11: foi feita uma revisao de estado para retomada em outro computador. O app atual esta em Tauri 2 + React 18 + JavaScript/JSX, com backend Rust e SQLite local. O fluxo implementado inclui listagem unificada via `list_library_entries`, seed idempotente dos 4 mocks em background, cadastro/edicao de jogos manuais, arquivamento, lancamento seguro de executaveis locais para entradas `manual` e `local`, abertura de URIs como `steam://`, e sincronizacao manual inicial de jogos locais via `sync_local_games`. A sincronizacao local usa `BIBLIOTECA_JOGOS_LOCAL_ROOTS` quando definida, ou raizes comuns como `%USERPROFILE%\Games`, `%USERPROFILE%\Documents\Games`, `%PROGRAMFILES%\GOG Games`, `%PROGRAMFILES%\Epic Games`, `%PROGRAMFILES%\EA Games`, `%PROGRAMFILES%\Ubisoft`, `%PROGRAMFILES%\Battle.net` e equivalentes em `%PROGRAMFILES(X86)%`/`%PUBLIC%`. Validacoes executadas nesta revisao: `npm run lint`, `npm run build` e `cargo test` com `CARGO_TARGET_DIR` local, todas aprovadas; a suite Rust esta com 21 testes passando.
 
 ## Prioridade de plataformas
 
@@ -124,9 +136,10 @@ App Desktop
 
 1. Em qualquer maquina nova, seguir `RETOMADA_NOVO_COMPUTADOR.md` para preparar Node.js, Rust, Visual Studio Build Tools, dependencias npm e validacoes iniciais.
 2. Rodar `npm run lint`, `npm run build` e, quando o ambiente nativo estiver pronto, `npm run tauri:dev` dentro de `aplicativo`.
-3. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento atual, mas ainda e uma margem apertada.
-4. Concluir o proximo corte da Fase 2: seed dos mocks no SQLite ou listagem unificada pelo backend, alem de edicao/arquivamento de jogos manuais.
-5. Testar manualmente o fluxo completo no Tauri: cadastrar jogo, fechar app, reabrir e confirmar persistencia visual.
-6. Implementar comando Tauri para lancamento seguro de executaveis locais.
-7. Comecar pelos providers reais `SteamProvider` e `LocalGamesProvider`.
-8. Em seguida, pesquisar/prototipar `XboxProvider` e `EpicProvider`.
+3. Rodar `cargo test` em `aplicativo/src-tauri` usando `CARGO_TARGET_DIR=%LOCALAPPDATA%\BibliotecaJogosUnificada\cargo-target`.
+4. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento anterior, mas ainda e uma margem apertada.
+5. Testar manualmente no Tauri o fluxo completo: abertura rapida, bootstrap dos 4 mocks, adicionar jogo manual, editar, arquivar, reabrir e confirmar persistencia.
+6. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
+7. Corrigir textos com acentuacao quebrada no frontend, como `Salvar alteraÃ§Ãµes`, antes de ampliar a interface.
+8. Iniciar `SteamProvider` como primeira integracao real.
+9. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.

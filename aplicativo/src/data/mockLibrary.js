@@ -1,6 +1,4 @@
-import type { LibraryEntry, PlatformId } from '../domain'
-
-export const platformLabels: Record<PlatformId, string> = {
+export const platformLabels = {
   steam: 'Steam',
   xbox: 'Xbox',
   epic: 'Epic Games',
@@ -13,12 +11,13 @@ export const platformLabels: Record<PlatformId, string> = {
   manual: 'Manual',
 }
 
-export const libraryEntries: LibraryEntry[] = [
+export const libraryEntries = [
   {
     id: 'entry-steam-hades',
     primaryPlatformId: 'steam',
     installStatus: 'installed',
     lastPlayedLabel: 'Hoje',
+    isArchived: false,
     addedAt: '2026-05-07T00:00:00.000Z',
     updatedAt: '2026-05-07T00:00:00.000Z',
     game: {
@@ -51,6 +50,7 @@ export const libraryEntries: LibraryEntry[] = [
     primaryPlatformId: 'steam',
     installStatus: 'not_installed',
     lastPlayedLabel: '12 dias',
+    isArchived: false,
     addedAt: '2026-05-07T00:00:00.000Z',
     updatedAt: '2026-05-07T00:00:00.000Z',
     game: {
@@ -83,6 +83,7 @@ export const libraryEntries: LibraryEntry[] = [
     primaryPlatformId: 'local',
     installStatus: 'installed',
     lastPlayedLabel: 'Ontem',
+    isArchived: false,
     addedAt: '2026-05-07T00:00:00.000Z',
     updatedAt: '2026-05-07T00:00:00.000Z',
     game: {
@@ -115,6 +116,7 @@ export const libraryEntries: LibraryEntry[] = [
     primaryPlatformId: 'manual',
     installStatus: 'not_installed',
     lastPlayedLabel: 'Nunca',
+    isArchived: false,
     addedAt: '2026-05-07T00:00:00.000Z',
     updatedAt: '2026-05-07T00:00:00.000Z',
     game: {

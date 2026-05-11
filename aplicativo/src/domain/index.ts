@@ -1,6 +1,0 @@
-export type { AchievementsSummary, Game, GameArtwork, GameSource, GameUserOverrides, Playtime } from './game'
-export type { InstallStatus, LibraryEntry } from './libraryEntry'
-export type { LaunchAction, LaunchActionKind } from './launchAction'
-export type { PlatformAccount, PlatformId, ProviderAuthStatus } from './platformAccount'
-export type { Provider, ProviderError, ProviderSyncResult } from './provider'
-export type { SyncHistory, SyncStatus } from './syncHistory'

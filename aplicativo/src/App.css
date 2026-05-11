@@ -139,6 +139,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
 .icon-button,
 .primary-button,
 .play-button,
@@ -155,6 +160,10 @@ button {
   background: #121b21;
   color: #dbe7e4;
   border: 1px solid #263741;
+}
+
+.spin-icon {
+  animation: spin 0.85s linear infinite;
 }
 
 .primary-button,
@@ -175,6 +184,12 @@ button {
   color: #dbe7e4;
   border: 1px solid #2a3d47;
   font-weight: 700;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .stats-grid {

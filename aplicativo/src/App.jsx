@@ -1,4 +1,5 @@
 import {
+  Archive,
   Clock3,
   CircleDot,
   Download,
@@ -8,45 +9,49 @@ import {
   Library,
   LayoutGrid,
   List,
+  Pencil,
   Play,
+  RefreshCw,
   Search,
   Settings,
   SlidersHorizontal,
   X,
 } from 'lucide-react'
-import { type FormEvent, useEffect, useMemo, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { libraryEntries, platformLabels } from './data/mockLibrary'
-import type { InstallStatus, LibraryEntry, LaunchAction } from './domain'
-import { addPersistedManualGame, launchLibraryEntry, listPersistedManualGames } from './services/libraryApi'
+import { platformLabels } from './data/mockLibrary'
+import {
+  addPersistedManualGame,
+  launchLibraryEntry,
+  listLibraryEntries,
+  syncLocalGames,
+  updatePersistedManualGame,
+  setLibraryEntryArchived,
+} from './services/libraryApi'
+import { listen } from '@tauri-apps/api/event'
 
-type ViewMode = 'list' | 'grid'
-type QuickFilter = 'all' | 'installed' | 'steam' | 'local'
+const LIBRARY_BOOTSTRAP_COMPLETE_EVENT = 'library-bootstrap-complete'
 
-type ManualGameFormState = {
-  title: string
-  genre: string
-  installStatus: InstallStatus
-  launchTarget: string
-}
+const hasTauriRuntime = () =>
+  typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
 
-const emptyManualGameForm: ManualGameFormState = {
+const emptyManualGameForm = {
   title: '',
   genre: '',
   installStatus: 'not_installed',
   launchTarget: '',
 }
 
-const getPlaytimeHours = (minutes: number) => Math.floor(minutes / 60)
+const getPlaytimeHours = (minutes) => Math.floor(minutes / 60)
 
-const quickFilterLabels: Record<QuickFilter, string> = {
+const quickFilterLabels = {
   all: 'Todos',
   installed: 'Instalados',
   steam: 'Steam',
   local: 'Locais',
 }
 
-const createSlug = (value: string) =>
+const createSlug = (value) =>
   value
     .trim()
     .toLowerCase()
@@ -55,14 +60,14 @@ const createSlug = (value: string) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '') || 'jogo-manual'
 
-const getDeterministicAccentColor = (value: string) => {
+const getDeterministicAccentColor = (value) => {
   const palette = ['#0d9488', '#2563eb', '#7c3aed', '#be123c', '#c2410c', '#15803d', '#9333ea', '#b45309']
   const hash = [...value].reduce((total, char) => total + char.charCodeAt(0), 0)
 
   return palette[hash % palette.length]
 }
 
-const getLaunchActionKind = (target: string): LaunchAction['kind'] => {
+const getLaunchActionKind = (target) => {
   if (!target) {
     return 'manual'
   }
@@ -70,15 +75,26 @@ const getLaunchActionKind = (target: string): LaunchAction['kind'] => {
   return target.includes('://') ? 'uri' : 'executable'
 }
 
-const createManualLibraryEntry = (form: ManualGameFormState): LibraryEntry => {
+const getPrimaryLaunchAction = (entry) =>
+  entry?.game.launchActions.find((action) => action.isPrimary) ?? entry?.game.launchActions[0] ?? null
+
+const getManualGameFormFromEntry = (entry) => ({
+  title: entry?.game.title ?? '',
+  genre: entry?.game.genres?.[0] ?? '',
+  installStatus: entry?.installStatus ?? 'not_installed',
+  launchTarget: getPrimaryLaunchAction(entry)?.target ?? '',
+})
+
+const buildManualLibraryEntry = (form, existingEntry = null) => {
   const title = form.title.trim()
   const genre = form.genre.trim()
   const launchTarget = form.launchTarget.trim()
   const slug = createSlug(title)
   const timestamp = new Date().toISOString()
-  const launchAction: LaunchAction = {
-    id: `launch-manual-${slug}`,
-    platformId: 'manual',
+  const existingLaunchAction = getPrimaryLaunchAction(existingEntry)
+  const launchAction = {
+    id: existingLaunchAction?.id ?? `launch-manual-${slug}`,
+    platformId: existingLaunchAction?.platformId ?? 'manual',
     kind: getLaunchActionKind(launchTarget),
     label: launchTarget || 'Sem acao configurada',
     target: launchTarget,
@@ -86,84 +102,149 @@ const createManualLibraryEntry = (form: ManualGameFormState): LibraryEntry => {
   }
 
   return {
-    id: `entry-manual-${slug}-${Date.now()}`,
+    id: existingEntry?.id ?? `entry-manual-${slug}-${Date.now()}`,
     primaryPlatformId: 'manual',
     installStatus: form.installStatus,
-    lastPlayedLabel: 'Nunca',
-    addedAt: timestamp,
+    lastPlayedLabel: existingEntry?.lastPlayedLabel ?? 'Nunca',
+    addedAt: existingEntry?.addedAt ?? timestamp,
     updatedAt: timestamp,
     game: {
-      internalId: `game-manual-${slug}`,
+      internalId: existingEntry?.game.internalId ?? `game-manual-${slug}`,
       title,
       sortTitle: title,
-      platforms: ['manual'],
-      sources: [{ platformId: 'manual', externalId: `manual-${slug}` }],
+      platforms: existingEntry?.game.platforms ?? ['manual'],
+      sources:
+        existingEntry?.game.sources ?? [{ platformId: 'manual', externalId: `manual-${slug}` }],
       installed: form.installStatus === 'installed',
-      installLocations: [],
+      installLocations: existingEntry?.game.installLocations ?? [],
       launchActions: [launchAction],
-      playtime: { totalMinutes: 0 },
+      playtime: existingEntry?.game.playtime ?? { totalMinutes: 0 },
       artwork: { accentColor: getDeterministicAccentColor(title) },
       genres: genre ? [genre] : ['Sem genero'],
-      tags: [],
-      userOverrides: {},
+      tags: existingEntry?.game.tags ?? [],
+      userOverrides: existingEntry?.game.userOverrides ?? {},
     },
+    isArchived: existingEntry?.isArchived ?? false,
   }
 }
 
+const getSelectedEntryIdForEntries = (nextEntries, currentSelectedEntryId) =>
+  nextEntries.some((entry) => entry.id === currentSelectedEntryId)
+    ? currentSelectedEntryId
+    : nextEntries[0]?.id ?? ''
+
 function App() {
-  const [viewMode, setViewMode] = useState<ViewMode>('grid')
-  const [entries, setEntries] = useState<LibraryEntry[]>(libraryEntries)
-  const [selectedEntryId, setSelectedEntryId] = useState(libraryEntries[0]?.id ?? '')
+  const [viewMode, setViewMode] = useState('grid')
+  const [entries, setEntries] = useState([])
+  const [selectedEntryId, setSelectedEntryId] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
-  const [quickFilter, setQuickFilter] = useState<QuickFilter>('all')
+  const [quickFilter, setQuickFilter] = useState('all')
   const [launchMessage, setLaunchMessage] = useState('')
+  const [isLibraryLoading, setIsLibraryLoading] = useState(true)
+  const [isBootstrapping, setIsBootstrapping] = useState(true)
+  const [isLocalSyncing, setIsLocalSyncing] = useState(false)
   const [isManualModalOpen, setIsManualModalOpen] = useState(false)
-  const [manualGameForm, setManualGameForm] = useState<ManualGameFormState>(emptyManualGameForm)
+  const [editingEntryId, setEditingEntryId] = useState('')
+  const [manualGameForm, setManualGameForm] = useState(emptyManualGameForm)
   const [manualGameError, setManualGameError] = useState('')
-  const selectedEntry = entries.find((entry) => entry.id === selectedEntryId) ?? entries[0]
+  const deferredSearchTerm = useDeferredValue(searchTerm)
+  const selectedEntry = entries.find((entry) => entry.id === selectedEntryId) ?? entries[0] ?? null
+  const isEditingManualGame = editingEntryId !== ''
+  const showLibraryLoading = isLibraryLoading || isBootstrapping
 
   useEffect(() => {
     let isMounted = true
+    let unlistenBootstrapComplete = null
+    let bootstrapTimeoutId = hasTauriRuntime()
+      ? window.setTimeout(() => {
+          if (isMounted) {
+            void syncLibraryEntries().finally(() => {
+              if (isMounted) {
+                setIsBootstrapping(false)
+              }
+            })
+          }
+        }, 4000)
+      : null
 
-    listPersistedManualGames()
-      .then((persistedManualEntries) => {
-        if (!isMounted || persistedManualEntries.length === 0) {
-          return
+    const syncLibraryEntries = async () => {
+      const libraryEntries = await listLibraryEntries().catch(() => null)
+
+      if (!isMounted || !libraryEntries) {
+        return
+      }
+
+      setEntries(libraryEntries)
+      setSelectedEntryId((currentSelectedEntryId) =>
+        getSelectedEntryIdForEntries(libraryEntries, currentSelectedEntryId),
+      )
+
+      if (!hasTauriRuntime() || libraryEntries.length > 0) {
+        setIsBootstrapping(false)
+      }
+    }
+
+    const registerBootstrapListener = async () => {
+      if (!hasTauriRuntime()) {
+        if (isMounted) {
+          setIsBootstrapping(false)
         }
+        return
+      }
 
-        setEntries((currentEntries) => {
-          const persistedIds = new Set(persistedManualEntries.map((entry) => entry.id))
-          const nextEntries = [
-            ...persistedManualEntries,
-            ...currentEntries.filter((entry) => !persistedIds.has(entry.id)),
-          ]
+      try {
+        unlistenBootstrapComplete = await listen(LIBRARY_BOOTSTRAP_COMPLETE_EVENT, async () => {
+          if (!isMounted) {
+            return
+          }
 
-          setSelectedEntryId((currentSelectedEntryId) =>
-            nextEntries.some((entry) => entry.id === currentSelectedEntryId)
-              ? currentSelectedEntryId
-              : nextEntries[0]?.id ?? '',
-          )
-
-          return nextEntries
+          setIsBootstrapping(false)
+          if (bootstrapTimeoutId !== null) {
+            clearTimeout(bootstrapTimeoutId)
+            bootstrapTimeoutId = null
+          }
+          await syncLibraryEntries()
         })
-      })
+      } catch {
+        if (isMounted) {
+          setIsBootstrapping(false)
+        }
+      }
+    }
+
+    void registerBootstrapListener()
+    const initialSyncPromise = syncLibraryEntries()
+    initialSyncPromise
       .catch(() => {
-        setLaunchMessage('Persistencia local indisponivel. Usando biblioteca em memoria nesta sessao.')
+        if (isMounted) {
+          setLaunchMessage('Nao foi possivel carregar a biblioteca local.')
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLibraryLoading(false)
+        }
       })
 
     return () => {
       isMounted = false
+      if (bootstrapTimeoutId !== null) {
+        clearTimeout(bootstrapTimeoutId)
+      }
+      if (unlistenBootstrapComplete) {
+        void unlistenBootstrapComplete()
+      }
     }
   }, [])
   const filteredEntries = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase()
+    const normalizedSearch = deferredSearchTerm.trim().toLowerCase()
 
     return entries.filter((entry) => {
       const matchesSearch = normalizedSearch
         ? [
             entry.game.title,
-            platformLabels[entry.primaryPlatformId],
-            entry.game.genres.join(' '),
+            platformLabels[entry.primaryPlatformId] ?? entry.primaryPlatformId,
+            entry.game.genres?.join(' ') ?? '',
             entry.installStatus === 'installed' ? 'instalado' : 'nao instalado',
           ].some((value) => value.toLowerCase().includes(normalizedSearch))
         : true
@@ -175,17 +256,32 @@ function App() {
 
       return matchesSearch && matchesQuickFilter
     })
-  }, [entries, quickFilter, searchTerm])
+  }, [deferredSearchTerm, entries, quickFilter])
   const installedCount = entries.filter((entry) => entry.installStatus === 'installed').length
   const totalHours = entries.reduce((sum, entry) => sum + getPlaytimeHours(entry.game.playtime.totalMinutes), 0)
 
   const closeManualModal = () => {
     setIsManualModalOpen(false)
+    setEditingEntryId('')
     setManualGameForm(emptyManualGameForm)
     setManualGameError('')
   }
 
-  const handleManualGameSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const openManualGameModal = () => {
+    setEditingEntryId('')
+    setManualGameForm(emptyManualGameForm)
+    setManualGameError('')
+    setIsManualModalOpen(true)
+  }
+
+  const openManualGameEditor = (entry) => {
+    setEditingEntryId(entry.id)
+    setManualGameForm(getManualGameFormFromEntry(entry))
+    setManualGameError('')
+    setIsManualModalOpen(true)
+  }
+
+  const handleManualGameSubmit = async (event) => {
     event.preventDefault()
 
     if (!manualGameForm.title.trim()) {
@@ -193,29 +289,52 @@ function App() {
       return
     }
 
-    const persistedEntry = await addPersistedManualGame({
+    const input = {
       title: manualGameForm.title,
       genre: manualGameForm.genre,
       installStatus: manualGameForm.installStatus,
       launchTarget: manualGameForm.launchTarget,
-    }).catch(() => {
-      setLaunchMessage('Nao foi possivel salvar no banco local. O jogo foi mantido apenas em memoria.')
-      return null
-    })
-    const newEntry = persistedEntry ?? createManualLibraryEntry(manualGameForm)
+    }
 
-    setEntries((currentEntries) => [newEntry, ...currentEntries])
-    setSelectedEntryId(newEntry.id)
-    setLaunchMessage('')
-    closeManualModal()
+    try {
+      if (isEditingManualGame) {
+        const baseEntry = entries.find((entry) => entry.id === editingEntryId) ?? selectedEntry
+        const persistedEntry = await updatePersistedManualGame(editingEntryId, input)
+        const updatedEntry = persistedEntry ?? buildManualLibraryEntry(manualGameForm, baseEntry)
+
+        setEntries((currentEntries) =>
+          currentEntries.map((entry) => (entry.id === updatedEntry.id ? updatedEntry : entry)),
+        )
+        setSelectedEntryId(updatedEntry.id)
+        setLaunchMessage('Jogo atualizado.')
+        closeManualModal()
+        return
+      }
+
+      const persistedEntry = await addPersistedManualGame(input)
+      const newEntry = persistedEntry ?? buildManualLibraryEntry(manualGameForm)
+
+      setEntries((currentEntries) => [newEntry, ...currentEntries])
+      setSelectedEntryId(newEntry.id)
+      setLaunchMessage('Jogo adicionado.')
+      closeManualModal()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setLaunchMessage(`Nao foi possivel salvar as alteracoes: ${message}`)
+    }
   }
 
-  const handleSelectEntry = (entryId: string) => {
+  const handleSelectEntry = (entryId) => {
     setSelectedEntryId(entryId)
     setLaunchMessage('')
   }
 
   const handleLaunchSelectedEntry = async () => {
+    if (!selectedEntry) {
+      setLaunchMessage('Nenhum jogo selecionado.')
+      return
+    }
+
     const primaryAction = selectedEntry.game.launchActions.find((action) => action.isPrimary) ?? selectedEntry.game.launchActions[0]
 
     if (!primaryAction || primaryAction.kind === 'manual' || !primaryAction.target) {
@@ -230,7 +349,7 @@ function App() {
       return
     }
 
-    if (selectedEntry.primaryPlatformId !== 'manual') {
+    if (selectedEntry.primaryPlatformId !== 'manual' && selectedEntry.primaryPlatformId !== 'local') {
       setLaunchMessage(`Execucao de executaveis para jogos importados sera ligada ao provider correspondente. Acao configurada: ${primaryAction.label}.`)
       return
     }
@@ -248,8 +367,88 @@ function App() {
     setLaunchMessage(result.message)
   }
 
+  const handleSyncLocalGames = async () => {
+    if (isLocalSyncing) {
+      return
+    }
+
+    setIsLocalSyncing(true)
+    setLaunchMessage('Sincronizando jogos locais...')
+
+    try {
+      const summary = await syncLocalGames()
+
+      if (!summary) {
+        setLaunchMessage('Sincronizacao local disponivel apenas no aplicativo Tauri.')
+        return
+      }
+
+      const refreshedEntries = await listLibraryEntries().catch(() => null)
+      if (refreshedEntries) {
+        setEntries(refreshedEntries)
+        setSelectedEntryId((currentSelectedEntryId) =>
+          getSelectedEntryIdForEntries(refreshedEntries, currentSelectedEntryId),
+        )
+      }
+
+      setLaunchMessage(
+        `Sincronizacao local concluida: ${summary.inserted} novos e ${summary.updated} atualizados em ${summary.discovered} itens encontrados.`,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setLaunchMessage(`Nao foi possivel sincronizar jogos locais: ${message}`)
+    } finally {
+      setIsLocalSyncing(false)
+    }
+  }
+
   const handleInstallAction = () => {
+    if (!selectedEntry) {
+      setLaunchMessage('Nenhum jogo selecionado.')
+      return
+    }
+
     setLaunchMessage(`Instalacao/localizacao de arquivos ainda sera implementada para ${selectedEntry.game.title}.`)
+  }
+
+  const handleArchiveSelectedEntry = async () => {
+    if (!selectedEntry) {
+      setLaunchMessage('Nenhum jogo selecionado.')
+      return
+    }
+
+    const nextArchivedState = !selectedEntry.isArchived
+    const result = await setLibraryEntryArchived(selectedEntry.id, nextArchivedState).catch(() => null)
+
+    if (result === null) {
+      setEntries((currentEntries) => {
+        const nextEntries = currentEntries.filter((entry) => entry.id !== selectedEntry.id)
+        setSelectedEntryId((currentSelectedEntryId) =>
+          getSelectedEntryIdForEntries(nextEntries, currentSelectedEntryId),
+        )
+        return nextEntries
+      })
+      setLaunchMessage(nextArchivedState ? 'Jogo arquivado nesta sessao.' : 'Jogo reativado nesta sessao.')
+      return
+    }
+
+    const refreshedEntries = await listLibraryEntries().catch(() => null)
+    if (refreshedEntries) {
+      setEntries(refreshedEntries)
+      setSelectedEntryId((currentSelectedEntryId) =>
+        getSelectedEntryIdForEntries(refreshedEntries, currentSelectedEntryId),
+      )
+    }
+
+    setLaunchMessage(nextArchivedState ? 'Jogo arquivado.' : 'Jogo reativado.')
+  }
+
+  const handleEditSelectedEntry = () => {
+    if (!selectedEntry || selectedEntry.primaryPlatformId !== 'manual') {
+      return
+    }
+
+    openManualGameEditor(selectedEntry)
   }
 
   return (
@@ -328,7 +527,17 @@ function App() {
             <button className="icon-button" type="button" aria-label="Filtrar biblioteca" title="Filtrar biblioteca">
               <SlidersHorizontal size={18} aria-hidden="true" />
             </button>
-            <button className="primary-button" type="button" onClick={() => setIsManualModalOpen(true)}>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Sincronizar jogos locais"
+              title="Sincronizar jogos locais"
+              onClick={handleSyncLocalGames}
+              disabled={isLocalSyncing}
+            >
+              <RefreshCw size={18} aria-hidden="true" className={isLocalSyncing ? 'spin-icon' : ''} />
+            </button>
+            <button className="primary-button" type="button" onClick={openManualGameModal}>
               <FolderPlus size={18} aria-hidden="true" />
               Adicionar jogo
             </button>
@@ -363,7 +572,7 @@ function App() {
             </label>
 
             <div className="filter-row" aria-label="Filtros rapidos">
-              {(Object.keys(quickFilterLabels) as QuickFilter[]).map((filter) => (
+              {Object.keys(quickFilterLabels).map((filter) => (
                 <button
                   className={quickFilter === filter ? 'filter-chip active' : 'filter-chip'}
                   type="button"
@@ -395,11 +604,16 @@ function App() {
               </div>
             </div>
 
-            {viewMode === 'list' ? (
+            {showLibraryLoading ? (
+              <div className="empty-state">
+                <strong>Carregando biblioteca</strong>
+                <span>Consultando a listagem unificada local.</span>
+              </div>
+            ) : viewMode === 'list' ? (
               <div className="game-table">
                 {filteredEntries.map((entry) => (
                   <article
-                    className={selectedEntry.id === entry.id ? 'game-row selected' : 'game-row'}
+                    className={selectedEntry?.id === entry.id ? 'game-row selected' : 'game-row'}
                     key={entry.id}
                     role="button"
                     tabIndex={0}
@@ -429,7 +643,7 @@ function App() {
               <div className="game-cover-grid">
                 {filteredEntries.map((entry) => (
                   <article
-                    className={selectedEntry.id === entry.id ? 'game-cover-card selected' : 'game-cover-card'}
+                    className={selectedEntry?.id === entry.id ? 'game-cover-card selected' : 'game-cover-card'}
                     key={entry.id}
                     role="button"
                     tabIndex={0}
@@ -450,7 +664,7 @@ function App() {
                 ))}
               </div>
             )}
-            {filteredEntries.length === 0 ? (
+            {!showLibraryLoading && filteredEntries.length === 0 ? (
               <div className="empty-state">
                 <strong>Nenhum jogo encontrado</strong>
                 <span>Ajuste a busca ou troque o filtro ativo.</span>
@@ -459,45 +673,83 @@ function App() {
           </section>
 
           <aside className="details-panel" aria-label="Detalhes do jogo selecionado">
-            <div className="detail-cover" style={{ background: selectedEntry.game.artwork.accentColor }}>
-              <span>{selectedEntry.game.title}</span>
-            </div>
-            <div className="detail-content">
-              <span className="platform-label">{platformLabels[selectedEntry.primaryPlatformId]}</span>
-              <h2>{selectedEntry.game.title}</h2>
-              <div className="detail-actions">
-                <button className="play-button" type="button" onClick={handleLaunchSelectedEntry}>
-                  <Play size={18} fill="currentColor" aria-hidden="true" />
-                  Jogar
-                </button>
-                <button className="icon-button" type="button" aria-label="Instalar ou localizar arquivos" title="Instalar ou localizar arquivos" onClick={handleInstallAction}>
-                  <Download size={18} aria-hidden="true" />
-                </button>
+            {selectedEntry ? (
+              <>
+                <div className="detail-cover" style={{ background: selectedEntry.game.artwork.accentColor }}>
+                  <span>{selectedEntry.game.title}</span>
+                </div>
+                <div className="detail-content">
+                  <span className="platform-label">{platformLabels[selectedEntry.primaryPlatformId] ?? selectedEntry.primaryPlatformId}</span>
+                  <h2>{selectedEntry.game.title}</h2>
+                  <div className="detail-actions">
+                    <button className="play-button" type="button" onClick={handleLaunchSelectedEntry}>
+                      <Play size={18} fill="currentColor" aria-hidden="true" />
+                      Jogar
+                    </button>
+                    <button className="icon-button" type="button" aria-label="Instalar ou localizar arquivos" title="Instalar ou localizar arquivos" onClick={handleInstallAction}>
+                      <Download size={18} aria-hidden="true" />
+                    </button>
+                    {selectedEntry.primaryPlatformId === 'manual' ? (
+                      <button
+                        className="icon-button"
+                        type="button"
+                        aria-label="Editar jogo"
+                        title="Editar jogo"
+                        onClick={handleEditSelectedEntry}
+                      >
+                        <Pencil size={18} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                    <button
+                      className="icon-button"
+                      type="button"
+                      aria-label={selectedEntry.isArchived ? 'Reativar jogo' : 'Arquivar jogo'}
+                      title={selectedEntry.isArchived ? 'Reativar jogo' : 'Arquivar jogo'}
+                      onClick={handleArchiveSelectedEntry}
+                    >
+                      <Archive size={18} aria-hidden="true" />
+                    </button>
+                  </div>
+                  <dl className="detail-list">
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{selectedEntry.installStatus === 'installed' ? 'Instalado' : 'Nao instalado'}</dd>
+                    </div>
+                    <div>
+                      <dt>Arquivo</dt>
+                      <dd>{selectedEntry.isArchived ? 'Arquivado' : 'Ativo'}</dd>
+                    </div>
+                    <div>
+                      <dt>Tempo</dt>
+                      <dd>{getPlaytimeHours(selectedEntry.game.playtime.totalMinutes)}h</dd>
+                    </div>
+                    <div>
+                      <dt>Ultima vez</dt>
+                      <dd>{selectedEntry.lastPlayedLabel}</dd>
+                    </div>
+                    <div>
+                      <dt>Acao</dt>
+                      <dd>{selectedEntry.game.launchActions[0]?.label ?? 'Sem acao configurada'}</dd>
+                    </div>
+                  </dl>
+                  <div className="timeline-note">
+                    <Clock3 size={16} aria-hidden="true" />
+                    Sincronizacao Steam sera a primeira integracao real.
+                  </div>
+                  {launchMessage ? <div className="launch-feedback">{launchMessage}</div> : null}
+                </div>
+              </>
+            ) : (
+              <div className="detail-content">
+                <span className="platform-label">Biblioteca</span>
+                <h2>Nenhum jogo selecionado</h2>
+                <div className="timeline-note">
+                  <Clock3 size={16} aria-hidden="true" />
+                  {showLibraryLoading ? 'Carregando biblioteca local.' : 'Adicione ou selecione um jogo para ver detalhes.'}
+                </div>
+                {launchMessage ? <div className="launch-feedback">{launchMessage}</div> : null}
               </div>
-              <dl className="detail-list">
-                <div>
-                  <dt>Status</dt>
-                  <dd>{selectedEntry.installStatus === 'installed' ? 'Instalado' : 'Nao instalado'}</dd>
-                </div>
-                <div>
-                  <dt>Tempo</dt>
-                  <dd>{getPlaytimeHours(selectedEntry.game.playtime.totalMinutes)}h</dd>
-                </div>
-                <div>
-                  <dt>Ultima vez</dt>
-                  <dd>{selectedEntry.lastPlayedLabel}</dd>
-                </div>
-                <div>
-                  <dt>Acao</dt>
-                  <dd>{selectedEntry.game.launchActions[0]?.label ?? 'Sem acao configurada'}</dd>
-                </div>
-              </dl>
-              <div className="timeline-note">
-                <Clock3 size={16} aria-hidden="true" />
-                Sincronizacao Steam sera a primeira integracao real.
-              </div>
-              {launchMessage ? <div className="launch-feedback">{launchMessage}</div> : null}
-            </div>
+            )}
           </aside>
         </div>
       </section>
@@ -508,7 +760,7 @@ function App() {
             <header className="modal-header">
               <div>
                 <span>Cadastro manual</span>
-                <h2 id="manual-game-title">Adicionar jogo</h2>
+                <h2 id="manual-game-title">{isEditingManualGame ? 'Editar jogo' : 'Adicionar jogo'}</h2>
               </div>
               <button className="icon-button" type="button" aria-label="Fechar cadastro" title="Fechar" onClick={closeManualModal}>
                 <X size={18} aria-hidden="true" />
@@ -580,7 +832,7 @@ function App() {
                   Cancelar
                 </button>
                 <button className="primary-button" type="submit">
-                  Salvar
+                  {isEditingManualGame ? 'Salvar alterações' : 'Salvar'}
                 </button>
               </div>
             </form>

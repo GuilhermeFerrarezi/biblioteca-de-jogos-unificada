@@ -1,4 +1,6 @@
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+const LIBRARY_BOOTSTRAP_COMPLETE_EVENT: &str = "library-bootstrap-complete";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,10 +15,12 @@ pub fn run() {
             let db_path = app_data_dir.join("library.sqlite3");
             let connection = storage::open_database(&db_path)
                 .map_err(|error| format!("failed to open local database: {error}"))?;
+            let connection = std::sync::Arc::new(std::sync::Mutex::new(connection));
 
             app.manage(AppState {
-                connection: std::sync::Mutex::new(connection),
+                connection: std::sync::Arc::clone(&connection),
             });
+            bootstrap_library(app.handle().clone(), connection);
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -28,8 +32,12 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::list_library_entries,
             commands::list_manual_games,
             commands::add_manual_game,
+            commands::update_manual_game,
+            commands::sync_local_games,
+            commands::set_library_entry_archived,
             commands::launch_library_entry,
         ])
         .run(tauri::generate_context!())
@@ -37,12 +45,45 @@ pub fn run() {
 }
 
 struct AppState {
-    connection: std::sync::Mutex<rusqlite::Connection>,
+    connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+}
+
+fn bootstrap_library(
+    handle: tauri::AppHandle,
+    connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+) {
+    std::thread::spawn(move || {
+        let result = connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())
+            .and_then(|mut connection| {
+                storage::seed_mock_library(&mut connection).map_err(|error| error.to_string())?;
+                Ok(())
+            });
+
+        if let Err(error) = &result {
+            eprintln!("library bootstrap failed: {error}");
+        }
+
+        let _ = handle.emit(LIBRARY_BOOTSTRAP_COMPLETE_EVENT, result.is_ok());
+    });
 }
 
 mod commands {
     use super::{launcher, storage, AppState};
     use tauri::State;
+
+    #[tauri::command]
+    pub fn list_library_entries(
+        state: State<'_, AppState>,
+    ) -> Result<Vec<storage::LibraryEntryDto>, String> {
+        let connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::list_library_entries(&connection).map_err(|error| error.to_string())
+    }
 
     #[tauri::command]
     pub fn list_manual_games(
@@ -67,6 +108,46 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         storage::add_manual_game(&mut connection, input).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn sync_local_games(state: State<'_, AppState>) -> Result<storage::SyncSummaryDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::sync_local_games(&mut connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn update_manual_game(
+        entry_id: String,
+        input: storage::ManualGameInput,
+        state: State<'_, AppState>,
+    ) -> Result<storage::LibraryEntryDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::update_manual_game(&mut connection, &entry_id, input)
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn set_library_entry_archived(
+        entry_id: String,
+        is_archived: bool,
+        state: State<'_, AppState>,
+    ) -> Result<(), String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::set_library_entry_archived(&mut connection, &entry_id, is_archived)
+            .map_err(|error| error.to_string())
     }
 
     #[tauri::command]
@@ -176,7 +257,8 @@ mod launcher {
                 FROM library_entries
                 JOIN launch_actions ON launch_actions.game_id = library_entries.game_id
                 WHERE library_entries.id = ?1
-                  AND library_entries.primary_platform_id = 'manual'
+                  AND library_entries.primary_platform_id IN ('manual', 'local')
+                  AND library_entries.is_archived = 0
                   AND launch_actions.kind = 'executable'
                   AND launch_actions.is_primary = 1
                 "#,
@@ -339,13 +421,17 @@ mod storage {
     use chrono::{SecondsFormat, Utc};
     use rusqlite::{params, Connection, OptionalExtension};
     use serde::{Deserialize, Serialize};
-    use std::path::Path;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     pub fn open_database(path: &Path) -> rusqlite::Result<Connection> {
         let connection = Connection::open(path)?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&connection)?;
+        ensure_archived_column(&connection)?;
+        ensure_active_entries_index(&connection)?;
         Ok(connection)
     }
 
@@ -374,6 +460,7 @@ mod storage {
         primary_platform_id TEXT NOT NULL,
         install_status TEXT NOT NULL,
         last_played_label TEXT NOT NULL,
+        is_archived INTEGER NOT NULL DEFAULT 0,
         added_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
@@ -442,8 +529,17 @@ mod storage {
         primary_platform_id: String,
         install_status: String,
         last_played_label: String,
+        is_archived: bool,
         added_at: String,
         updated_at: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SyncSummaryDto {
+        discovered: usize,
+        inserted: usize,
+        updated: usize,
     }
 
     #[derive(Debug, Serialize)]
@@ -497,6 +593,53 @@ mod storage {
         accent_color: Option<String>,
     }
 
+    pub fn list_library_entries(connection: &Connection) -> rusqlite::Result<Vec<LibraryEntryDto>> {
+        let mut statement = connection.prepare(
+            r#"
+      SELECT
+        library_entries.id,
+        library_entries.primary_platform_id,
+        library_entries.install_status,
+        library_entries.last_played_label,
+        library_entries.is_archived,
+        library_entries.added_at,
+        library_entries.updated_at,
+        games.id,
+        games.title,
+        games.sort_title,
+        games.installed,
+        games.playtime_total_minutes,
+        games.accent_color
+      FROM library_entries
+      JOIN games ON games.id = library_entries.game_id
+      WHERE library_entries.is_archived = 0
+      ORDER BY library_entries.added_at DESC, games.sort_title
+      "#,
+        )?;
+
+        let rows = statement.query_map([], |row| {
+            let game_id: String = row.get(7)?;
+            Ok(EntryRow {
+                entry_id: row.get(0)?,
+                primary_platform_id: row.get(1)?,
+                install_status: row.get(2)?,
+                last_played_label: row.get(3)?,
+                is_archived: row.get::<_, i64>(4)? == 1,
+                added_at: row.get(5)?,
+                updated_at: row.get(6)?,
+                game_id,
+                title: row.get(8)?,
+                sort_title: row.get(9)?,
+                installed: row.get::<_, i64>(10)? == 1,
+                playtime_total_minutes: row.get(11)?,
+                accent_color: row.get(12)?,
+            })
+        })?;
+
+        rows.map(|row| row.and_then(|entry| hydrate_entry(connection, entry)))
+            .collect()
+    }
+
     pub fn list_manual_games(connection: &Connection) -> rusqlite::Result<Vec<LibraryEntryDto>> {
         let mut statement = connection.prepare(
             r#"
@@ -505,6 +648,7 @@ mod storage {
         library_entries.primary_platform_id,
         library_entries.install_status,
         library_entries.last_played_label,
+        library_entries.is_archived,
         library_entries.added_at,
         library_entries.updated_at,
         games.id,
@@ -516,25 +660,27 @@ mod storage {
       FROM library_entries
       JOIN games ON games.id = library_entries.game_id
       WHERE library_entries.primary_platform_id = 'manual'
+        AND library_entries.is_archived = 0
       ORDER BY library_entries.added_at DESC
       "#,
         )?;
 
         let rows = statement.query_map([], |row| {
-            let game_id: String = row.get(6)?;
+            let game_id: String = row.get(7)?;
             Ok(EntryRow {
                 entry_id: row.get(0)?,
                 primary_platform_id: row.get(1)?,
                 install_status: row.get(2)?,
                 last_played_label: row.get(3)?,
-                added_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                is_archived: row.get::<_, i64>(4)? == 1,
+                added_at: row.get(5)?,
+                updated_at: row.get(6)?,
                 game_id,
-                title: row.get(7)?,
-                sort_title: row.get(8)?,
-                installed: row.get::<_, i64>(9)? == 1,
-                playtime_total_minutes: row.get(10)?,
-                accent_color: row.get(11)?,
+                title: row.get(8)?,
+                sort_title: row.get(9)?,
+                installed: row.get::<_, i64>(10)? == 1,
+                playtime_total_minutes: row.get(11)?,
+                accent_color: row.get(12)?,
             })
         })?;
 
@@ -546,31 +692,8 @@ mod storage {
         connection: &mut Connection,
         input: ManualGameInput,
     ) -> rusqlite::Result<LibraryEntryDto> {
-        let title = input.title.trim();
-        if title.is_empty() {
-            return Err(rusqlite::Error::InvalidParameterName(
-                "title is required".to_string(),
-            ));
-        }
-
-        let install_status = match input.install_status.as_str() {
-            "installed" => "installed",
-            _ => "not_installed",
-        };
-        let installed = install_status == "installed";
-        let genre = input
-            .genre
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("Sem genero");
-        let launch_target = input.launch_target.unwrap_or_default().trim().to_string();
-        let launch_kind = launch_action_kind(&launch_target);
-        let launch_label = if launch_target.is_empty() {
-            "Sem acao configurada".to_string()
-        } else {
-            launch_target.clone()
-        };
+        let manual_game = normalize_manual_game_input(input)?;
+        let title = manual_game.title.as_str();
         let slug = create_slug(title);
         let timestamp = timestamp_millis();
         let now = now_iso();
@@ -588,15 +711,15 @@ mod storage {
         id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
       ) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?6)
       "#,
-      params![game_id, title, title, installed as i64, accent_color, now],
+      params![game_id, title, title, manual_game.installed as i64, accent_color, now],
     )?;
         transaction.execute(
             r#"
       INSERT INTO library_entries (
-        id, game_id, primary_platform_id, install_status, last_played_label, added_at, updated_at
-      ) VALUES (?1, ?2, 'manual', ?3, 'Nunca', ?4, ?4)
+        id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
+      ) VALUES (?1, ?2, 'manual', ?3, 'Nunca', 0, ?4, ?4)
       "#,
-            params![entry_id, game_id, install_status, now],
+            params![entry_id, game_id, manual_game.install_status, now],
         )?;
         transaction.execute(
             r#"
@@ -611,11 +734,17 @@ mod storage {
         id, game_id, platform_id, kind, label, target, arguments_json, is_primary
       ) VALUES (?1, ?2, 'manual', ?3, ?4, ?5, '[]', 1)
       "#,
-            params![launch_id, game_id, launch_kind, launch_label, launch_target],
+            params![
+                launch_id,
+                game_id,
+                manual_game.launch_kind,
+                manual_game.launch_label,
+                manual_game.launch_target
+            ],
         )?;
         transaction.execute(
             "INSERT INTO game_genres (game_id, genre, position) VALUES (?1, ?2, 0)",
-            params![game_id, genre],
+            params![game_id, manual_game.genre],
         )?;
         transaction.commit()?;
 
@@ -623,11 +752,99 @@ mod storage {
         hydrate_entry(connection, row)
     }
 
+    pub fn update_manual_game(
+        connection: &mut Connection,
+        entry_id: &str,
+        input: ManualGameInput,
+    ) -> rusqlite::Result<LibraryEntryDto> {
+        let manual_game = normalize_manual_game_input(input)?;
+        let NormalizedManualGame {
+            title,
+            sort_title,
+            install_status,
+            installed,
+            genre,
+            launch_target,
+            launch_kind,
+            launch_label,
+        } = manual_game;
+        let transaction = connection.transaction()?;
+        let row =
+            find_entry(&transaction, entry_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+
+        if row.primary_platform_id != "manual" {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "entry is not manual".to_string(),
+            ));
+        }
+
+        let updated_at = now_iso();
+        let accent_color = deterministic_accent_color(&title);
+
+        transaction.execute(
+            r#"
+            UPDATE games
+            SET title = ?2,
+                sort_title = ?3,
+                installed = ?4,
+                accent_color = ?5,
+                updated_at = ?6
+            WHERE id = ?1
+            "#,
+            params![
+                row.game_id,
+                title,
+                sort_title,
+                installed as i64,
+                accent_color,
+                updated_at,
+            ],
+        )?;
+
+        transaction.execute(
+            r#"
+            UPDATE library_entries
+            SET install_status = ?2,
+                updated_at = ?3
+            WHERE id = ?1
+            "#,
+            params![entry_id, install_status, updated_at],
+        )?;
+
+        transaction.execute(
+            r#"
+            UPDATE launch_actions
+            SET kind = ?2,
+                label = ?3,
+                target = ?4
+            WHERE game_id = ?1
+              AND is_primary = 1
+            "#,
+            params![row.game_id, launch_kind, launch_label, launch_target,],
+        )?;
+
+        transaction.execute(
+            "DELETE FROM game_genres WHERE game_id = ?1",
+            params![row.game_id],
+        )?;
+        transaction.execute(
+            "INSERT INTO game_genres (game_id, genre, position) VALUES (?1, ?2, 0)",
+            params![row.game_id, genre],
+        )?;
+        transaction.commit()?;
+
+        let refreshed_row =
+            find_entry(connection, entry_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        hydrate_entry(connection, refreshed_row)
+    }
+
+    #[derive(Clone)]
     struct EntryRow {
         entry_id: String,
         primary_platform_id: String,
         install_status: String,
         last_played_label: String,
+        is_archived: bool,
         added_at: String,
         updated_at: String,
         game_id: String,
@@ -647,6 +864,7 @@ mod storage {
           library_entries.primary_platform_id,
           library_entries.install_status,
           library_entries.last_played_label,
+          library_entries.is_archived,
           library_entries.added_at,
           library_entries.updated_at,
           games.id,
@@ -666,14 +884,15 @@ mod storage {
                         primary_platform_id: row.get(1)?,
                         install_status: row.get(2)?,
                         last_played_label: row.get(3)?,
-                        added_at: row.get(4)?,
-                        updated_at: row.get(5)?,
-                        game_id: row.get(6)?,
-                        title: row.get(7)?,
-                        sort_title: row.get(8)?,
-                        installed: row.get::<_, i64>(9)? == 1,
-                        playtime_total_minutes: row.get(10)?,
-                        accent_color: row.get(11)?,
+                        is_archived: row.get::<_, i64>(4)? == 1,
+                        added_at: row.get(5)?,
+                        updated_at: row.get(6)?,
+                        game_id: row.get(7)?,
+                        title: row.get(8)?,
+                        sort_title: row.get(9)?,
+                        installed: row.get::<_, i64>(10)? == 1,
+                        playtime_total_minutes: row.get(11)?,
+                        accent_color: row.get(12)?,
                     })
                 },
             )
@@ -684,19 +903,28 @@ mod storage {
         let sources = list_sources(connection, &row.game_id)?;
         let launch_actions = list_launch_actions(connection, &row.game_id)?;
         let genres = list_genres(connection, &row.game_id)?;
+        let mut platforms: Vec<String> = sources
+            .iter()
+            .map(|source| source.platform_id.clone())
+            .collect();
+
+        if !platforms.contains(&row.primary_platform_id) {
+            platforms.insert(0, row.primary_platform_id.clone());
+        }
 
         Ok(LibraryEntryDto {
             id: row.entry_id,
             primary_platform_id: row.primary_platform_id.clone(),
             install_status: row.install_status,
             last_played_label: row.last_played_label,
+            is_archived: row.is_archived,
             added_at: row.added_at,
             updated_at: row.updated_at,
             game: GameDto {
                 internal_id: row.game_id,
                 title: row.title,
                 sort_title: row.sort_title,
-                platforms: vec![row.primary_platform_id],
+                platforms,
                 sources,
                 installed: row.installed,
                 install_locations: Vec::new(),
@@ -785,6 +1013,784 @@ mod storage {
         genres
     }
 
+    struct NormalizedManualGame {
+        title: String,
+        sort_title: String,
+        install_status: String,
+        installed: bool,
+        genre: String,
+        launch_target: String,
+        launch_kind: String,
+        launch_label: String,
+    }
+
+    fn normalize_manual_game_input(
+        input: ManualGameInput,
+    ) -> rusqlite::Result<NormalizedManualGame> {
+        let title = input.title.trim();
+        if title.is_empty() {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "title is required".to_string(),
+            ));
+        }
+
+        let install_status = match input.install_status.as_str() {
+            "installed" => "installed".to_string(),
+            _ => "not_installed".to_string(),
+        };
+        let installed = install_status == "installed";
+        let genre = input
+            .genre
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Sem genero")
+            .to_string();
+        let launch_target = input.launch_target.unwrap_or_default().trim().to_string();
+        let launch_kind = launch_action_kind(&launch_target).to_string();
+        let launch_label = if launch_target.is_empty() {
+            "Sem acao configurada".to_string()
+        } else {
+            launch_target.clone()
+        };
+
+        Ok(NormalizedManualGame {
+            title: title.to_string(),
+            sort_title: title.to_string(),
+            install_status,
+            installed,
+            genre,
+            launch_target,
+            launch_kind,
+            launch_label,
+        })
+    }
+
+    fn ensure_archived_column(connection: &Connection) -> rusqlite::Result<()> {
+        if !table_has_column(connection, "library_entries", "is_archived")? {
+            connection.execute(
+                "ALTER TABLE library_entries ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn ensure_active_entries_index(connection: &Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_library_entries_active_added_at ON library_entries(added_at DESC) WHERE is_archived = 0",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn table_has_column(
+        connection: &Connection,
+        table_name: &str,
+        column_name: &str,
+    ) -> rusqlite::Result<bool> {
+        let mut statement = connection.prepare(&format!("PRAGMA table_info({table_name})"))?;
+        let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+
+        for column in columns {
+            if column? == column_name {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    struct SeedLibraryEntry {
+        entry_id: &'static str,
+        game_id: &'static str,
+        source_id: &'static str,
+        launch_id: &'static str,
+        primary_platform_id: &'static str,
+        external_id: &'static str,
+        title: &'static str,
+        sort_title: &'static str,
+        install_status: &'static str,
+        installed: bool,
+        last_played_label: &'static str,
+        added_at: &'static str,
+        updated_at: &'static str,
+        playtime_total_minutes: i64,
+        accent_color: &'static str,
+        genre: &'static str,
+        launch_kind: &'static str,
+        launch_label: &'static str,
+        launch_target: &'static str,
+    }
+
+    pub(super) fn seed_mock_library(connection: &mut Connection) -> rusqlite::Result<()> {
+        const SEED_ENTRIES: [SeedLibraryEntry; 4] = [
+            SeedLibraryEntry {
+                entry_id: "entry-steam-hades",
+                game_id: "game-hades",
+                source_id: "source-steam-hades",
+                launch_id: "launch-steam-hades",
+                primary_platform_id: "steam",
+                external_id: "1145360",
+                title: "Hades",
+                sort_title: "Hades",
+                install_status: "installed",
+                installed: true,
+                last_played_label: "Hoje",
+                added_at: "2026-05-07T00:00:00.000Z",
+                updated_at: "2026-05-07T00:00:00.000Z",
+                playtime_total_minutes: 2520,
+                accent_color: "#c2410c",
+                genre: "Roguelike",
+                launch_kind: "uri",
+                launch_label: "steam://rungameid/1145360",
+                launch_target: "steam://rungameid/1145360",
+            },
+            SeedLibraryEntry {
+                entry_id: "entry-steam-cyberpunk",
+                game_id: "game-cyberpunk-2077",
+                source_id: "source-steam-cyberpunk",
+                launch_id: "launch-steam-cyberpunk",
+                primary_platform_id: "steam",
+                external_id: "1091500",
+                title: "Cyberpunk 2077",
+                sort_title: "Cyberpunk 2077",
+                install_status: "not_installed",
+                installed: false,
+                last_played_label: "12 dias",
+                added_at: "2026-05-07T00:00:00.000Z",
+                updated_at: "2026-05-07T00:00:00.000Z",
+                playtime_total_minutes: 5220,
+                accent_color: "#0f766e",
+                genre: "RPG",
+                launch_kind: "uri",
+                launch_label: "steam://rungameid/1091500",
+                launch_target: "steam://rungameid/1091500",
+            },
+            SeedLibraryEntry {
+                entry_id: "entry-local-minecraft",
+                game_id: "game-minecraft",
+                source_id: "source-local-minecraft",
+                launch_id: "launch-local-minecraft",
+                primary_platform_id: "local",
+                external_id: "local-minecraft",
+                title: "Minecraft",
+                sort_title: "Minecraft",
+                install_status: "installed",
+                installed: true,
+                last_played_label: "Ontem",
+                added_at: "2026-05-07T00:00:00.000Z",
+                updated_at: "2026-05-07T00:00:00.000Z",
+                playtime_total_minutes: 7680,
+                accent_color: "#15803d",
+                genre: "Sandbox",
+                launch_kind: "executable",
+                launch_label: "C:/Games/Minecraft/Launcher.exe",
+                launch_target: "C:/Games/Minecraft/Launcher.exe",
+            },
+            SeedLibraryEntry {
+                entry_id: "entry-manual-silksong",
+                game_id: "game-hollow-knight-silksong",
+                source_id: "source-manual-silksong",
+                launch_id: "launch-manual-silksong",
+                primary_platform_id: "manual",
+                external_id: "manual-silksong",
+                title: "Hollow Knight: Silksong",
+                sort_title: "Hollow Knight: Silksong",
+                install_status: "not_installed",
+                installed: false,
+                last_played_label: "Nunca",
+                added_at: "2026-05-07T00:00:00.000Z",
+                updated_at: "2026-05-07T00:00:00.000Z",
+                playtime_total_minutes: 0,
+                accent_color: "#be123c",
+                genre: "Metroidvania",
+                launch_kind: "manual",
+                launch_label: "Sem acao configurada",
+                launch_target: "",
+            },
+        ];
+
+        let transaction = connection.transaction()?;
+
+        for entry in SEED_ENTRIES {
+            transaction.execute(
+                r#"
+        INSERT OR IGNORE INTO games (
+          id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "#,
+                params![
+                    entry.game_id,
+                    entry.title,
+                    entry.sort_title,
+                    entry.installed as i64,
+                    entry.playtime_total_minutes,
+                    entry.accent_color,
+                    entry.added_at,
+                    entry.updated_at
+                ],
+            )?;
+            transaction.execute(
+                r#"
+        INSERT OR IGNORE INTO library_entries (
+          id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)
+        "#,
+                params![
+                    entry.entry_id,
+                    entry.game_id,
+                    entry.primary_platform_id,
+                    entry.install_status,
+                    entry.last_played_label,
+                    entry.added_at,
+                    entry.updated_at
+                ],
+            )?;
+            transaction.execute(
+                r#"
+        INSERT OR IGNORE INTO game_sources (id, game_id, platform_id, external_id)
+        VALUES (?1, ?2, ?3, ?4)
+        "#,
+                params![
+                    entry.source_id,
+                    entry.game_id,
+                    entry.primary_platform_id,
+                    entry.external_id
+                ],
+            )?;
+            transaction.execute(
+                r#"
+        INSERT OR IGNORE INTO launch_actions (
+          id, game_id, platform_id, kind, label, target, arguments_json, is_primary
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, '[]', 1)
+        "#,
+                params![
+                    entry.launch_id,
+                    entry.game_id,
+                    entry.primary_platform_id,
+                    entry.launch_kind,
+                    entry.launch_label,
+                    entry.launch_target
+                ],
+            )?;
+            transaction.execute(
+                "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, ?2, 0)",
+                params![entry.game_id, entry.genre],
+            )?;
+        }
+
+        transaction.commit()
+    }
+
+    #[derive(Clone)]
+    struct LocalGameCandidate {
+        source_external_id: String,
+        title: String,
+        launch_target: String,
+        source_id: String,
+        game_id: String,
+        entry_id: String,
+        launch_id: String,
+        accent_color: &'static str,
+    }
+
+    pub fn sync_local_games(connection: &mut Connection) -> rusqlite::Result<SyncSummaryDto> {
+        let roots = collect_local_game_roots();
+        sync_local_games_from_roots(connection, &roots)
+    }
+
+    fn sync_local_games_from_roots(
+        connection: &mut Connection,
+        roots: &[PathBuf],
+    ) -> rusqlite::Result<SyncSummaryDto> {
+        let candidates = discover_local_game_candidates(roots);
+        let existing_entries = list_local_entries_by_source(connection)?;
+        let mut summary = SyncSummaryDto {
+            discovered: candidates.len(),
+            inserted: 0,
+            updated: 0,
+        };
+
+        if candidates.is_empty() {
+            return Ok(summary);
+        }
+
+        let transaction = connection.transaction()?;
+
+        for candidate in candidates {
+            if let Some(existing_row) = existing_entries.get(&candidate.source_external_id) {
+                update_local_entry(&transaction, existing_row, &candidate)?;
+                summary.updated += 1;
+            } else {
+                insert_local_entry(&transaction, &candidate)?;
+                summary.inserted += 1;
+            }
+        }
+
+        transaction.commit()?;
+        Ok(summary)
+    }
+
+    fn collect_local_game_roots() -> Vec<PathBuf> {
+        if let Some(raw_roots) = std::env::var_os("BIBLIOTECA_JOGOS_LOCAL_ROOTS") {
+            let roots = raw_roots
+                .to_string_lossy()
+                .split(';')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
+
+            if !roots.is_empty() {
+                return roots;
+            }
+        }
+
+        let mut roots = Vec::new();
+
+        if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+            let user_profile = PathBuf::from(user_profile);
+            roots.push(user_profile.join("Games"));
+            roots.push(user_profile.join("Desktop").join("Games"));
+            roots.push(user_profile.join("Documents").join("Games"));
+        }
+
+        if let Some(program_files) = std::env::var_os("PROGRAMFILES") {
+            let program_files = PathBuf::from(program_files);
+            roots.push(program_files.join("GOG Games"));
+            roots.push(program_files.join("Epic Games"));
+            roots.push(program_files.join("EA Games"));
+            roots.push(program_files.join("Ubisoft"));
+            roots.push(program_files.join("Battle.net"));
+        }
+
+        if let Some(program_files_x86) = std::env::var_os("PROGRAMFILES(X86)") {
+            let program_files_x86 = PathBuf::from(program_files_x86);
+            roots.push(program_files_x86.join("GOG Games"));
+            roots.push(program_files_x86.join("Epic Games"));
+            roots.push(program_files_x86.join("Battle.net"));
+        }
+
+        if let Some(public) = std::env::var_os("PUBLIC") {
+            roots.push(PathBuf::from(public).join("Games"));
+        }
+
+        roots.into_iter().filter(|root| root.exists()).collect()
+    }
+
+    fn discover_local_game_candidates(roots: &[PathBuf]) -> Vec<LocalGameCandidate> {
+        let mut candidates = HashMap::new();
+
+        for root in roots {
+            for candidate_dir in candidate_directories(root) {
+                if let Some(executable_path) = find_local_executable(&candidate_dir) {
+                    let normalized_target = normalize_path_string(&executable_path);
+
+                    candidates
+                        .entry(normalized_target.clone())
+                        .or_insert_with(|| {
+                            let title = candidate_title(&executable_path);
+                            let slug = create_slug(&title);
+                            let hash = stable_hash_hex(&normalized_target);
+                            let accent_color = deterministic_accent_color(&title);
+
+                            LocalGameCandidate {
+                                source_external_id: normalized_target,
+                                title,
+                                launch_target: executable_path.to_string_lossy().to_string(),
+                                source_id: format!("source-local-{slug}-{hash}"),
+                                game_id: format!("game-local-{slug}-{hash}"),
+                                entry_id: format!("entry-local-{slug}-{hash}"),
+                                launch_id: format!("launch-local-{slug}-{hash}"),
+                                accent_color,
+                            }
+                        });
+                }
+            }
+        }
+
+        candidates.into_values().collect()
+    }
+
+    fn candidate_directories(root: &Path) -> Vec<PathBuf> {
+        let mut directories = Vec::new();
+
+        if root.is_dir() {
+            if !is_helper_directory(root) {
+                directories.push(root.to_path_buf());
+            }
+
+            if let Ok(children) = fs::read_dir(root) {
+                for child in children.flatten().take(256) {
+                    let path = child.path();
+                    if path.is_dir() && !is_helper_directory(&path) {
+                        directories.push(path);
+                    }
+                }
+            }
+        }
+
+        directories
+    }
+
+    fn find_local_executable(candidate_dir: &Path) -> Option<PathBuf> {
+        if is_helper_directory(candidate_dir) {
+            return None;
+        }
+
+        let mut direct_executables = Vec::new();
+        let mut nested_executables = Vec::new();
+
+        if let Ok(entries) = fs::read_dir(candidate_dir) {
+            for entry in entries.flatten().take(256) {
+                let path = entry.path();
+                if path.is_file() && is_executable_file(&path) {
+                    direct_executables.push(path);
+                } else if path.is_dir() {
+                    if let Ok(sub_entries) = fs::read_dir(&path) {
+                        for sub_entry in sub_entries.flatten().take(64) {
+                            let sub_path = sub_entry.path();
+                            if sub_path.is_file() && is_executable_file(&sub_path) {
+                                nested_executables.push(sub_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        choose_best_executable(&candidate_dir, direct_executables)
+            .or_else(|| choose_best_executable(&candidate_dir, nested_executables))
+    }
+
+    fn choose_best_executable(candidate_dir: &Path, executables: Vec<PathBuf>) -> Option<PathBuf> {
+        let mut executables = executables;
+        executables.sort_by(|left, right| left.to_string_lossy().cmp(&right.to_string_lossy()));
+
+        let directory_name = candidate_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let normalized_directory_name = normalize_name(directory_name);
+
+        if let Some(executable) = executables
+            .iter()
+            .find(|path| {
+                let stem = path
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default();
+                normalize_name(stem) == normalized_directory_name
+            })
+            .cloned()
+        {
+            return Some(executable);
+        }
+
+        executables
+            .iter()
+            .find(|path| !is_helper_executable(path))
+            .cloned()
+            .or_else(|| executables.into_iter().next())
+    }
+
+    fn is_helper_executable(path: &Path) -> bool {
+        let stem = path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_lowercase();
+
+        [
+            "setup",
+            "unins",
+            "uninstall",
+            "vc_redist",
+            "dxsetup",
+            "directx",
+            "epiconlineservices",
+            "redistributable",
+            "redist",
+            "prereq",
+            "runtime",
+            "service",
+            "support",
+            "installer",
+            "repair",
+            "crash",
+            "helper",
+            "launcher",
+        ]
+        .iter()
+        .any(|keyword| stem.contains(keyword))
+    }
+
+    fn is_helper_directory(path: &Path) -> bool {
+        let normalized_path = path
+            .components()
+            .filter_map(|component| component.as_os_str().to_str())
+            .map(normalize_name)
+            .collect::<Vec<_>>()
+            .join("/");
+
+        [
+            "setup",
+            "unins",
+            "uninstall",
+            "dxsetup",
+            "directx",
+            "epiconlineservices",
+            "redistributable",
+            "redist",
+            "prereq",
+            "runtime",
+            "service",
+            "support",
+            "installer",
+            "repair",
+        ]
+        .iter()
+        .any(|keyword| normalized_path.contains(keyword))
+    }
+
+    fn is_executable_file(path: &Path) -> bool {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.eq_ignore_ascii_case("exe"))
+            .unwrap_or(false)
+    }
+
+    fn candidate_title(executable_path: &Path) -> String {
+        executable_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Jogo Local")
+            .to_string()
+    }
+
+    fn normalize_name(value: &str) -> String {
+        value
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .collect()
+    }
+
+    fn normalize_path_string(path: &Path) -> String {
+        path.to_string_lossy().replace('/', "\\").to_lowercase()
+    }
+
+    fn stable_hash_hex(value: &str) -> String {
+        let mut hash: u64 = 0xcbf29ce484222325;
+
+        for byte in value.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+
+        format!("{hash:016x}")
+    }
+
+    fn list_local_entries_by_source(
+        connection: &Connection,
+    ) -> rusqlite::Result<HashMap<String, EntryRow>> {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT
+              game_sources.external_id,
+              library_entries.id,
+              library_entries.primary_platform_id,
+              library_entries.install_status,
+              library_entries.last_played_label,
+              library_entries.is_archived,
+              library_entries.added_at,
+              library_entries.updated_at,
+              games.id,
+              games.title,
+              games.sort_title,
+              games.installed,
+              games.playtime_total_minutes,
+              games.accent_color
+            FROM library_entries
+            JOIN games ON games.id = library_entries.game_id
+            JOIN game_sources ON game_sources.game_id = library_entries.game_id
+            WHERE library_entries.primary_platform_id = 'local'
+              AND game_sources.platform_id = 'local'
+            "#,
+        )?;
+
+        let entries = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    EntryRow {
+                        entry_id: row.get(1)?,
+                        primary_platform_id: row.get(2)?,
+                        install_status: row.get(3)?,
+                        last_played_label: row.get(4)?,
+                        is_archived: row.get::<_, i64>(5)? == 1,
+                        added_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        game_id: row.get(8)?,
+                        title: row.get(9)?,
+                        sort_title: row.get(10)?,
+                        installed: row.get::<_, i64>(11)? == 1,
+                        playtime_total_minutes: row.get(12)?,
+                        accent_color: row.get(13)?,
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(entries.into_iter().collect())
+    }
+
+    fn insert_local_entry(
+        transaction: &rusqlite::Transaction<'_>,
+        candidate: &LocalGameCandidate,
+    ) -> rusqlite::Result<()> {
+        let now = now_iso();
+        transaction.execute(
+            r#"
+            INSERT INTO games (
+              id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, 1, 0, ?4, ?5, ?5)
+            "#,
+            params![
+                candidate.game_id,
+                candidate.title,
+                candidate.title,
+                candidate.accent_color,
+                now,
+            ],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO library_entries (
+              id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
+            ) VALUES (?1, ?2, 'local', 'installed', 'Nunca', 0, ?3, ?3)
+            "#,
+            params![candidate.entry_id, candidate.game_id, now],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO game_sources (id, game_id, platform_id, external_id)
+            VALUES (?1, ?2, 'local', ?3)
+            "#,
+            params![
+                candidate.source_id,
+                candidate.game_id,
+                candidate.source_external_id
+            ],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO launch_actions (
+              id, game_id, platform_id, kind, label, target, arguments_json, is_primary
+            ) VALUES (?1, ?2, 'local', 'executable', ?3, ?4, '[]', 1)
+            "#,
+            params![
+                candidate.launch_id,
+                candidate.game_id,
+                candidate.title,
+                candidate.launch_target,
+            ],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Local', 0)",
+            params![candidate.game_id],
+        )?;
+
+        Ok(())
+    }
+
+    fn update_local_entry(
+        transaction: &rusqlite::Transaction<'_>,
+        existing_row: &EntryRow,
+        candidate: &LocalGameCandidate,
+    ) -> rusqlite::Result<()> {
+        let updated_at = now_iso();
+        transaction.execute(
+            r#"
+            UPDATE games
+            SET title = ?2,
+                sort_title = ?3,
+                installed = 1,
+                accent_color = ?4,
+                updated_at = ?5
+            WHERE id = ?1
+            "#,
+            params![
+                existing_row.game_id,
+                candidate.title,
+                candidate.title,
+                candidate.accent_color,
+                updated_at,
+            ],
+        )?;
+        transaction.execute(
+            r#"
+            UPDATE library_entries
+            SET install_status = 'installed',
+                updated_at = ?2
+            WHERE id = ?1
+            "#,
+            params![existing_row.entry_id, updated_at],
+        )?;
+        transaction.execute(
+            r#"
+            UPDATE launch_actions
+            SET kind = 'executable',
+                label = ?2,
+                target = ?3
+            WHERE game_id = ?1
+              AND is_primary = 1
+            "#,
+            params![
+                existing_row.game_id,
+                candidate.title,
+                candidate.launch_target
+            ],
+        )?;
+        transaction.execute(
+            "DELETE FROM game_genres WHERE game_id = ?1",
+            params![existing_row.game_id],
+        )?;
+        transaction.execute(
+            "INSERT INTO game_genres (game_id, genre, position) VALUES (?1, 'Local', 0)",
+            params![existing_row.game_id],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn set_library_entry_archived(
+        connection: &mut Connection,
+        entry_id: &str,
+        is_archived: bool,
+    ) -> rusqlite::Result<()> {
+        let updated_at = now_iso();
+        let affected = connection.execute(
+            r#"
+            UPDATE library_entries
+            SET is_archived = ?2,
+                updated_at = ?3
+            WHERE id = ?1
+            "#,
+            params![entry_id, is_archived as i64, updated_at],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+
+        Ok(())
+    }
+
     fn create_slug(value: &str) -> String {
         let mut slug = String::new();
         let mut last_was_dash = false;
@@ -840,6 +1846,13 @@ mod storage {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::path::Path;
+
+        fn open_seeded_database(path: &Path) -> Connection {
+            let mut connection = open_database(path).expect("open database");
+            seed_mock_library(&mut connection).expect("seed mock library");
+            connection
+        }
 
         #[test]
         fn migration_creates_schema_version() {
@@ -854,6 +1867,304 @@ mod storage {
                 .expect("read schema version");
 
             assert_eq!(version, 1);
+        }
+
+        #[test]
+        fn open_database_seeds_mock_library_once() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-seed-{}.sqlite3",
+                timestamp_millis()
+            ));
+
+            {
+                let connection = open_seeded_database(&path);
+                let entries = list_library_entries(&connection).expect("list seeded entries");
+
+                assert_eq!(entries.len(), 4);
+                assert!(entries.iter().any(|entry| entry.id == "entry-steam-hades"));
+                assert!(entries
+                    .iter()
+                    .any(|entry| entry.id == "entry-local-minecraft"));
+                assert!(entries
+                    .iter()
+                    .any(|entry| entry.id == "entry-manual-silksong"));
+            }
+
+            {
+                let connection = open_seeded_database(&path);
+                let entries = list_library_entries(&connection).expect("list seeded entries again");
+
+                assert_eq!(entries.len(), 4);
+            }
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn open_database_starts_without_seeded_library() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-empty-{}.sqlite3",
+                timestamp_millis()
+            ));
+
+            let connection = open_database(&path).expect("open empty database");
+            let entries = list_library_entries(&connection).expect("list empty entries");
+
+            assert!(entries.is_empty());
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_imports_executable_once() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-root-{}",
+                timestamp_millis()
+            ));
+            let game_dir = root.join("Nightfall");
+            let executable = game_dir.join("Nightfall.exe");
+            std::fs::create_dir_all(&game_dir).expect("create local game dir");
+            std::fs::write(&executable, b"fake exe").expect("create fake exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-sync-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            let summary = sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+            let entries = list_library_entries(&connection).expect("list local entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].primary_platform_id, "local");
+            assert_eq!(entries[0].game.title, "Nightfall");
+            assert_eq!(entries[0].game.launch_actions[0].kind, "executable");
+            assert_eq!(
+                entries[0].game.launch_actions[0].target,
+                executable.to_string_lossy()
+            );
+
+            let second_summary =
+                sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                    .expect("resync local games");
+            let entries_again =
+                list_library_entries(&connection).expect("list local entries again");
+
+            assert_eq!(second_summary.discovered, 1);
+            assert_eq!(second_summary.inserted, 0);
+            assert_eq!(second_summary.updated, 1);
+            assert_eq!(entries_again.len(), 1);
+
+            let _ = std::fs::remove_file(executable);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_skips_helper_directories() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-helper-root-{}",
+                timestamp_millis()
+            ));
+            let directx_dir = root.join("DirectX");
+            let directx_exe = directx_dir.join("DirectXSetup.exe");
+            let eos_dir = root.join("EpicOnlineServices");
+            let eos_exe = eos_dir.join("EpicOnlineServices.exe");
+            let game_dir = root.join("Skybound");
+            let game_exe = game_dir.join("Skybound.exe");
+
+            std::fs::create_dir_all(&directx_dir).expect("create directx dir");
+            std::fs::create_dir_all(&eos_dir).expect("create eos dir");
+            std::fs::create_dir_all(&game_dir).expect("create game dir");
+            std::fs::write(&directx_exe, b"fake exe").expect("create directx exe");
+            std::fs::write(&eos_exe, b"fake exe").expect("create eos exe");
+            std::fs::write(&game_exe, b"fake exe").expect("create game exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-helper-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            let summary = sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+            let entries = list_library_entries(&connection).expect("list local entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].game.title, "Skybound");
+
+            let _ = std::fs::remove_file(directx_exe);
+            let _ = std::fs::remove_file(eos_exe);
+            let _ = std::fs::remove_file(game_exe);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_preserves_manual_entries() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-preserve-{}",
+                timestamp_millis()
+            ));
+            let game_dir = root.join("IndieGame");
+            let executable = game_dir.join("IndieGame.exe");
+            std::fs::create_dir_all(&game_dir).expect("create local game dir");
+            std::fs::write(&executable, b"fake exe").expect("create fake exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-preserve-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            add_manual_game(
+                &mut connection,
+                ManualGameInput {
+                    title: "Manual Preservado".to_string(),
+                    genre: Some("Teste".to_string()),
+                    install_status: "installed".to_string(),
+                    launch_target: Some("C:\\Games\\Manual\\Manual.exe".to_string()),
+                },
+            )
+            .expect("add manual game");
+            sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+
+            let entries = list_library_entries(&connection).expect("list unified library");
+
+            assert!(entries
+                .iter()
+                .any(|entry| entry.primary_platform_id == "manual"));
+            assert!(entries
+                .iter()
+                .any(|entry| entry.primary_platform_id == "local"));
+
+            let _ = std::fs::remove_file(executable);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn open_database_upgrades_legacy_library_schema() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-legacy-{}.sqlite3",
+                timestamp_millis()
+            ));
+
+            {
+                let connection = Connection::open(&path).expect("open legacy database");
+                connection
+                    .execute_batch(
+                        r#"
+                        CREATE TABLE schema_migrations (
+                          version INTEGER PRIMARY KEY,
+                          applied_at TEXT NOT NULL
+                        );
+
+                        CREATE TABLE games (
+                          id TEXT PRIMARY KEY,
+                          title TEXT NOT NULL,
+                          sort_title TEXT NOT NULL,
+                          installed INTEGER NOT NULL DEFAULT 0,
+                          playtime_total_minutes INTEGER NOT NULL DEFAULT 0,
+                          accent_color TEXT,
+                          created_at TEXT NOT NULL,
+                          updated_at TEXT NOT NULL
+                        );
+
+                        CREATE TABLE library_entries (
+                          id TEXT PRIMARY KEY,
+                          game_id TEXT NOT NULL UNIQUE,
+                          primary_platform_id TEXT NOT NULL,
+                          install_status TEXT NOT NULL,
+                          last_played_label TEXT NOT NULL,
+                          added_at TEXT NOT NULL,
+                          updated_at TEXT NOT NULL,
+                          FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+                        );
+
+                        CREATE TABLE game_sources (
+                          id TEXT PRIMARY KEY,
+                          game_id TEXT NOT NULL,
+                          platform_id TEXT NOT NULL,
+                          external_id TEXT NOT NULL,
+                          account_id TEXT,
+                          FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
+                          UNIQUE (platform_id, external_id)
+                        );
+
+                        CREATE TABLE launch_actions (
+                          id TEXT PRIMARY KEY,
+                          game_id TEXT NOT NULL,
+                          platform_id TEXT NOT NULL,
+                          kind TEXT NOT NULL,
+                          label TEXT NOT NULL,
+                          target TEXT NOT NULL,
+                          arguments_json TEXT,
+                          working_directory TEXT,
+                          is_primary INTEGER NOT NULL DEFAULT 0,
+                          FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+                        );
+
+                        CREATE TABLE game_genres (
+                          game_id TEXT NOT NULL,
+                          genre TEXT NOT NULL,
+                          position INTEGER NOT NULL DEFAULT 0,
+                          FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
+                          PRIMARY KEY (game_id, genre)
+                        );
+                        "#,
+                    )
+                    .expect("create legacy schema");
+            }
+
+            let mut connection = open_database(&path).expect("upgrade legacy database");
+            seed_mock_library(&mut connection).expect("seed legacy database");
+            let entries = list_library_entries(&connection).expect("list upgraded entries");
+
+            assert_eq!(entries.len(), 4);
+            assert!(
+                table_has_column(&connection, "library_entries", "is_archived")
+                    .expect("check archived column")
+            );
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn set_library_entry_archived_toggles_visibility() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-archive-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            set_library_entry_archived(&mut connection, "entry-manual-silksong", true)
+                .expect("archive entry");
+            let archived_entries = list_library_entries(&connection).expect("list archived state");
+
+            assert_eq!(archived_entries.len(), 3);
+            assert!(!archived_entries
+                .iter()
+                .any(|entry| entry.id == "entry-manual-silksong"));
+
+            set_library_entry_archived(&mut connection, "entry-manual-silksong", false)
+                .expect("restore entry");
+            let restored_entries = list_library_entries(&connection).expect("list restored state");
+
+            assert_eq!(restored_entries.len(), 4);
+            assert!(restored_entries
+                .iter()
+                .any(|entry| entry.id == "entry-manual-silksong"));
+
+            let _ = std::fs::remove_file(path);
         }
 
         #[test]
@@ -886,6 +2197,40 @@ mod storage {
         }
 
         #[test]
+        fn list_library_entries_returns_seed_and_manual_games() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-library-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            add_manual_game(
+                &mut connection,
+                ManualGameInput {
+                    title: "Jogo Manual Novo".to_string(),
+                    genre: Some("Teste".to_string()),
+                    install_status: "installed".to_string(),
+                    launch_target: Some("steam://rungameid/123".to_string()),
+                },
+            )
+            .expect("add manual game");
+            let entries = list_library_entries(&connection).expect("list unified library");
+
+            assert_eq!(entries.len(), 5);
+            assert!(entries
+                .iter()
+                .any(|entry| entry.primary_platform_id == "steam"));
+            assert!(entries
+                .iter()
+                .any(|entry| entry.primary_platform_id == "local"));
+            assert!(entries
+                .iter()
+                .any(|entry| entry.game.title == "Jogo Manual Novo"));
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
         fn add_manual_game_detects_uri_launch_action() {
             let mut connection = Connection::open_in_memory().expect("open in-memory database");
             migrate(&connection).expect("apply migration");
@@ -907,6 +2252,76 @@ mod storage {
                 entries[0].game.launch_actions[0].target,
                 "steam://rungameid/1030300"
             );
+        }
+
+        #[test]
+        fn update_manual_game_updates_existing_entry() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-update-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            let entry = update_manual_game(
+                &mut connection,
+                "entry-manual-silksong",
+                ManualGameInput {
+                    title: "Hollow Knight: Silksong Deluxe".to_string(),
+                    genre: Some("Metroidvania".to_string()),
+                    install_status: "installed".to_string(),
+                    launch_target: Some("C:\\Games\\Silksong\\Launcher.exe".to_string()),
+                },
+            )
+            .expect("update manual game");
+            let entries = list_library_entries(&connection).expect("list unified library");
+
+            assert_eq!(entry.game.title, "Hollow Knight: Silksong Deluxe");
+            assert_eq!(entry.install_status, "installed");
+            assert_eq!(entry.game.genres, vec!["Metroidvania"]);
+            assert_eq!(
+                entry.game.launch_actions[0].target,
+                "C:\\Games\\Silksong\\Launcher.exe"
+            );
+            assert!(entries
+                .iter()
+                .any(|library_entry| library_entry.game.title == "Hollow Knight: Silksong Deluxe"));
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn update_manual_game_preserves_archived_state() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-update-archive-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            set_library_entry_archived(&mut connection, "entry-manual-silksong", true)
+                .expect("archive entry");
+            update_manual_game(
+                &mut connection,
+                "entry-manual-silksong",
+                ManualGameInput {
+                    title: "Silksong Archivado".to_string(),
+                    genre: Some("Metroidvania".to_string()),
+                    install_status: "not_installed".to_string(),
+                    launch_target: Some("steam://rungameid/1030300".to_string()),
+                },
+            )
+            .expect("update archived entry");
+
+            let stored_entry = find_entry(&connection, "entry-manual-silksong")
+                .expect("read stored entry")
+                .expect("stored entry exists");
+            let entries = list_library_entries(&connection).expect("list visible entries");
+
+            assert!(stored_entry.is_archived);
+            assert!(!entries
+                .iter()
+                .any(|library_entry| library_entry.id == "entry-manual-silksong"));
+
+            let _ = std::fs::remove_file(path);
         }
     }
 }

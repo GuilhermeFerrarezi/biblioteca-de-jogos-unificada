@@ -1,4 +1,4 @@
-# Retomada em Novo Computador
+﻿# Retomada em Novo Computador
 
 Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra maquina sem depender de memoria da sessao anterior.
 
@@ -11,15 +11,17 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 ## Estado atual do aplicativo
 
 - O app fica em `aplicativo`.
-- Stack: Tauri 2, React 18, TypeScript, Vite, ESLint e lucide-react.
-- A UI da biblioteca ja existe e roda com dados mockados.
+- Stack: Tauri 2, React 18, JavaScript/JSX, Vite, ESLint e lucide-react.
+- A UI da biblioteca ja existe e roda com listagem unificada vinda do backend Tauri; no navegador comum, usa mocks como fallback.
 - O modo escuro e a experiencia padrao.
 - A visualizacao inicial da biblioteca e por capas, com opcao de lista.
 - Busca, filtros rapidos, selecao de jogo e painel de detalhes ja funcionam.
 - Cadastro manual de jogo ja existe. No Tauri, novos jogos manuais sao salvos em SQLite; no navegador comum, o app usa fallback em memoria.
+- Edicao de jogos manuais tambem ja existe, reutilizando o mesmo modal de cadastro.
 - O botao `Jogar` abre a URI quando a acao e do tipo `uri`, como `steam://rungameid/...`.
-- Executaveis locais de jogos manuais persistidos ja sao iniciados por comando Tauri seguro. Jogos mockados/importados ainda dependem de provider local futuro.
-- O backend Tauri ja possui persistencia SQLite inicial para jogos manuais, mas ainda nao possui listagem unificada completa pelo backend nem providers reais.
+- Executaveis locais de jogos manuais e locais persistidos ja sao iniciados por comando Tauri seguro, sem shell, com validacao de caminho absoluto local, arquivo existente e extensao `.exe`.
+- O backend Tauri ja possui persistencia SQLite, migration e compatibilidade de schema no boot, seed idempotente dos 4 mocks em background, comando `list_library_entries` para a listagem unificada, `set_library_entry_archived` para arquivamento, `update_manual_game` para edicao de jogos manuais e `launch_library_entry` para lancamento local seguro. O `LocalGamesProvider` inicial ja existe como comando `sync_local_games`, com importacao incremental e acionamento manual pela interface. A sincronizacao local nao roda mais no boot para preservar tempo de abertura. O `SteamProvider` ainda nao foi implementado.
+- Ultima revisao confirmada em 2026-05-11: `npm run lint`, `npm run build` e `cargo test` passaram. A suite Rust esta com 21 testes.
 
 ## Estrutura importante
 
@@ -29,10 +31,10 @@ RETOMADA_NOVO_COMPUTADOR.md
 aplicativo/
   package.json
   src/
-    App.tsx
+    App.jsx
     App.css
-    data/mockLibrary.ts
-    domain/
+    data/mockLibrary.js
+    services/libraryApi.js
   src-tauri/
     Cargo.toml
     src/lib.rs
@@ -107,13 +109,15 @@ O projeto pode ficar dentro do OneDrive, mas os artefatos gerados pelo Rust/Carg
 CARGO_TARGET_DIR=%LOCALAPPDATA%\BibliotecaJogosUnificada\cargo-target
 ```
 
+Os scripts `tauri:dev` e `tauri:build` tambem preenchem o `PATH` com `%USERPROFILE%\.cargo\bin`, para o Tauri encontrar `cargo` ao executar `cargo metadata`.
+
 Isso faz `npm run tauri:dev` e `npm run tauri:build` compilarem fora de `aplicativo/src-tauri/target`.
 
 Em um computador novo, confirme se `aplicativo/package.json` contem:
 
 ```json
-"tauri:dev": "set CARGO_TARGET_DIR=%LOCALAPPDATA%\\BibliotecaJogosUnificada\\cargo-target&& tauri dev",
-"tauri:build": "set CARGO_TARGET_DIR=%LOCALAPPDATA%\\BibliotecaJogosUnificada\\cargo-target&& tauri build"
+"tauri:dev": "set PATH=%USERPROFILE%\\.cargo\\bin;%PATH%&& set CARGO_TARGET_DIR=%LOCALAPPDATA%\\BibliotecaJogosUnificada\\cargo-target&& tauri dev",
+"tauri:build": "set PATH=%USERPROFILE%\\.cargo\\bin;%PATH%&& set CARGO_TARGET_DIR=%LOCALAPPDATA%\\BibliotecaJogosUnificada\\cargo-target&& tauri build"
 ```
 
 Opcionalmente, crie a pasta local antes do primeiro build:
@@ -128,6 +132,7 @@ Se precisar testar o Cargo isoladamente:
 cd .\aplicativo\src-tauri
 $env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\BibliotecaJogosUnificada\cargo-target"
 cargo check
+cargo test
 ```
 
 Depois volte para `aplicativo` e rode:
@@ -155,24 +160,33 @@ npm run tauri:dev
 - `src-tauri/target` e gerado pelo Rust e nao deve ser tratado como codigo fonte.
 - No navegador comum (`npm run dev`), os dados adicionados pelo modal somem ao recarregar porque o fallback e em memoria. No Tauri (`npm run tauri:dev`), novos jogos manuais devem persistir em SQLite.
 - Para testar lancamento local com seguranca, cadastre um jogo manual no Tauri com acao como `C:\Windows\System32\notepad.exe`. O backend aceita apenas caminho absoluto local, arquivo existente e extensao `.exe`.
+- Para testar a sincronizacao local sem varrer pastas reais do computador, defina uma raiz controlada antes de abrir o app:
+  ```powershell
+  $env:BIBLIOTECA_JOGOS_LOCAL_ROOTS = "C:\Temp\BibliotecaJogosTeste"
+  npm run tauri:dev
+  ```
+  Dentro dessa raiz, crie subpastas com um `.exe` de teste para validar o comando `sync_local_games`.
 
 ## Ponto exato para continuar
 
-A persistencia local inicial ja foi iniciada. O proximo corte deve consolidar a Fase 2.
+A persistencia local inicial, a listagem unificada pelo backend, o arquivamento, a edicao de jogos manuais, o bootstrap assincrono da biblioteca, o lancamento local seguro e o `LocalGamesProvider` inicial ja foram implementados. A sincronizacao local agora e manual. O proximo corte deve ser a validacao manual do fluxo completo no Tauri e, depois disso, o inicio do `SteamProvider`.
 
 Ordem sugerida:
 
-1. Testar manualmente no Tauri: cadastrar jogo manual, fechar o app, reabrir e confirmar que o jogo continua na biblioteca.
-2. Decidir se os 4 mocks serao seedados no SQLite agora ou se o backend retornara uma listagem unificada combinando mocks/fallback e persistidos.
-3. Implementar edicao e arquivamento de jogos manuais.
-4. Manter `mockLibrary.ts` apenas como seed/fallback de desenvolvimento.
-5. Depois disso, implementar `LocalGamesProvider`.
-6. Em seguida, iniciar `SteamProvider` como primeira integracao real.
+1. Testar manualmente no Tauri: conferir se a janela abre rapido e a biblioteca carrega os 4 mocks apos o bootstrap.
+2. Validar o fluxo completo de adicionar, editar e arquivar jogos manuais.
+3. Manter `mockLibrary.js` apenas como fallback web e referencia de seed.
+4. Fechar e reabrir o app para confirmar persistencia SQLite dos jogos manuais e do arquivamento.
+5. Validar o fluxo manual de sincronizacao local no Tauri, preferencialmente com `BIBLIOTECA_JOGOS_LOCAL_ROOTS` apontando para uma pasta de teste.
+6. Corrigir textos com acentuacao quebrada no frontend, como `Salvar alteraÃ§Ãµes`.
+7. Em seguida, iniciar `SteamProvider` como primeira integracao real.
+8. Depois, adicionar consulta filtrada/paginacao no backend para suportar bibliotecas maiores.
 
 ## Criterios minimos antes de seguir para providers
 
 - `npm run lint` passa.
 - `npm run build` passa.
+- `cargo test` passa em `aplicativo/src-tauri` com `CARGO_TARGET_DIR` local.
 - `npm run tauri:dev` abre o app desktop.
 - Cadastro manual persiste apos fechar e abrir o app.
 - A UI continua funcionando com busca, filtros, selecao e detalhes.
