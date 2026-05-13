@@ -432,6 +432,8 @@ mod storage {
         migrate(&connection)?;
         ensure_archived_column(&connection)?;
         ensure_active_entries_index(&connection)?;
+        ensure_local_cleanup_indexes(&connection)?;
+        archive_rejected_local_entries(&connection)?;
         Ok(connection)
     }
 
@@ -540,6 +542,7 @@ mod storage {
         discovered: usize,
         inserted: usize,
         updated: usize,
+        archived: usize,
     }
 
     #[derive(Debug, Serialize)]
@@ -1086,6 +1089,19 @@ mod storage {
         Ok(())
     }
 
+    fn ensure_local_cleanup_indexes(connection: &Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_library_entries_local_active_game ON library_entries(primary_platform_id, is_archived, game_id)",
+            [],
+        )?;
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_launch_actions_platform_kind_game ON launch_actions(platform_id, kind, game_id)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
     fn table_has_column(
         connection: &Connection,
         table_name: &str,
@@ -1307,11 +1323,13 @@ mod storage {
         roots: &[PathBuf],
     ) -> rusqlite::Result<SyncSummaryDto> {
         let candidates = discover_local_game_candidates(roots);
+        let archived = archive_rejected_local_entries(connection)?;
         let existing_entries = list_local_entries_by_source(connection)?;
         let mut summary = SyncSummaryDto {
             discovered: candidates.len(),
             inserted: 0,
             updated: 0,
+            archived,
         };
 
         if candidates.is_empty() {
@@ -1392,7 +1410,7 @@ mod storage {
                     candidates
                         .entry(normalized_target.clone())
                         .or_insert_with(|| {
-                            let title = candidate_title(&executable_path);
+                            let title = candidate_title(&candidate_dir, &executable_path);
                             let slug = create_slug(&title);
                             let hash = stable_hash_hex(&normalized_target);
                             let accent_color = deterministic_accent_color(&title);
@@ -1419,7 +1437,7 @@ mod storage {
         let mut directories = Vec::new();
 
         if root.is_dir() {
-            if !is_helper_directory(root) {
+            if !is_helper_directory(root) && has_direct_executable(root) {
                 directories.push(root.to_path_buf());
             }
 
@@ -1436,65 +1454,130 @@ mod storage {
         directories
     }
 
+    fn has_direct_executable(path: &Path) -> bool {
+        fs::read_dir(path)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.flatten().take(256))
+            .any(|entry| {
+                let path = entry.path();
+                path.is_file() && is_executable_file(&path)
+            })
+    }
+
     fn find_local_executable(candidate_dir: &Path) -> Option<PathBuf> {
         if is_helper_directory(candidate_dir) {
             return None;
         }
 
-        let mut direct_executables = Vec::new();
-        let mut nested_executables = Vec::new();
+        let mut executables = Vec::new();
+        collect_candidate_executables(candidate_dir, candidate_dir, 0, &mut executables);
 
-        if let Ok(entries) = fs::read_dir(candidate_dir) {
-            for entry in entries.flatten().take(256) {
-                let path = entry.path();
-                if path.is_file() && is_executable_file(&path) {
-                    direct_executables.push(path);
-                } else if path.is_dir() {
-                    if let Ok(sub_entries) = fs::read_dir(&path) {
-                        for sub_entry in sub_entries.flatten().take(64) {
-                            let sub_path = sub_entry.path();
-                            if sub_path.is_file() && is_executable_file(&sub_path) {
-                                nested_executables.push(sub_path);
-                            }
-                        }
-                    }
-                }
-            }
+        choose_best_executable(candidate_dir, executables)
+    }
+
+    fn collect_candidate_executables(
+        root: &Path,
+        current_dir: &Path,
+        depth: usize,
+        executables: &mut Vec<PathBuf>,
+    ) {
+        const MAX_SCAN_DEPTH: usize = 5;
+        const MAX_ENTRIES_PER_DIR: usize = 256;
+        const MAX_EXECUTABLES_PER_CANDIDATE: usize = 128;
+
+        if depth > MAX_SCAN_DEPTH
+            || executables.len() >= MAX_EXECUTABLES_PER_CANDIDATE
+            || (current_dir != root && is_helper_directory(current_dir))
+        {
+            return;
         }
 
-        choose_best_executable(&candidate_dir, direct_executables)
-            .or_else(|| choose_best_executable(&candidate_dir, nested_executables))
+        let Ok(entries) = fs::read_dir(current_dir) else {
+            return;
+        };
+
+        for entry in entries.flatten().take(MAX_ENTRIES_PER_DIR) {
+            if executables.len() >= MAX_EXECUTABLES_PER_CANDIDATE {
+                return;
+            }
+
+            let path = entry.path();
+            if path.is_file() && is_executable_file(&path) {
+                executables.push(path);
+            } else if path.is_dir() {
+                collect_candidate_executables(root, &path, depth + 1, executables);
+            }
+        }
     }
 
     fn choose_best_executable(candidate_dir: &Path, executables: Vec<PathBuf>) -> Option<PathBuf> {
-        let mut executables = executables;
-        executables.sort_by(|left, right| left.to_string_lossy().cmp(&right.to_string_lossy()));
-
         let directory_name = candidate_dir
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default();
         let normalized_directory_name = normalize_name(directory_name);
 
-        if let Some(executable) = executables
-            .iter()
-            .find(|path| {
-                let stem = path
-                    .file_stem()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_default();
-                normalize_name(stem) == normalized_directory_name
+        executables
+            .into_iter()
+            .filter_map(|path| {
+                executable_score(candidate_dir, &path, &normalized_directory_name)
+                    .map(|score| (score, path))
             })
-            .cloned()
+            .max_by(|(left_score, left_path), (right_score, right_path)| {
+                left_score.cmp(right_score).then_with(|| {
+                    right_path
+                        .to_string_lossy()
+                        .cmp(&left_path.to_string_lossy())
+                })
+            })
+            .map(|(_, path)| path)
+    }
+
+    fn executable_score(
+        candidate_dir: &Path,
+        executable_path: &Path,
+        normalized_directory_name: &str,
+    ) -> Option<i32> {
+        if is_helper_executable(executable_path) || path_contains_helper_component(executable_path)
         {
-            return Some(executable);
+            return None;
         }
 
-        executables
+        let stem = executable_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let normalized_stem = normalize_game_executable_name(stem);
+        let mut score = 10;
+
+        if normalized_stem == normalized_directory_name {
+            score += 100;
+        } else if !normalized_directory_name.is_empty()
+            && (normalized_stem.contains(normalized_directory_name)
+                || normalized_directory_name.contains(&normalized_stem))
+        {
+            score += 70;
+        }
+
+        if executable_path.parent() == Some(candidate_dir) {
+            score += 30;
+        }
+
+        let normalized_path = executable_path
+            .components()
+            .filter_map(|component| component.as_os_str().to_str())
+            .map(normalize_name)
+            .collect::<Vec<_>>();
+
+        if normalized_path
             .iter()
-            .find(|path| !is_helper_executable(path))
-            .cloned()
-            .or_else(|| executables.into_iter().next())
+            .any(|component| component == "binaries" || component == "win64")
+        {
+            score += 20;
+        }
+
+        Some(score)
     }
 
     fn is_helper_executable(path: &Path) -> bool {
@@ -1522,7 +1605,6 @@ mod storage {
             "repair",
             "crash",
             "helper",
-            "launcher",
         ]
         .iter()
         .any(|keyword| stem.contains(keyword))
@@ -1551,9 +1633,17 @@ mod storage {
             "support",
             "installer",
             "repair",
+            "engine",
+            "extras",
+            "supportfiles",
+            "thirdparty",
         ]
         .iter()
         .any(|keyword| normalized_path.contains(keyword))
+    }
+
+    fn path_contains_helper_component(path: &Path) -> bool {
+        path.parent().is_some_and(is_helper_directory)
     }
 
     fn is_executable_file(path: &Path) -> bool {
@@ -1563,12 +1653,43 @@ mod storage {
             .unwrap_or(false)
     }
 
-    fn candidate_title(executable_path: &Path) -> String {
+    fn candidate_title(candidate_dir: &Path, executable_path: &Path) -> String {
+        if let Some(title) = candidate_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.trim().is_empty())
+        {
+            return title.to_string();
+        }
+
         executable_path
             .file_stem()
             .and_then(|name| name.to_str())
             .unwrap_or("Jogo Local")
             .to_string()
+    }
+
+    fn normalize_game_executable_name(value: &str) -> String {
+        let mut normalized = normalize_name(value);
+
+        for suffix in [
+            "win64shipping",
+            "win32shipping",
+            "shipping",
+            "win64",
+            "win32",
+            "x64",
+            "x86",
+            "eaceos",
+            "eac",
+            "eos",
+        ] {
+            if let Some(stripped) = normalized.strip_suffix(suffix) {
+                normalized = stripped.to_string();
+            }
+        }
+
+        normalized
     }
 
     fn normalize_name(value: &str) -> String {
@@ -1768,6 +1889,56 @@ mod storage {
         Ok(())
     }
 
+    fn archive_rejected_local_entries(connection: &Connection) -> rusqlite::Result<usize> {
+        let active_local_entries = connection.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM library_entries
+            WHERE primary_platform_id = 'local'
+              AND is_archived = 0
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+
+        if active_local_entries == 0 {
+            return Ok(0);
+        }
+
+        connection.execute(
+            r#"
+            UPDATE library_entries
+            SET is_archived = 1,
+                updated_at = ?1
+            WHERE primary_platform_id = 'local'
+              AND is_archived = 0
+              AND EXISTS (
+                SELECT 1
+                FROM launch_actions
+                WHERE platform_id = 'local'
+                  AND kind = 'executable'
+                  AND launch_actions.game_id = library_entries.game_id
+                  AND (
+                    lower(target) LIKE '%directx%'
+                    OR lower(target) LIKE '%dxsetup%'
+                    OR lower(target) LIKE '%epiconlineservices%'
+                    OR lower(target) LIKE '%_commonredist%'
+                    OR lower(target) LIKE '%redistributable%'
+                    OR lower(target) LIKE '%vc_redist%'
+                    OR lower(target) LIKE '%redist%'
+                    OR lower(target) LIKE '%prereq%'
+                    OR lower(target) LIKE '%installer%'
+                    OR lower(label) LIKE '%directx%'
+                    OR lower(label) LIKE '%dxsetup%'
+                    OR lower(label) LIKE '%epiconlineservices%'
+                    OR lower(label) LIKE '%installer%'
+                  )
+              )
+            "#,
+            params![now_iso()],
+        )
+    }
+
     pub fn set_library_entry_archived(
         connection: &mut Connection,
         entry_id: &str,
@@ -1854,6 +2025,17 @@ mod storage {
             connection
         }
 
+        fn index_exists(connection: &Connection, index_name: &str) -> rusqlite::Result<bool> {
+            connection
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    params![index_name],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map(|value| value.is_some())
+        }
+
         #[test]
         fn migration_creates_schema_version() {
             let connection = Connection::open_in_memory().expect("open in-memory database");
@@ -1916,6 +2098,27 @@ mod storage {
         }
 
         #[test]
+        fn open_database_creates_local_cleanup_indexes() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-cleanup-indexes-{}.sqlite3",
+                timestamp_millis()
+            ));
+
+            let connection = open_database(&path).expect("open database");
+
+            assert!(
+                index_exists(&connection, "idx_library_entries_local_active_game")
+                    .expect("check local entry cleanup index")
+            );
+            assert!(
+                index_exists(&connection, "idx_launch_actions_platform_kind_game")
+                    .expect("check launch action cleanup index")
+            );
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
         fn sync_local_games_imports_executable_once() {
             let root = std::env::temp_dir().join(format!(
                 "biblioteca-jogos-local-root-{}",
@@ -1939,6 +2142,7 @@ mod storage {
             assert_eq!(summary.discovered, 1);
             assert_eq!(summary.inserted, 1);
             assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 0);
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].primary_platform_id, "local");
             assert_eq!(entries[0].game.title, "Nightfall");
@@ -1957,6 +2161,7 @@ mod storage {
             assert_eq!(second_summary.discovered, 1);
             assert_eq!(second_summary.inserted, 0);
             assert_eq!(second_summary.updated, 1);
+            assert_eq!(second_summary.archived, 0);
             assert_eq!(entries_again.len(), 1);
 
             let _ = std::fs::remove_file(executable);
@@ -1997,12 +2202,193 @@ mod storage {
             assert_eq!(summary.discovered, 1);
             assert_eq!(summary.inserted, 1);
             assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 0);
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].game.title, "Skybound");
 
             let _ = std::fs::remove_file(directx_exe);
             let _ = std::fs::remove_file(eos_exe);
             let _ = std::fs::remove_file(game_exe);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_does_not_import_only_runtime_helpers() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-only-helpers-root-{}",
+                timestamp_millis()
+            ));
+            let directx_dir = root.join("_CommonRedist").join("DirectX").join("Jun2010");
+            let eos_dir = root.join("EpicOnlineServices");
+            let directx_exe = directx_dir.join("DXSETUP.exe");
+            let eos_exe = eos_dir.join("EpicOnlineServicesInstaller.exe");
+
+            std::fs::create_dir_all(&directx_dir).expect("create directx dir");
+            std::fs::create_dir_all(&eos_dir).expect("create eos dir");
+            std::fs::write(&directx_exe, b"fake exe").expect("create directx exe");
+            std::fs::write(&eos_exe, b"fake exe").expect("create eos exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-only-helpers-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            let summary = sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+            let entries = list_library_entries(&connection).expect("list local entries");
+
+            assert_eq!(summary.discovered, 0);
+            assert_eq!(summary.inserted, 0);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 0);
+            assert!(entries.is_empty());
+
+            let _ = std::fs::remove_file(directx_exe);
+            let _ = std::fs::remove_file(eos_exe);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_archives_previously_imported_runtime_helpers() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-archive-helper-root-{}",
+                timestamp_millis()
+            ));
+            let directx_dir = root.join("_CommonRedist").join("DirectX");
+            let directx_exe = directx_dir.join("DXSETUP.exe");
+
+            std::fs::create_dir_all(&directx_dir).expect("create directx dir");
+            std::fs::write(&directx_exe, b"fake exe").expect("create directx exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-archive-helper-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+            let source_external_id = normalize_path_string(&directx_exe);
+            let helper_candidate = LocalGameCandidate {
+                source_external_id,
+                title: "DXSETUP".to_string(),
+                launch_target: directx_exe.to_string_lossy().to_string(),
+                source_id: "source-local-dxsetup-test".to_string(),
+                game_id: "game-local-dxsetup-test".to_string(),
+                entry_id: "entry-local-dxsetup-test".to_string(),
+                launch_id: "launch-local-dxsetup-test".to_string(),
+                accent_color: "#0d9488",
+            };
+
+            {
+                let transaction = connection.transaction().expect("start transaction");
+                insert_local_entry(&transaction, &helper_candidate).expect("insert helper entry");
+                transaction.commit().expect("commit helper entry");
+            }
+
+            let entries_before =
+                list_library_entries(&connection).expect("list helper entry before cleanup");
+            let summary = sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+            let entries_after =
+                list_library_entries(&connection).expect("list helper entry after cleanup");
+
+            assert_eq!(entries_before.len(), 1);
+            assert_eq!(summary.discovered, 0);
+            assert_eq!(summary.inserted, 0);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 1);
+            assert!(entries_after.is_empty());
+
+            let _ = std::fs::remove_file(directx_exe);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn open_database_archives_previously_imported_runtime_helpers() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-boot-cleanup-root-{}",
+                timestamp_millis()
+            ));
+            let directx_dir = root.join("_CommonRedist").join("DirectX");
+            let directx_exe = directx_dir.join("DXSETUP.exe");
+
+            std::fs::create_dir_all(&directx_dir).expect("create directx dir");
+            std::fs::write(&directx_exe, b"fake exe").expect("create directx exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-boot-cleanup-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let helper_candidate = LocalGameCandidate {
+                source_external_id: normalize_path_string(&directx_exe),
+                title: "DXSETUP".to_string(),
+                launch_target: directx_exe.to_string_lossy().to_string(),
+                source_id: "source-local-dxsetup-boot-test".to_string(),
+                game_id: "game-local-dxsetup-boot-test".to_string(),
+                entry_id: "entry-local-dxsetup-boot-test".to_string(),
+                launch_id: "launch-local-dxsetup-boot-test".to_string(),
+                accent_color: "#0d9488",
+            };
+
+            {
+                let mut connection = open_database(&path).expect("open empty database");
+                let transaction = connection.transaction().expect("start transaction");
+                insert_local_entry(&transaction, &helper_candidate).expect("insert helper entry");
+                transaction.commit().expect("commit helper entry");
+                let entries_before =
+                    list_library_entries(&connection).expect("list helper entry before reopen");
+                assert_eq!(entries_before.len(), 1);
+            }
+
+            {
+                let connection = open_database(&path).expect("reopen database");
+                let entries_after =
+                    list_library_entries(&connection).expect("list helper entry after reopen");
+                assert!(entries_after.is_empty());
+            }
+
+            let _ = std::fs::remove_file(directx_exe);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_finds_nested_game_executable() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-nested-root-{}",
+                timestamp_millis()
+            ));
+            let game_dir = root.join("Deep Space");
+            let executable_dir = game_dir.join("DeepSpace").join("Binaries").join("Win64");
+            let executable = executable_dir.join("DeepSpace-Win64-Shipping.exe");
+
+            std::fs::create_dir_all(&executable_dir).expect("create nested game dir");
+            std::fs::write(&executable, b"fake exe").expect("create nested game exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-nested-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            let summary = sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+            let entries = list_library_entries(&connection).expect("list local entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].game.title, "Deep Space");
+            assert_eq!(
+                entries[0].game.launch_actions[0].target,
+                executable.to_string_lossy()
+            );
+
+            let _ = std::fs::remove_file(executable);
             let _ = std::fs::remove_dir_all(root);
             let _ = std::fs::remove_file(path);
         }

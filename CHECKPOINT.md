@@ -68,6 +68,8 @@ Atualizacao em 2026-05-13: a documentacao foi comparada com o estado atual do co
 
 Atualizacao em 2026-05-13: o documento externo `Projeto Biblioteca de Jogos Unificada.docx` foi incorporado ao projeto como `DIRETRIZES_DESENVOLVIMENTO.md`. As diretrizes foram adaptadas ao estado real da aplicacao: frontend em JavaScript/JSX, backend Tauri em Rust, SQLite como persistencia principal, uso gradual de `components`, `pages`, `services`, `adapters`, `hooks`, `assets` e `styles`, padrao Service-Adapter para providers, contrato interno baseado em `LibraryEntry` e criterios de aceite para novas features.
 
+Atualizacao em 2026-05-13: a reorganizacao inicial de frontend foi executada antes do `SteamProvider`. `App.jsx` passou a apenas renderizar `pages/LibraryPage.jsx`; a tela foi separada em `components/Sidebar.jsx`, `Topbar.jsx`, `StatsGrid.jsx`, `LibraryBrowser.jsx`, `GameDetailsPanel.jsx` e `ManualGameModal.jsx`; a logica de estado e fluxos foi movida para `hooks/useLibraryPageState.js`; a normalizacao/criacao de entradas manuais foi movida para `adapters/libraryEntryAdapter.js`; e os estilos foram movidos para `styles/library.css`. O comportamento visual e funcional foi preservado, e o texto do botao de edicao foi corrigido para `Salvar alterações`. Validacoes passaram: `npm run lint`, `npm run build` e `cargo test` (26 testes).
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.
@@ -160,7 +162,6 @@ As diretrizes consolidadas ficam em `DIRETRIZES_DESENVOLVIMENTO.md`. Em resumo:
 4. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento anterior, mas ainda e uma margem apertada.
 5. Testar manualmente no Tauri o fluxo completo: abertura rapida, bootstrap dos 4 mocks, adicionar jogo manual, editar, arquivar, reabrir e confirmar persistencia.
 6. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
-7. Antes ou durante o `SteamProvider`, comecar a extrair componentes/services/adapters conforme `DIRETRIZES_DESENVOLVIMENTO.md`.
-8. Iniciar `SteamProvider` como primeira integracao real usando padrao Service-Adapter e normalizacao para `LibraryEntry`.
-9. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
+7. Iniciar `SteamProvider` como primeira integracao real usando padrao Service-Adapter e normalizacao para `LibraryEntry`.
+8. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
 

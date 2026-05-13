@@ -16,7 +16,7 @@ Estas diretrizes orientam a evolucao tecnica da Biblioteca de Jogos Unificada pa
 
 ## Organizacao Recomendada
 
-A estrutura atual ainda e simples, com `App.jsx`, `services/libraryApi.js` e `data/mockLibrary.js`. A medida que novas telas e providers forem adicionados, a organizacao recomendada para `aplicativo/src` e:
+A estrutura inicial de frontend ja foi aberta em camadas. A medida que novas telas e providers forem adicionados, a organizacao recomendada para `aplicativo/src` e:
 
 ```text
 src/
@@ -30,7 +30,7 @@ src/
   styles/       # estilos globais, temas e tokens visuais
 ```
 
-Essa divisao deve ser aplicada quando o arquivo ou responsabilidade passar a dificultar manutencao. Para o proximo corte, o alvo natural e separar a tela de biblioteca em componentes menores antes ou durante a implementacao do `SteamProvider`.
+Essa divisao deve continuar sendo aplicada de forma pragmatica quando o arquivo ou responsabilidade passar a dificultar manutencao. O proximo corte natural e implementar o `SteamProvider` dentro desse desenho, usando `services` e `adapters` em vez de acoplar integracoes diretamente na UI.
 
 ## Padrao Service-Adapter
 
@@ -85,11 +85,10 @@ Para futuras integracoes com Steam, Xbox, Epic ou outras plataformas:
 
 ## Roadmap Orientado por Diretrizes
 
-1. Estruturacao incremental: separar componentes, hooks e services conforme a biblioteca crescer.
-2. Integracao Steam: criar adapter/provider, normalizar dados para `LibraryEntry` e manter fallback seguro.
-3. Unificacao e escala: adicionar filtros/paginacao no backend para bibliotecas maiores.
-4. Funcionalidades: evoluir busca, filtros, configuracao de raizes locais e area de contas.
-5. Refinamento: melhorar UX, tratamento global de erros, performance e telemetria local nao sensivel.
+1. Integracao Steam: criar adapter/provider, normalizar dados para `LibraryEntry` e manter fallback seguro.
+2. Unificacao e escala: adicionar filtros/paginacao no backend para bibliotecas maiores.
+3. Funcionalidades: evoluir busca, filtros, configuracao de raizes locais e area de contas.
+4. Refinamento: melhorar UX, tratamento global de erros, performance e telemetria local nao sensivel.
 
 ## Criterios de Aceite Para Novas Features
 

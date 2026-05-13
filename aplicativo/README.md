@@ -35,6 +35,7 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 ## Estado atual
 
 - Frontend React funcional com shell de biblioteca em modo escuro.
+- Frontend reorganizado em `pages`, `components`, `hooks`, `adapters`, `services`, `data`, `assets` e `styles`.
 - Visualizacao padrao por capas, com alternativa em lista.
 - Sidebar, resumo da biblioteca, busca, filtros rapidos e painel de detalhes.
 - Selecao real de jogo por clique ou teclado.
@@ -71,7 +72,6 @@ As diretrizes de arquitetura e evolucao ficam em:
 ## Proximas implementacoes
 
 - Validacao manual do fluxo completo de adicionar, editar e arquivar no Tauri.
-- Extracao gradual de componentes/services/adapters conforme a biblioteca crescer.
 - `SteamProvider` como primeira integracao real.
 - Melhorias no `LocalGamesProvider` inicial para configurar raizes pela UI.
 - Consulta filtrada/paginacao no backend para bibliotecas maiores.
