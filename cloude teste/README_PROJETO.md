@@ -14,8 +14,10 @@ Esta pasta guarda a divisao inicial de trabalho para criar o aplicativo de bibli
 3. Se estiver em outro computador, siga primeiro `../RETOMADA_NOVO_COMPUTADOR.md`.
 4. Consulte `../ESTRUTURA_BANCO_DADOS.md` quando a tarefa tocar persistencia, migrations, providers ou dados locais.
 5. Escolha o agente mais adequado ao trabalho do momento.
-6. Use as skills indicadas no arquivo do agente e complemente com as skills transversais abaixo quando houver risco de arquitetura, seguranca, UX, metadados ou banco.
-7. Ao concluir uma decisao ou marco importante, atualize `../CHECKPOINT.md`.
+6. Declare o agente principal, agentes auxiliares, skills aplicadas, arquivos provaveis e criterios de validacao antes de implementar.
+7. Use as skills indicadas no arquivo do agente e complemente com as skills transversais abaixo quando houver risco de arquitetura, seguranca, UX, metadados ou banco.
+8. Se delegar para subagentes, instrua cada subagente a seguir explicitamente o agente local e as skills escolhidas. O tipo tecnico do subagente nao substitui os agentes desta pasta.
+9. Ao concluir uma decisao ou marco importante, atualize `../CHECKPOINT.md`.
 
 ## Ordem recomendada
 
@@ -59,3 +61,5 @@ Use estas skills como reforco quando a tarefa ultrapassar uma camada isolada:
 - O service principal do frontend e `src/services/libraryService.js`; mocks devem permanecer como fallback controlado de desenvolvimento.
 - Toda integracao nova deve ter matriz de viabilidade, risco de compliance, contrato de provider, erro padronizado, estrategia de cache/fallback e criterio de QA.
 - Toda alteracao de banco deve atualizar ou validar `ESTRUTURA_BANCO_DADOS.md` e incluir migration versionada quando necessario.
+- Toda tarefa de desenvolvimento deve identificar agente e skills antes de editar codigo. Para tarefas com mais de uma area, use um agente principal e agentes auxiliares.
+- Delegacoes devem ser feitas como execucao/revisao de um agente local. Exemplo: "atuar como `04-backend-provider-agent.md` usando as skills `platform-viability-matrix`, `launcher-provider-development` e `senior-backend-implementation`".

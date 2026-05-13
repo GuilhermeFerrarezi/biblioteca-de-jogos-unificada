@@ -14,6 +14,7 @@ Estas diretrizes orientam a evolucao tecnica da Biblioteca de Jogos Unificada pa
 - Preferir evolucao incremental, mas manter a organizacao atual de `components`, `pages`, `services`, `adapters`, `hooks`, `constants` e `styles` como base para novos desenvolvimentos.
 - Preservar verificacoes antes de cada marco: `npm run lint`, `npm run build` e `cargo test` com `CARGO_TARGET_DIR` local.
 - Antes de iniciar integracoes, migrations, seguranca, UX complexa ou metadados, consultar os agentes e skills em `cloude teste`.
+- Em todo desenvolvimento, identificar explicitamente o agente local e as skills aplicaveis antes de implementar, revisar ou delegar trabalho.
 
 ## Organizacao Recomendada
 
@@ -110,12 +111,35 @@ Os arquivos em `cloude teste/agents` e `cloude teste/skills` fazem parte das dir
 
 Regras:
 
+- Nenhuma tarefa de desenvolvimento relevante deve comecar sem declarar qual agente de `cloude teste/agents` conduz o corte e quais skills de `cloude teste/skills` serao usadas.
+- Se houver delegacao para subagente, a instrucao deve citar o agente local escolhido e as skills relacionadas, pedindo que o subagente use esses arquivos como checklist. Subagentes genericos, como exploradores, so podem ser usados como mecanismo de execucao/revisao, nao como substitutos dos agentes definidos no projeto.
+- Quando a tarefa envolver mais de uma area, usar um agente principal e agentes auxiliares. Exemplo: provider Steam usa `04-backend-provider-agent.md` como principal, com apoio de `03-security-auth-agent.md`, `11-senior-database-agent.md`, `09-senior-frontend-development-agent.md` e `10-senior-integration-qa-agent.md` conforme o escopo.
+- Antes de editar codigo, registrar na conversa ou no plano de trabalho: agente principal, agentes auxiliares, skills aplicadas, arquivos provaveis e criterios de validacao.
+- Ao finalizar, atualizar a documentacao relevante quando uma decisao de agente, skill, arquitetura, banco, seguranca ou QA mudar.
 - Pesquisa de plataforma deve produzir matriz de viabilidade, compliance, limites, autenticacao, dados disponiveis e alternativa tecnica.
 - Nova integracao deve seguir contrato de provider, erro padronizado, estrategia de fallback local/cache e modelo de `LaunchAction`.
 - Mudancas em Tauri, tokens, IPC ou lancamento local devem passar pelas skills de hardening de seguranca.
 - Mudancas em UI devem seguir design system, acessibilidade basica, estados obrigatorios e criterios de performance para bibliotecas grandes.
 - Mudancas em metadados devem declarar hierarquia de fontes, regras de conflito, heuristicas de deduplicacao e campos preservados por plataforma.
 - Mudancas em SQLite devem ter versionamento, migration testavel, indices coerentes e preservacao de dados do usuario.
+
+## Fluxo Obrigatorio Antes de Implementar
+
+Para cada novo corte:
+
+1. Ler ou reler o agente mais adequado em `cloude teste/agents`.
+2. Listar as skills obrigatorias e transversais em `cloude teste/skills`.
+3. Definir o agente principal, agentes auxiliares e criterios de aceite.
+4. Delegar desenvolvimento, revisao ou pesquisa apenas para subagentes instruidos com esse agente/skills quando a tarefa puder ser paralelizada com seguranca.
+5. Implementar seguindo os checklists desses arquivos.
+6. Validar com os comandos adequados e registrar resultados.
+
+Exemplos:
+
+- Provider/backend Steam: `04-backend-provider-agent.md`, `08-senior-backend-development-agent.md`, `platform-viability-matrix`, `platform-integration-research`, `api-compliance-review`, `launcher-provider-development`, `provider-error-standardization`, `senior-backend-implementation`, `sqlite-migrations-repositories`.
+- Seguranca/Auth/Tauri: `03-security-auth-agent.md`, `tauri-desktop-security-hardening`, `auth-token-security`, `token-lifecycle-hardening`, `safe-local-executable-launch`.
+- Frontend/UX: `05-frontend-ux-agent.md`, `09-senior-frontend-development-agent.md`, `desktop-app-product-design`, `ui-component-standardization`, `react-performance-optimization`, `senior-frontend-implementation`, `usability-heuristics-evaluation`.
+- QA/revisao: `07-qa-compliance-agent.md`, `10-senior-integration-qa-agent.md`, `senior-integration-quality`, `api-compliance-review`, `sqlite-schema-versioning`.
 
 ## Roadmap Orientado por Diretrizes
 

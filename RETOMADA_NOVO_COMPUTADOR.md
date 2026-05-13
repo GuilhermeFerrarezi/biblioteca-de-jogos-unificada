@@ -58,6 +58,16 @@ cloude teste/
 
 Os agentes e skills em `cloude teste` sao parte da governanca atual do projeto. Use-os como checklist antes de alterar integracoes de plataforma, contratos de provider, seguranca Tauri/Auth, metadados, UX de biblioteca, performance ou schema SQLite.
 
+Antes de qualquer desenvolvimento, identifique explicitamente:
+
+- agente principal em `cloude teste/agents`;
+- agentes auxiliares quando o corte tocar mais de uma area;
+- skills obrigatorias em `cloude teste/skills`;
+- criterios de validacao;
+- quais subagentes, se houver, receberao delegacao seguindo esses agentes/skills.
+
+Subagentes tecnicos podem ser usados para paralelizar pesquisa, implementacao ou revisao, mas devem ser instruidos a atuar conforme os agentes e skills locais. Nao usar um subagente generico como substituto da governanca definida nesta pasta.
+
 ## Requisitos do ambiente
 
 Instale ou confirme:
