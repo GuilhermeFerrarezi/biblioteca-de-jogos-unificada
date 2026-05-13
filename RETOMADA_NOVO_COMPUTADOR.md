@@ -20,8 +20,8 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 - Edicao de jogos manuais tambem ja existe, reutilizando o mesmo modal de cadastro.
 - O botao `Jogar` abre a URI quando a acao e do tipo `uri`, como `steam://rungameid/...`.
 - Executaveis locais de jogos manuais e locais persistidos ja sao iniciados por comando Tauri seguro, sem shell, com validacao de caminho absoluto local, arquivo existente e extensao `.exe`.
-- O backend Tauri ja possui persistencia SQLite, migration e compatibilidade de schema no boot, seed idempotente dos 4 mocks em background, comando `list_library_entries` para a listagem unificada, `set_library_entry_archived` para arquivamento, `update_manual_game` para edicao de jogos manuais e `launch_library_entry` para lancamento local seguro. O `LocalGamesProvider` inicial ja existe como comando `sync_local_games`, com importacao incremental e acionamento manual pela interface. A sincronizacao local nao roda mais no boot para preservar tempo de abertura. O `SteamProvider` ainda nao foi implementado.
-- Ultima revisao confirmada em 2026-05-11: `npm run lint`, `npm run build` e `cargo test` passaram. A suite Rust esta com 21 testes.
+- O backend Tauri ja possui persistencia SQLite, migration e compatibilidade de schema no boot, seed idempotente dos 4 mocks em background, comando `list_library_entries` para a listagem unificada, `set_library_entry_archived` para arquivamento, `update_manual_game` para edicao de jogos manuais e `launch_library_entry` para lancamento local seguro. O `LocalGamesProvider` inicial ja existe como comando `sync_local_games`, com importacao incremental e acionamento manual pela interface. A sincronizacao local nao roda mais no boot para preservar tempo de abertura. O scanner local evita bibliotecas Steam por padrao, ignora instaladores/runtimes/servicos como EpicOnlineServices, encontra executaveis em subpastas comuns como `Binaries\Win64` e arquiva falsos positivos locais antigos no boot ou na sincronizacao. O `SteamProvider` ainda nao foi implementado.
+- Ultima revisao confirmada em 2026-05-13: `npm run lint`, `npm run build` e `cargo test` passaram. A suite Rust esta com 26 testes.
 
 ## Estrutura importante
 
@@ -169,7 +169,7 @@ npm run tauri:dev
 
 ## Ponto exato para continuar
 
-A persistencia local inicial, a listagem unificada pelo backend, o arquivamento, a edicao de jogos manuais, o bootstrap assincrono da biblioteca, o lancamento local seguro e o `LocalGamesProvider` inicial ja foram implementados. A sincronizacao local agora e manual. O proximo corte deve ser a validacao manual do fluxo completo no Tauri e, depois disso, o inicio do `SteamProvider`.
+A persistencia local inicial, a listagem unificada pelo backend, o arquivamento, a edicao de jogos manuais, o bootstrap assincrono da biblioteca, o lancamento local seguro e o `LocalGamesProvider` inicial ja foram implementados. A sincronizacao local agora e manual, com filtros contra falsos positivos e limpeza de entradas locais auxiliares antigas. O proximo corte deve ser a validacao manual do fluxo completo no Tauri e, depois disso, o inicio do `SteamProvider`.
 
 Ordem sugerida:
 
@@ -178,9 +178,8 @@ Ordem sugerida:
 3. Manter `mockLibrary.js` apenas como fallback web e referencia de seed.
 4. Fechar e reabrir o app para confirmar persistencia SQLite dos jogos manuais e do arquivamento.
 5. Validar o fluxo manual de sincronizacao local no Tauri, preferencialmente com `BIBLIOTECA_JOGOS_LOCAL_ROOTS` apontando para uma pasta de teste.
-6. Corrigir textos com acentuacao quebrada no frontend, como `Salvar alteraÃ§Ãµes`.
-7. Em seguida, iniciar `SteamProvider` como primeira integracao real.
-8. Depois, adicionar consulta filtrada/paginacao no backend para suportar bibliotecas maiores.
+6. Em seguida, iniciar `SteamProvider` como primeira integracao real.
+7. Depois, adicionar consulta filtrada/paginacao no backend para suportar bibliotecas maiores.
 
 ## Criterios minimos antes de seguir para providers
 
@@ -198,3 +197,5 @@ Sempre que houver marco importante, atualize:
 - `CHECKPOINT.md`: estado geral, decisoes e proxima sessao.
 - `aplicativo/README.md`: comandos, stack e estado especifico do app.
 - `RETOMADA_NOVO_COMPUTADOR.md`: requisitos ou passos de ambiente que mudarem.
+
+

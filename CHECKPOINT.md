@@ -1,6 +1,6 @@
 ﻿# Checkpoint - Biblioteca de Jogos Unificada
 
-Data: 2026-05-11
+Data: 2026-05-13
 
 ## Objetivo do projeto
 
@@ -59,6 +59,12 @@ Atualizacao em 2026-05-11: foi implementada a edicao de jogos manuais. O backend
 Atualizacao em 2026-05-11: o boot do aplicativo foi desacoplado do seed da biblioteca. O backend agora aplica migration e compatibilidade de schema no caminho critico e executa apenas o seed idempotente dos 4 mocks em background, emitindo um evento quando termina. A sincronizacao de jogos locais passou a ser manual, via comando `sync_local_games` e acao dedicada na interface, para nao impactar o tempo de abertura. O aplicativo ganhou o `LocalGamesProvider` inicial com importacao incremental de executaveis locais. Foram adicionados testes para banco vazio antes do bootstrap, seed manual explicito, upgrade de schema legado e importacao local. Validacoes passaram: `cargo fmt`, `cargo check`, `cargo test` (20 testes), `npm run lint` e `npm run build`.
 
 Atualizacao em 2026-05-11: foi feita uma revisao de estado para retomada em outro computador. O app atual esta em Tauri 2 + React 18 + JavaScript/JSX, com backend Rust e SQLite local. O fluxo implementado inclui listagem unificada via `list_library_entries`, seed idempotente dos 4 mocks em background, cadastro/edicao de jogos manuais, arquivamento, lancamento seguro de executaveis locais para entradas `manual` e `local`, abertura de URIs como `steam://`, e sincronizacao manual inicial de jogos locais via `sync_local_games`. A sincronizacao local usa `BIBLIOTECA_JOGOS_LOCAL_ROOTS` quando definida, ou raizes comuns como `%USERPROFILE%\Games`, `%USERPROFILE%\Documents\Games`, `%PROGRAMFILES%\GOG Games`, `%PROGRAMFILES%\Epic Games`, `%PROGRAMFILES%\EA Games`, `%PROGRAMFILES%\Ubisoft`, `%PROGRAMFILES%\Battle.net` e equivalentes em `%PROGRAMFILES(X86)%`/`%PUBLIC%`. Validacoes executadas nesta revisao: `npm run lint`, `npm run build` e `cargo test` com `CARGO_TARGET_DIR` local, todas aprovadas; a suite Rust esta com 21 testes passando.
+
+Atualizacao em 2026-05-12: o `LocalGamesProvider` foi ajustado apos validacao manual apontar falsos positivos como setup do DirectX e EpicOnlineServices. A sincronizacao local escaneia subpastas de jogo com profundidade limitada para encontrar executaveis em estruturas como `Binaries\Win64`, evita tratar a raiz inteira da biblioteca como um unico jogo quando ela contem subpastas, rejeita instaladores/runtimes/servicos em vez de usa-los como fallback e arquiva entradas locais antigas que apontem para esses alvos auxiliares. A limpeza agora tambem roda ao abrir o banco, entao falsos positivos antigos somem ao reabrir o app. Foi decidido que o `LocalGamesProvider` nao deve varrer bibliotecas Steam por padrao; a importacao Steam deve ficar no futuro `SteamProvider` para evitar duplicidade e preservar metadados corretos. Foram adicionados testes para nao importar apenas DirectX/EpicOnlineServices, arquivar falso positivo ja persistido no sync/boot e encontrar executavel real aninhado.
+
+Atualizacao em 2026-05-12: a limpeza de falsos positivos locais no boot foi otimizada para reduzir impacto na abertura do aplicativo. Foram adicionados indices SQLite especificos para entradas locais ativas e acoes de lancamento (`idx_library_entries_local_active_game` e `idx_launch_actions_platform_kind_game`), alem de um atalho que evita a query de limpeza quando nao ha entradas locais ativas. A query de arquivamento agora parte de `library_entries` locais ativas e usa `EXISTS` contra `launch_actions`, preservando a limpeza no boot sem varrer toda a tabela de acoes como caminho principal. Validacoes passaram: `cargo fmt`, `cargo test` (26 testes), `npm run lint` e `npm run build`.
+
+Atualizacao em 2026-05-13: a documentacao foi comparada com o estado atual do codigo. Confirmado que o backend expoe `list_library_entries`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived`, `sync_local_games` e `launch_library_entry`; o frontend consome esses comandos via `libraryApi.js` e mantem fallback web em `mockLibrary.js`. A pendencia de texto quebrado no botao de edicao nao foi encontrada no frontend atual (`Salvar alterações` esta correto). Validacoes passaram novamente: `npm run lint`, `npm run build` e `cargo test` (26 testes).
 
 ## Prioridade de plataformas
 
@@ -140,6 +146,6 @@ App Desktop
 4. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento anterior, mas ainda e uma margem apertada.
 5. Testar manualmente no Tauri o fluxo completo: abertura rapida, bootstrap dos 4 mocks, adicionar jogo manual, editar, arquivar, reabrir e confirmar persistencia.
 6. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
-7. Corrigir textos com acentuacao quebrada no frontend, como `Salvar alteraÃ§Ãµes`, antes de ampliar a interface.
-8. Iniciar `SteamProvider` como primeira integracao real.
-9. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
+7. Iniciar `SteamProvider` como primeira integracao real.
+8. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
+
