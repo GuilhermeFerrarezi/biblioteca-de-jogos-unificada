@@ -61,6 +61,14 @@ export const syncLocalGames = async () => {
   return invoke('sync_local_games')
 }
 
+export const syncSteamGames = async () => {
+  if (!hasTauriRuntime()) {
+    return null
+  }
+
+  return invoke('sync_steam_games')
+}
+
 export const launchLibraryEntry = async (entryId) => {
   if (!entryId) {
     throw new Error('Entrada de biblioteca invalida.')

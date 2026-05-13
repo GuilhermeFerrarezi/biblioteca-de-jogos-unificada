@@ -6,6 +6,7 @@ import {
   listLibraryEntries,
   setLibraryEntryArchived,
   syncLocalGames,
+  syncSteamGames,
   updatePersistedManualGame,
 } from '../services/libraryService'
 import {
@@ -32,6 +33,7 @@ export function useLibraryPageState() {
   const [isLibraryLoading, setIsLibraryLoading] = useState(true)
   const [isBootstrapping, setIsBootstrapping] = useState(true)
   const [isLocalSyncing, setIsLocalSyncing] = useState(false)
+  const [isSteamSyncing, setIsSteamSyncing] = useState(false)
   const [isManualModalOpen, setIsManualModalOpen] = useState(false)
   const [editingEntryId, setEditingEntryId] = useState('')
   const [manualGameForm, setManualGameForm] = useState(emptyManualGameForm)
@@ -273,6 +275,34 @@ export function useLibraryPageState() {
     }
   }
 
+  const handleSyncSteamGames = async () => {
+    if (isSteamSyncing) {
+      return
+    }
+
+    setIsSteamSyncing(true)
+    setLaunchMessage('Sincronizando biblioteca Steam instalada...')
+
+    try {
+      const summary = await syncSteamGames()
+
+      if (!summary) {
+        setLaunchMessage('Sincronizacao Steam disponivel apenas no aplicativo Tauri.')
+        return
+      }
+
+      await refreshEntries()
+      setLaunchMessage(
+        `Sincronizacao Steam concluida: ${summary.inserted} novos e ${summary.updated} atualizados em ${summary.discovered} manifestos encontrados.`,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setLaunchMessage(`Nao foi possivel sincronizar a Steam: ${message}`)
+    } finally {
+      setIsSteamSyncing(false)
+    }
+  }
+
   const handleInstallAction = () => {
     if (!selectedEntry) {
       setLaunchMessage('Nenhum jogo selecionado.')
@@ -337,6 +367,7 @@ export function useLibraryPageState() {
     launchMessage,
     setLaunchMessage,
     isLocalSyncing,
+    isSteamSyncing,
     isManualModalOpen,
     manualGameForm,
     setManualGameForm,
@@ -353,5 +384,6 @@ export function useLibraryPageState() {
     handleNavigationFilter,
     handleSelectEntry,
     handleSyncLocalGames,
+    handleSyncSteamGames,
   }
 }

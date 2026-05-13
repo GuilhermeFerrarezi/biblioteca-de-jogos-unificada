@@ -1,8 +1,18 @@
-import { FolderPlus, RefreshCw, SlidersHorizontal } from 'lucide-react'
+import { CircleDot, FolderPlus, RefreshCw, SlidersHorizontal } from 'lucide-react'
 
-function Topbar({ entriesCount, isLocalSyncing, onAddManualGame, onFilterClick, onSyncLocalGames }) {
+function Topbar({
+  entriesCount,
+  isLocalSyncing,
+  isSteamSyncing,
+  onAddManualGame,
+  onFilterClick,
+  onSyncLocalGames,
+  onSyncSteamGames,
+}) {
+  const isSyncing = isLocalSyncing || isSteamSyncing
+
   return (
-    <header className="topbar" aria-busy={isLocalSyncing}>
+    <header className="topbar" aria-busy={isSyncing}>
       <div>
         <h1>Biblioteca de jogos</h1>
         <p>{entriesCount} jogos catalogados para o MVP inicial</p>
@@ -14,10 +24,20 @@ function Topbar({ entriesCount, isLocalSyncing, onAddManualGame, onFilterClick, 
         <button
           className="icon-button"
           type="button"
+          aria-label="Sincronizar Steam"
+          title="Sincronizar Steam"
+          onClick={onSyncSteamGames}
+          disabled={isSyncing}
+        >
+          <CircleDot size={18} aria-hidden="true" className={isSteamSyncing ? 'spin-icon' : ''} />
+        </button>
+        <button
+          className="icon-button"
+          type="button"
           aria-label="Sincronizar jogos locais"
           title="Sincronizar jogos locais"
           onClick={onSyncLocalGames}
-          disabled={isLocalSyncing}
+          disabled={isSyncing}
         >
           <RefreshCw size={18} aria-hidden="true" className={isLocalSyncing ? 'spin-icon' : ''} />
         </button>

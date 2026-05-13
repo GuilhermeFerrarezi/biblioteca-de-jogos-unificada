@@ -186,6 +186,22 @@ O estado `is_archived` e preservado.
 
 `sync_local_games` descobre executaveis locais, cria/atualiza entradas `local` e arquiva falsos positivos antigos como DirectX, `_CommonRedist`, EpicOnlineServices, redistribuiveis e instaladores.
 
+### Sincronizacao Steam local
+
+`sync_steam_games` descobre bibliotecas Steam instaladas, le `steamapps/libraryfolders.vdf` para encontrar bibliotecas extras e importa `appmanifest_*.acf` como entradas `steam`.
+
+Regras atuais:
+
+1. `game_sources.platform_id = 'steam'`.
+2. `game_sources.external_id` guarda o AppID Steam.
+3. `library_entries.primary_platform_id = 'steam'`.
+4. `library_entries.install_status = 'installed'`.
+5. `launch_actions.kind = 'uri'`.
+6. `launch_actions.target = 'steam://rungameid/<appid>'`.
+7. `launch_actions.working_directory` guarda o diretorio instalado quando `installdir` aponta para uma pasta existente.
+
+A sincronizacao e idempotente: se o AppID ja existir em `game_sources`, a entrada e atualizada em vez de duplicada.
+
 ## Regras para evoluir o schema
 
 - Toda mudanca de schema deve ser idempotente.

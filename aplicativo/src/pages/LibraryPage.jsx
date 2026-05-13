@@ -22,9 +22,11 @@ function LibraryPage() {
         <Topbar
           entriesCount={library.entries.length}
           isLocalSyncing={library.isLocalSyncing}
+          isSteamSyncing={library.isSteamSyncing}
           onAddManualGame={library.openManualGameModal}
           onFilterClick={() => library.setLaunchMessage('Use busca, filtros rapidos e alternancia de visualizacao para refinar a biblioteca.')}
           onSyncLocalGames={library.handleSyncLocalGames}
+          onSyncSteamGames={library.handleSyncSteamGames}
         />
 
         <StatsGrid

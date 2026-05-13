@@ -37,6 +37,7 @@ pub fn run() {
             commands::add_manual_game,
             commands::update_manual_game,
             commands::sync_local_games,
+            commands::sync_steam_games,
             commands::set_library_entry_archived,
             commands::launch_library_entry,
         ])
@@ -118,6 +119,16 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         storage::sync_local_games(&mut connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn sync_steam_games(state: State<'_, AppState>) -> Result<storage::SyncSummaryDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::sync_steam_games(&mut connection).map_err(|error| error.to_string())
     }
 
     #[tauri::command]
@@ -1313,9 +1324,59 @@ mod storage {
         accent_color: &'static str,
     }
 
+    #[derive(Clone)]
+    struct SteamGameCandidate {
+        app_id: String,
+        title: String,
+        install_path: Option<String>,
+        source_id: String,
+        game_id: String,
+        entry_id: String,
+        launch_id: String,
+        accent_color: &'static str,
+    }
+
     pub fn sync_local_games(connection: &mut Connection) -> rusqlite::Result<SyncSummaryDto> {
         let roots = collect_local_game_roots();
         sync_local_games_from_roots(connection, &roots)
+    }
+
+    pub fn sync_steam_games(connection: &mut Connection) -> rusqlite::Result<SyncSummaryDto> {
+        let roots = collect_steam_roots();
+        sync_steam_games_from_roots(connection, &roots)
+    }
+
+    fn sync_steam_games_from_roots(
+        connection: &mut Connection,
+        roots: &[PathBuf],
+    ) -> rusqlite::Result<SyncSummaryDto> {
+        let candidates = discover_steam_game_candidates(roots);
+        let existing_entries = list_steam_entries_by_source(connection)?;
+        let mut summary = SyncSummaryDto {
+            discovered: candidates.len(),
+            inserted: 0,
+            updated: 0,
+            archived: 0,
+        };
+
+        if candidates.is_empty() {
+            return Ok(summary);
+        }
+
+        let transaction = connection.transaction()?;
+
+        for candidate in candidates {
+            if let Some(existing_row) = existing_entries.get(&candidate.app_id) {
+                update_steam_entry(&transaction, existing_row, &candidate)?;
+                summary.updated += 1;
+            } else {
+                insert_steam_entry(&transaction, &candidate)?;
+                summary.inserted += 1;
+            }
+        }
+
+        transaction.commit()?;
+        Ok(summary)
     }
 
     fn sync_local_games_from_roots(
@@ -1399,6 +1460,39 @@ mod storage {
         roots.into_iter().filter(|root| root.exists()).collect()
     }
 
+    fn collect_steam_roots() -> Vec<PathBuf> {
+        if let Some(raw_roots) = std::env::var_os("BIBLIOTECA_JOGOS_STEAM_ROOTS") {
+            let roots = raw_roots
+                .to_string_lossy()
+                .split(';')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .filter(|root| root.exists())
+                .collect::<Vec<_>>();
+
+            if !roots.is_empty() {
+                return roots;
+            }
+        }
+
+        let mut roots = Vec::new();
+
+        if let Some(program_files_x86) = std::env::var_os("PROGRAMFILES(X86)") {
+            roots.push(PathBuf::from(program_files_x86).join("Steam"));
+        }
+
+        if let Some(program_files) = std::env::var_os("PROGRAMFILES") {
+            roots.push(PathBuf::from(program_files).join("Steam"));
+        }
+
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            roots.push(PathBuf::from(local_app_data).join("Steam"));
+        }
+
+        roots.into_iter().filter(|root| root.exists()).collect()
+    }
+
     fn discover_local_game_candidates(roots: &[PathBuf]) -> Vec<LocalGameCandidate> {
         let mut candidates = HashMap::new();
 
@@ -1431,6 +1525,137 @@ mod storage {
         }
 
         candidates.into_values().collect()
+    }
+
+    fn discover_steam_game_candidates(roots: &[PathBuf]) -> Vec<SteamGameCandidate> {
+        let mut candidates = HashMap::new();
+
+        for steam_root in roots {
+            for steamapps_dir in steamapps_directories(steam_root) {
+                let Ok(entries) = fs::read_dir(&steamapps_dir) else {
+                    continue;
+                };
+
+                for entry in entries.flatten().take(2048) {
+                    let manifest_path = entry.path();
+                    if !is_steam_app_manifest(&manifest_path) {
+                        continue;
+                    }
+
+                    if let Some(candidate) = parse_steam_manifest_candidate(&manifest_path) {
+                        candidates
+                            .entry(candidate.app_id.clone())
+                            .or_insert(candidate);
+                    }
+                }
+            }
+        }
+
+        candidates.into_values().collect()
+    }
+
+    fn steamapps_directories(steam_root: &Path) -> Vec<PathBuf> {
+        let mut directories = Vec::new();
+        let default_steamapps = steam_root.join("steamapps");
+
+        if default_steamapps.is_dir() {
+            directories.push(default_steamapps.clone());
+        }
+
+        let libraryfolders_path = default_steamapps.join("libraryfolders.vdf");
+        let Ok(contents) = fs::read_to_string(libraryfolders_path) else {
+            return directories;
+        };
+
+        for library_path in parse_steam_library_paths(&contents) {
+            let steamapps_dir = library_path.join("steamapps");
+            if steamapps_dir.is_dir() && !directories.iter().any(|path| path == &steamapps_dir) {
+                directories.push(steamapps_dir);
+            }
+        }
+
+        directories
+    }
+
+    fn parse_steam_library_paths(contents: &str) -> Vec<PathBuf> {
+        key_value_pairs(contents)
+            .into_iter()
+            .filter_map(|(key, value)| {
+                if key.eq_ignore_ascii_case("path") {
+                    Some(PathBuf::from(value.replace("\\\\", "\\")))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn is_steam_app_manifest(path: &Path) -> bool {
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+
+        file_name.starts_with("appmanifest_") && file_name.ends_with(".acf")
+    }
+
+    fn parse_steam_manifest_candidate(manifest_path: &Path) -> Option<SteamGameCandidate> {
+        let contents = fs::read_to_string(manifest_path).ok()?;
+        let pairs = key_value_pairs(&contents);
+        let app_id = get_key_value(&pairs, "appid")?.trim().to_string();
+        let title = get_key_value(&pairs, "name")?.trim().to_string();
+
+        if app_id.is_empty() || title.is_empty() {
+            return None;
+        }
+
+        let install_dir = get_key_value(&pairs, "installdir")
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let install_path = install_dir.and_then(|directory| {
+            manifest_path
+                .parent()
+                .map(|steamapps_dir| steamapps_dir.join("common").join(directory))
+                .filter(|path| path.exists())
+                .map(|path| path.to_string_lossy().to_string())
+        });
+        let slug = create_slug(&title);
+        let accent_color = deterministic_accent_color(&title);
+
+        Some(SteamGameCandidate {
+            source_id: format!("source-steam-{app_id}"),
+            game_id: format!("game-steam-{slug}-{app_id}"),
+            entry_id: format!("entry-steam-{slug}-{app_id}"),
+            launch_id: format!("launch-steam-{app_id}"),
+            app_id,
+            title,
+            install_path,
+            accent_color,
+        })
+    }
+
+    fn key_value_pairs(contents: &str) -> Vec<(String, String)> {
+        contents
+            .lines()
+            .filter_map(|line| {
+                let parts = line
+                    .split('"')
+                    .filter(|part| !part.trim().is_empty())
+                    .collect::<Vec<_>>();
+
+                if parts.len() >= 2 {
+                    Some((parts[0].to_string(), parts[1].to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn get_key_value<'a>(pairs: &'a [(String, String)], expected_key: &str) -> Option<&'a str> {
+        pairs
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(expected_key))
+            .map(|(_, value)| value.as_str())
     }
 
     fn candidate_directories(root: &Path) -> Vec<PathBuf> {
@@ -1768,6 +1993,173 @@ mod storage {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(entries.into_iter().collect())
+    }
+
+    fn list_steam_entries_by_source(
+        connection: &Connection,
+    ) -> rusqlite::Result<HashMap<String, EntryRow>> {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT
+              game_sources.external_id,
+              library_entries.id,
+              library_entries.primary_platform_id,
+              library_entries.install_status,
+              library_entries.last_played_label,
+              library_entries.is_archived,
+              library_entries.added_at,
+              library_entries.updated_at,
+              games.id,
+              games.title,
+              games.sort_title,
+              games.installed,
+              games.playtime_total_minutes,
+              games.accent_color
+            FROM library_entries
+            JOIN games ON games.id = library_entries.game_id
+            JOIN game_sources ON game_sources.game_id = library_entries.game_id
+            WHERE library_entries.primary_platform_id = 'steam'
+              AND game_sources.platform_id = 'steam'
+            "#,
+        )?;
+
+        let entries = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    EntryRow {
+                        entry_id: row.get(1)?,
+                        primary_platform_id: row.get(2)?,
+                        install_status: row.get(3)?,
+                        last_played_label: row.get(4)?,
+                        is_archived: row.get::<_, i64>(5)? == 1,
+                        added_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        game_id: row.get(8)?,
+                        title: row.get(9)?,
+                        sort_title: row.get(10)?,
+                        installed: row.get::<_, i64>(11)? == 1,
+                        playtime_total_minutes: row.get(12)?,
+                        accent_color: row.get(13)?,
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(entries.into_iter().collect())
+    }
+
+    fn insert_steam_entry(
+        transaction: &rusqlite::Transaction<'_>,
+        candidate: &SteamGameCandidate,
+    ) -> rusqlite::Result<()> {
+        let now = now_iso();
+        transaction.execute(
+            r#"
+            INSERT INTO games (
+              id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, 1, 0, ?4, ?5, ?5)
+            "#,
+            params![
+                candidate.game_id,
+                candidate.title,
+                candidate.title,
+                candidate.accent_color,
+                now,
+            ],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO library_entries (
+              id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
+            ) VALUES (?1, ?2, 'steam', 'installed', 'Nunca', 0, ?3, ?3)
+            "#,
+            params![candidate.entry_id, candidate.game_id, now],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO game_sources (id, game_id, platform_id, external_id)
+            VALUES (?1, ?2, 'steam', ?3)
+            "#,
+            params![candidate.source_id, candidate.game_id, candidate.app_id],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO launch_actions (
+              id, game_id, platform_id, kind, label, target, arguments_json, working_directory, is_primary
+            ) VALUES (?1, ?2, 'steam', 'uri', ?3, ?4, '[]', ?5, 1)
+            "#,
+            params![
+                candidate.launch_id,
+                candidate.game_id,
+                format!("steam://rungameid/{}", candidate.app_id),
+                format!("steam://rungameid/{}", candidate.app_id),
+                candidate.install_path.as_deref(),
+            ],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Steam', 0)",
+            params![candidate.game_id],
+        )?;
+
+        Ok(())
+    }
+
+    fn update_steam_entry(
+        transaction: &rusqlite::Transaction<'_>,
+        existing_row: &EntryRow,
+        candidate: &SteamGameCandidate,
+    ) -> rusqlite::Result<()> {
+        let updated_at = now_iso();
+        transaction.execute(
+            r#"
+            UPDATE games
+            SET title = ?2,
+                sort_title = ?3,
+                installed = 1,
+                accent_color = ?4,
+                updated_at = ?5
+            WHERE id = ?1
+            "#,
+            params![
+                existing_row.game_id,
+                candidate.title,
+                candidate.title,
+                candidate.accent_color,
+                updated_at,
+            ],
+        )?;
+        transaction.execute(
+            r#"
+            UPDATE library_entries
+            SET install_status = 'installed',
+                updated_at = ?2
+            WHERE id = ?1
+            "#,
+            params![existing_row.entry_id, updated_at],
+        )?;
+        transaction.execute(
+            r#"
+            UPDATE launch_actions
+            SET kind = 'uri',
+                label = ?2,
+                target = ?2,
+                working_directory = ?3
+            WHERE game_id = ?1
+              AND is_primary = 1
+            "#,
+            params![
+                existing_row.game_id,
+                format!("steam://rungameid/{}", candidate.app_id),
+                candidate.install_path.as_deref(),
+            ],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Steam', 0)",
+            params![existing_row.game_id],
+        )?;
+
+        Ok(())
     }
 
     fn insert_local_entry(
@@ -2115,6 +2507,140 @@ mod storage {
                     .expect("check launch action cleanup index")
             );
 
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_steam_games_imports_app_manifests_once() {
+            let steam_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-root-{}",
+                timestamp_millis()
+            ));
+            let steamapps = steam_root.join("steamapps");
+            let common = steamapps.join("common").join("Stardew Valley");
+            let manifest = steamapps.join("appmanifest_413150.acf");
+
+            std::fs::create_dir_all(&common).expect("create steam library");
+            std::fs::write(
+                &manifest,
+                r#""AppState"
+{
+  "appid" "413150"
+  "name" "Stardew Valley"
+  "installdir" "Stardew Valley"
+}
+"#,
+            )
+            .expect("write steam manifest");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            let summary =
+                sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
+                    .expect("sync steam games");
+            let entries = list_library_entries(&connection).expect("list steam entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].primary_platform_id, "steam");
+            assert_eq!(entries[0].game.title, "Stardew Valley");
+            assert_eq!(entries[0].game.sources[0].external_id, "413150");
+            assert_eq!(entries[0].game.launch_actions[0].kind, "uri");
+            assert_eq!(
+                entries[0].game.launch_actions[0].target,
+                "steam://rungameid/413150"
+            );
+            assert_eq!(
+                entries[0].game.launch_actions[0]
+                    .working_directory
+                    .as_deref(),
+                Some(common.to_string_lossy().as_ref())
+            );
+
+            let second_summary =
+                sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
+                    .expect("resync steam games");
+            let entries_again =
+                list_library_entries(&connection).expect("list steam entries again");
+
+            assert_eq!(second_summary.discovered, 1);
+            assert_eq!(second_summary.inserted, 0);
+            assert_eq!(second_summary.updated, 1);
+            assert_eq!(entries_again.len(), 1);
+
+            let _ = std::fs::remove_dir_all(steam_root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_steam_games_reads_additional_libraryfolders() {
+            let steam_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-primary-{}",
+                timestamp_millis()
+            ));
+            let extra_library = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-extra-{}",
+                timestamp_millis()
+            ));
+            let primary_steamapps = steam_root.join("steamapps");
+            let extra_steamapps = extra_library.join("steamapps");
+            let extra_common = extra_steamapps.join("common").join("Hades");
+
+            std::fs::create_dir_all(&primary_steamapps).expect("create primary steamapps");
+            std::fs::create_dir_all(&extra_common).expect("create extra steamapps");
+            std::fs::write(
+                primary_steamapps.join("libraryfolders.vdf"),
+                format!(
+                    r#""libraryfolders"
+{{
+  "0"
+  {{
+    "path" "{}"
+  }}
+}}
+"#,
+                    extra_library.to_string_lossy().replace('\\', "\\\\")
+                ),
+            )
+            .expect("write libraryfolders");
+            std::fs::write(
+                extra_steamapps.join("appmanifest_1145360.acf"),
+                r#""AppState"
+{
+  "appid" "1145360"
+  "name" "Hades"
+  "installdir" "Hades"
+}
+"#,
+            )
+            .expect("write extra manifest");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-extra-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            let summary =
+                sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
+                    .expect("sync steam libraries");
+            let entries = list_library_entries(&connection).expect("list steam entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].game.title, "Hades");
+            assert_eq!(entries[0].game.sources[0].external_id, "1145360");
+
+            let _ = std::fs::remove_dir_all(steam_root);
+            let _ = std::fs::remove_dir_all(extra_library);
             let _ = std::fs::remove_file(path);
         }
 
