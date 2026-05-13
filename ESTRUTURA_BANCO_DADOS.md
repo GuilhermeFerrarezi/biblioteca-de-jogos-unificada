@@ -201,6 +201,7 @@ Regras atuais:
 7. `launch_actions.working_directory` guarda o diretorio instalado quando `installdir` aponta para uma pasta existente.
 
 A sincronizacao e idempotente: se o AppID ja existir em `game_sources`, a entrada e atualizada em vez de duplicada.
+Quando um AppID Steam persistido deixa de aparecer nos manifests locais, a entrada e preservada, mas `games.installed` passa para `0` e `library_entries.install_status` passa para `not_installed`. Arquivamento continua sendo decisao explicita do usuario.
 
 ## Regras para evoluir o schema
 

@@ -554,6 +554,7 @@ mod storage {
         inserted: usize,
         updated: usize,
         archived: usize,
+        unavailable: usize,
     }
 
     #[derive(Debug, Serialize)]
@@ -1357,21 +1358,31 @@ mod storage {
             inserted: 0,
             updated: 0,
             archived: 0,
+            unavailable: 0,
         };
 
-        if candidates.is_empty() {
-            return Ok(summary);
-        }
-
         let transaction = connection.transaction()?;
+        let discovered_app_ids = candidates
+            .iter()
+            .map(|candidate| candidate.app_id.clone())
+            .collect::<std::collections::HashSet<_>>();
 
         for candidate in candidates {
             if let Some(existing_row) = existing_entries.get(&candidate.app_id) {
-                update_steam_entry(&transaction, existing_row, &candidate)?;
-                summary.updated += 1;
+                if update_steam_entry(&transaction, existing_row, &candidate)? {
+                    summary.updated += 1;
+                }
             } else {
                 insert_steam_entry(&transaction, &candidate)?;
                 summary.inserted += 1;
+            }
+        }
+
+        for (app_id, existing_row) in &existing_entries {
+            if !discovered_app_ids.contains(app_id)
+                && mark_steam_entry_unavailable(&transaction, existing_row)?
+            {
+                summary.unavailable += 1;
             }
         }
 
@@ -1391,6 +1402,7 @@ mod storage {
             inserted: 0,
             updated: 0,
             archived,
+            unavailable: 0,
         };
 
         if candidates.is_empty() {
@@ -2109,36 +2121,121 @@ mod storage {
         transaction: &rusqlite::Transaction<'_>,
         existing_row: &EntryRow,
         candidate: &SteamGameCandidate,
-    ) -> rusqlite::Result<()> {
+    ) -> rusqlite::Result<bool> {
+        let launch_target = format!("steam://rungameid/{}", candidate.app_id);
+        let current_action = find_steam_primary_action(transaction, &existing_row.game_id)?;
+        let needs_action_update = current_action
+            .as_ref()
+            .map(|action| {
+                action.kind != "uri"
+                    || action.label != launch_target
+                    || action.target != launch_target
+                    || action.working_directory != candidate.install_path
+            })
+            .unwrap_or(true);
+        let needs_entry_update = existing_row.title != candidate.title
+            || existing_row.sort_title != candidate.title
+            || !existing_row.installed
+            || existing_row.install_status != "installed"
+            || existing_row.accent_color.as_deref() != Some(candidate.accent_color);
+
+        if !needs_entry_update && !needs_action_update {
+            return Ok(false);
+        }
+
         let updated_at = now_iso();
+
+        if needs_entry_update {
+            transaction.execute(
+                r#"
+                UPDATE games
+                SET title = ?2,
+                    sort_title = ?3,
+                    installed = 1,
+                    accent_color = ?4,
+                    updated_at = ?5
+                WHERE id = ?1
+                "#,
+                params![
+                    existing_row.game_id,
+                    candidate.title,
+                    candidate.title,
+                    candidate.accent_color,
+                    updated_at,
+                ],
+            )?;
+            transaction.execute(
+                r#"
+                UPDATE library_entries
+                SET install_status = 'installed',
+                    updated_at = ?2
+                WHERE id = ?1
+                "#,
+                params![existing_row.entry_id, updated_at],
+            )?;
+        }
+
+        if needs_action_update {
+            upsert_steam_primary_action(
+                transaction,
+                &existing_row.game_id,
+                &candidate.launch_id,
+                &launch_target,
+                candidate.install_path.as_deref(),
+            )?;
+        }
+
         transaction.execute(
-            r#"
-            UPDATE games
-            SET title = ?2,
-                sort_title = ?3,
-                installed = 1,
-                accent_color = ?4,
-                updated_at = ?5
-            WHERE id = ?1
-            "#,
-            params![
-                existing_row.game_id,
-                candidate.title,
-                candidate.title,
-                candidate.accent_color,
-                updated_at,
-            ],
+            "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Steam', 0)",
+            params![existing_row.game_id],
         )?;
-        transaction.execute(
-            r#"
-            UPDATE library_entries
-            SET install_status = 'installed',
-                updated_at = ?2
-            WHERE id = ?1
-            "#,
-            params![existing_row.entry_id, updated_at],
-        )?;
-        transaction.execute(
+
+        Ok(true)
+    }
+
+    struct SteamPrimaryActionRow {
+        kind: String,
+        label: String,
+        target: String,
+        working_directory: Option<String>,
+    }
+
+    fn find_steam_primary_action(
+        transaction: &rusqlite::Transaction<'_>,
+        game_id: &str,
+    ) -> rusqlite::Result<Option<SteamPrimaryActionRow>> {
+        transaction
+            .query_row(
+                r#"
+                SELECT kind, label, target, working_directory
+                FROM launch_actions
+                WHERE game_id = ?1
+                  AND platform_id = 'steam'
+                  AND is_primary = 1
+                ORDER BY id
+                LIMIT 1
+                "#,
+                params![game_id],
+                |row| {
+                    Ok(SteamPrimaryActionRow {
+                        kind: row.get(0)?,
+                        label: row.get(1)?,
+                        target: row.get(2)?,
+                        working_directory: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    fn upsert_steam_primary_action(
+        transaction: &rusqlite::Transaction<'_>,
+        game_id: &str,
+        fallback_launch_id: &str,
+        launch_target: &str,
+        install_path: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let changed = transaction.execute(
             r#"
             UPDATE launch_actions
             SET kind = 'uri',
@@ -2146,20 +2243,50 @@ mod storage {
                 target = ?2,
                 working_directory = ?3
             WHERE game_id = ?1
+              AND platform_id = 'steam'
               AND is_primary = 1
             "#,
-            params![
-                existing_row.game_id,
-                format!("steam://rungameid/{}", candidate.app_id),
-                candidate.install_path.as_deref(),
-            ],
-        )?;
-        transaction.execute(
-            "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Steam', 0)",
-            params![existing_row.game_id],
+            params![game_id, launch_target, install_path],
         )?;
 
+        if changed == 0 {
+            transaction.execute(
+                r#"
+                INSERT INTO launch_actions (
+                  id, game_id, platform_id, kind, label, target, arguments_json, working_directory, is_primary
+                ) VALUES (?1, ?2, 'steam', 'uri', ?3, ?3, '[]', ?4, 1)
+                "#,
+                params![fallback_launch_id, game_id, launch_target, install_path],
+            )?;
+        }
+
         Ok(())
+    }
+
+    fn mark_steam_entry_unavailable(
+        transaction: &rusqlite::Transaction<'_>,
+        existing_row: &EntryRow,
+    ) -> rusqlite::Result<bool> {
+        if !existing_row.installed && existing_row.install_status == "not_installed" {
+            return Ok(false);
+        }
+
+        let updated_at = now_iso();
+        transaction.execute(
+            "UPDATE games SET installed = 0, updated_at = ?2 WHERE id = ?1",
+            params![existing_row.game_id, updated_at],
+        )?;
+        transaction.execute(
+            r#"
+            UPDATE library_entries
+            SET install_status = 'not_installed',
+                updated_at = ?2
+            WHERE id = ?1
+            "#,
+            params![existing_row.entry_id, updated_at],
+        )?;
+
+        Ok(true)
     }
 
     fn insert_local_entry(
@@ -2548,6 +2675,7 @@ mod storage {
             assert_eq!(summary.inserted, 1);
             assert_eq!(summary.updated, 0);
             assert_eq!(summary.archived, 0);
+            assert_eq!(summary.unavailable, 0);
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].primary_platform_id, "steam");
             assert_eq!(entries[0].game.title, "Stardew Valley");
@@ -2572,8 +2700,60 @@ mod storage {
 
             assert_eq!(second_summary.discovered, 1);
             assert_eq!(second_summary.inserted, 0);
-            assert_eq!(second_summary.updated, 1);
+            assert_eq!(second_summary.updated, 0);
+            assert_eq!(second_summary.unavailable, 0);
             assert_eq!(entries_again.len(), 1);
+
+            let _ = std::fs::remove_dir_all(steam_root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_steam_games_marks_removed_manifest_not_installed() {
+            let steam_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-removed-root-{}",
+                timestamp_millis()
+            ));
+            let steamapps = steam_root.join("steamapps");
+            let common = steamapps.join("common").join("Portal 2");
+            let manifest = steamapps.join("appmanifest_620.acf");
+
+            std::fs::create_dir_all(&common).expect("create steam library");
+            std::fs::write(
+                &manifest,
+                r#""AppState"
+{
+  "appid" "620"
+  "name" "Portal 2"
+  "installdir" "Portal 2"
+}
+"#,
+            )
+            .expect("write steam manifest");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-removed-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
+                .expect("sync steam games");
+            std::fs::remove_file(&manifest).expect("remove manifest");
+
+            let summary =
+                sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
+                    .expect("resync removed manifest");
+            let entries = list_library_entries(&connection).expect("list steam entries");
+
+            assert_eq!(summary.discovered, 0);
+            assert_eq!(summary.inserted, 0);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.unavailable, 1);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].primary_platform_id, "steam");
+            assert_eq!(entries[0].install_status, "not_installed");
+            assert!(!entries[0].game.installed);
 
             let _ = std::fs::remove_dir_all(steam_root);
             let _ = std::fs::remove_file(path);

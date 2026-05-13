@@ -24,7 +24,7 @@ function LibraryPage() {
           isLocalSyncing={library.isLocalSyncing}
           isSteamSyncing={library.isSteamSyncing}
           onAddManualGame={library.openManualGameModal}
-          onFilterClick={() => library.setLaunchMessage('Use busca, filtros rapidos e alternancia de visualizacao para refinar a biblioteca.')}
+          onFilterClick={library.handleClearLibraryFilters}
           onSyncLocalGames={library.handleSyncLocalGames}
           onSyncSteamGames={library.handleSyncSteamGames}
         />

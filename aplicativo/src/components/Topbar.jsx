@@ -18,7 +18,7 @@ function Topbar({
         <p>{entriesCount} jogos catalogados para o MVP inicial</p>
       </div>
       <div className="toolbar">
-        <button className="icon-button" type="button" aria-label="Filtrar biblioteca" title="Filtrar biblioteca" onClick={onFilterClick}>
+        <button className="icon-button" type="button" aria-label="Limpar filtros" title="Limpar filtros" onClick={onFilterClick}>
           <SlidersHorizontal size={18} aria-hidden="true" />
         </button>
         <button

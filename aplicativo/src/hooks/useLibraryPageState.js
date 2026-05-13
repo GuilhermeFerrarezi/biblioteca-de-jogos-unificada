@@ -48,8 +48,10 @@ export function useLibraryPageState() {
     let unlistenBootstrapComplete = null
     let bootstrapTimeoutId = hasTauriRuntime()
       ? window.setTimeout(() => {
-          if (isMounted) {
-            void syncLibraryEntries().finally(() => {
+        if (isMounted) {
+            void syncLibraryEntries().catch(() => {
+              setLaunchMessage('Nao foi possivel recarregar a biblioteca local.')
+            }).finally(() => {
               if (isMounted) {
                 setIsBootstrapping(false)
               }
@@ -59,9 +61,9 @@ export function useLibraryPageState() {
       : null
 
     const syncLibraryEntries = async () => {
-      const libraryEntries = await listLibraryEntries().catch(() => null)
+      const libraryEntries = await listLibraryEntries()
 
-      if (!isMounted || !libraryEntries) {
+      if (!isMounted) {
         return
       }
 
@@ -94,7 +96,11 @@ export function useLibraryPageState() {
             clearTimeout(bootstrapTimeoutId)
             bootstrapTimeoutId = null
           }
-          await syncLibraryEntries()
+          await syncLibraryEntries().catch(() => {
+            if (isMounted) {
+              setLaunchMessage('Nao foi possivel recarregar a biblioteca local.')
+            }
+          })
         })
       } catch {
         if (isMounted) {
@@ -149,14 +155,12 @@ export function useLibraryPageState() {
   }, [])
 
   const refreshEntries = async () => {
-    const refreshedEntries = await listLibraryEntries().catch(() => null)
+    const refreshedEntries = await listLibraryEntries()
 
-    if (refreshedEntries) {
-      setEntries(refreshedEntries)
-      setSelectedEntryId((currentSelectedEntryId) =>
-        getSelectedEntryIdForEntries(refreshedEntries, currentSelectedEntryId),
-      )
-    }
+    setEntries(refreshedEntries)
+    setSelectedEntryId((currentSelectedEntryId) =>
+      getSelectedEntryIdForEntries(refreshedEntries, currentSelectedEntryId),
+    )
   }
 
   const handleManualGameSubmit = async (event) => {
@@ -293,7 +297,7 @@ export function useLibraryPageState() {
 
       await refreshEntries()
       setLaunchMessage(
-        `Sincronizacao Steam concluida: ${summary.inserted} novos e ${summary.updated} atualizados em ${summary.discovered} manifestos encontrados.`,
+        `Sincronizacao Steam concluida: ${summary.inserted} novos, ${summary.updated} atualizados e ${summary.unavailable ?? 0} indisponiveis em ${summary.discovered} manifestos encontrados.`,
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -351,6 +355,12 @@ export function useLibraryPageState() {
     setLaunchMessage('')
   }, [])
 
+  const handleClearLibraryFilters = useCallback(() => {
+    setQuickFilter('all')
+    setSearchTerm('')
+    setLaunchMessage('Filtros limpos.')
+  }, [])
+
   return {
     entries,
     filteredEntries,
@@ -380,6 +390,7 @@ export function useLibraryPageState() {
     handleEditSelectedEntry,
     handleInstallAction,
     handleLaunchSelectedEntry,
+    handleClearLibraryFilters,
     handleManualGameSubmit,
     handleNavigationFilter,
     handleSelectEntry,

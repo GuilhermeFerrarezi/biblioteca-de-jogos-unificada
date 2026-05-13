@@ -74,9 +74,13 @@ function GameDetailsPanel({
             </dl>
             <div className="timeline-note">
               <Clock3 size={16} aria-hidden="true" />
-              Sincronizacao Steam sera a primeira integracao real.
+              Steam local, jogos locais e cadastro manual ja podem ser sincronizados.
             </div>
-            {launchMessage ? <div className="launch-feedback">{launchMessage}</div> : null}
+            {launchMessage ? (
+              <div className="launch-feedback" role="status" aria-live="polite">
+                {launchMessage}
+              </div>
+            ) : null}
           </div>
         </>
       ) : (
@@ -87,7 +91,11 @@ function GameDetailsPanel({
             <Clock3 size={16} aria-hidden="true" />
             {showLibraryLoading ? 'Carregando biblioteca local.' : 'Adicione ou selecione um jogo para ver detalhes.'}
           </div>
-          {launchMessage ? <div className="launch-feedback">{launchMessage}</div> : null}
+          {launchMessage ? (
+            <div className="launch-feedback" role="status" aria-live="polite">
+              {launchMessage}
+            </div>
+          ) : null}
         </div>
       )}
     </aside>
