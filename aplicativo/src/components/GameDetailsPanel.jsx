@@ -1,6 +1,6 @@
 import { Archive, Clock3, Download, Pencil, Play } from 'lucide-react'
 import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
-import { platformLabels } from '../data/mockLibrary'
+import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, PLATFORM_LABELS } from '../constants/libraryConstants'
 
 function GameDetailsPanel({
   launchMessage,
@@ -15,11 +15,11 @@ function GameDetailsPanel({
     <aside className="details-panel" aria-label="Detalhes do jogo selecionado">
       {selectedEntry ? (
         <>
-          <div className="detail-cover" style={{ background: selectedEntry.game.artwork.accentColor }}>
+          <div className="detail-cover" style={{ background: selectedEntry.game.artwork.accentColor ?? DEFAULT_ACCENT_COLOR }}>
             <span>{selectedEntry.game.title}</span>
           </div>
           <div className="detail-content">
-            <span className="platform-label">{platformLabels[selectedEntry.primaryPlatformId] ?? selectedEntry.primaryPlatformId}</span>
+            <span className="platform-label">{PLATFORM_LABELS[selectedEntry.primaryPlatformId] ?? selectedEntry.primaryPlatformId}</span>
             <h2>{selectedEntry.game.title}</h2>
             <div className="detail-actions">
               <button className="play-button" type="button" onClick={onLaunchEntry}>
@@ -53,7 +53,7 @@ function GameDetailsPanel({
             <dl className="detail-list">
               <div>
                 <dt>Status</dt>
-                <dd>{selectedEntry.installStatus === 'installed' ? 'Instalado' : 'Nao instalado'}</dd>
+                <dd>{selectedEntry.installStatus === INSTALL_STATUS.INSTALLED ? 'Instalado' : 'Nao instalado'}</dd>
               </div>
               <div>
                 <dt>Arquivo</dt>

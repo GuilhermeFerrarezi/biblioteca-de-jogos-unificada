@@ -1,18 +1,37 @@
 import { invoke } from '@tauri-apps/api/core'
-import { libraryEntries } from '../data/mockLibrary'
+import { validateManualGameInput } from '../adapters/libraryEntryAdapter'
 
 const hasTauriRuntime = () =>
   typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
 
+const loadDevelopmentLibraryEntries = async () => {
+  if (!import.meta.env.DEV) {
+    return []
+  }
+
+  const { libraryEntries } = await import('../data/mockLibrary')
+  return libraryEntries
+}
+
+const validateManualInputOrThrow = (input) => {
+  const validation = validateManualGameInput(input)
+
+  if (!validation.isValid) {
+    throw new Error(Object.values(validation.errors)[0])
+  }
+}
+
 export const listLibraryEntries = async () => {
   if (!hasTauriRuntime()) {
-    return libraryEntries
+    return loadDevelopmentLibraryEntries()
   }
 
   return invoke('list_library_entries')
 }
 
 export const addPersistedManualGame = async (input) => {
+  validateManualInputOrThrow(input)
+
   if (!hasTauriRuntime()) {
     return null
   }
@@ -21,6 +40,12 @@ export const addPersistedManualGame = async (input) => {
 }
 
 export const updatePersistedManualGame = async (entryId, input) => {
+  validateManualInputOrThrow(input)
+
+  if (!entryId) {
+    throw new Error('Entrada de biblioteca invalida.')
+  }
+
   if (!hasTauriRuntime()) {
     return null
   }
@@ -37,6 +62,10 @@ export const syncLocalGames = async () => {
 }
 
 export const launchLibraryEntry = async (entryId) => {
+  if (!entryId) {
+    throw new Error('Entrada de biblioteca invalida.')
+  }
+
   if (!hasTauriRuntime()) {
     return null
   }
@@ -45,6 +74,10 @@ export const launchLibraryEntry = async (entryId) => {
 }
 
 export const setLibraryEntryArchived = async (entryId, isArchived) => {
+  if (!entryId) {
+    throw new Error('Entrada de biblioteca invalida.')
+  }
+
   if (!hasTauriRuntime()) {
     return null
   }

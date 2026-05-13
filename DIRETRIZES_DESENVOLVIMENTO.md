@@ -39,7 +39,7 @@ Cada fonte de dados deve ter um adapter especifico que converte dados brutos par
 - `SteamProvider` ou adapter Steam: consulta a fonte Steam disponivel, interpreta IDs, status e metadados, e retorna objetos normalizados.
 - `LocalGamesProvider`: continua responsavel por descoberta local, mas deve expor dados no mesmo formato interno dos demais providers.
 - `LibraryService`: consolida entradas, trata erros, decide fallback e entrega uma lista unificada para a UI.
-- `libraryApi.js`: permanece como fronteira do frontend com comandos Tauri e fallback web.
+- `libraryService.js`: permanece como fronteira do frontend com comandos Tauri e fallback web. Mocks devem ser carregados somente em `import.meta.env.DEV`.
 
 Componentes React nao devem chamar adapters externos diretamente. Eles devem consumir services/hooks que ja entregam estado pronto para renderizacao.
 
@@ -59,9 +59,26 @@ Diretriz atual:
 - Componentes de UI nao devem conter filtragens complexas, regras de sincronizacao, persistencia ou chamadas nativas diretas.
 - Funcoes devem usar nomes com verbos claros, como `fetchGames`, `syncLocalGames`, `normalizeSteamGame`.
 - Dados e colecoes devem usar nomes substantivos, como `gameList`, `libraryEntries`, `selectedEntry`.
+- Constantes compartilhadas, como status de instalacao, tipos de acao e labels de plataforma, devem ficar centralizadas em `src/constants`.
+- Objetos-base reutilizaveis devem ser imutaveis quando possivel, por exemplo com `Object.freeze`.
+- Formularios devem validar campos obrigatorios e formatos esperados antes de chamar o backend.
 - Priorizar imutabilidade no frontend com `map`, `filter`, `reduce` e criacao de novos objetos.
 - Concentrar tratamento de erro em services e comandos backend, retornando mensagens compreensiveis para a UI.
 - Evitar duplicacao de regras entre frontend e backend; validacoes de seguranca ficam no backend.
+- Usar Conventional Commits nos commits novos, com verbos e escopo claros.
+- Manter um `CHANGELOG.md` quando o projeto passar a ter versoes publicas.
+- Considerar Prettier e validacao de schema com Zod quando a superficie de adapters/providers crescer.
+- Usar JSDoc em funcoes complexas quando o contrato nao for evidente pelo nome e parametros.
+
+## Frontend e Acessibilidade
+
+- Componentes grandes devem ser quebrados em subcomponentes menores quando ultrapassarem responsabilidades claras.
+- Hooks complexos devem ser divididos por responsabilidade, como filtragem, CRUD manual e sincronizacao.
+- Controles selecionaveis devem usar `aria-pressed` quando representarem estado ativo.
+- Processos em andamento devem expor estado acessivel, como `aria-busy`.
+- Modais devem aceitar fechamento por `Escape` e sinalizar campos invalidos com `aria-invalid`.
+- Telas de pagina devem ser protegidas por `ErrorBoundary` para evitar queda total da interface em falhas de renderizacao.
+- Estilos compartilhados devem usar CSS Custom Properties para cores, bordas e raios principais.
 
 ## Persistencia e Cache
 
@@ -96,6 +113,7 @@ Para futuras integracoes com Steam, Xbox, Epic ou outras plataformas:
 - A feature preserva o contrato unificado de biblioteca.
 - A UI continua funcionando com dados vazios, carregando, erro e sucesso.
 - O modo navegador mantem fallback de desenvolvimento quando aplicavel.
+- Mocks de desenvolvimento nao devem ser importados estaticamente por services usados em producao.
 - `npm run lint` e `npm run build` passam.
 - Mudancas no backend passam em `cargo test`.
 - Documentacao relevante e atualizada no mesmo marco.

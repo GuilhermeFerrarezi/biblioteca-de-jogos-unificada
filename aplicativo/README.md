@@ -35,7 +35,8 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 ## Estado atual
 
 - Frontend React funcional com shell de biblioteca em modo escuro.
-- Frontend reorganizado em `pages`, `components`, `hooks`, `adapters`, `services`, `data`, `assets` e `styles`.
+- Frontend reorganizado em `pages`, `components`, `hooks`, `adapters`, `services`, `constants`, `data`, `assets` e `styles`.
+- A ponte com Tauri fica em `src/services/libraryService.js`, com fallback web carregado dinamicamente apenas em desenvolvimento.
 - Visualizacao padrao por capas, com alternativa em lista.
 - Sidebar, resumo da biblioteca, busca, filtros rapidos e painel de detalhes.
 - Selecao real de jogo por clique ou teclado.
@@ -45,6 +46,7 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - Acoes de lancamento com feedback visual: URIs como `steam://` sao abertas pelo navegador/sistema; executaveis locais de jogos manuais e locais persistidos sao iniciados por comando Tauri seguro.
 - Frontend migrado para JavaScript/JSX; os modelos agora sao contratos de dados mantidos pelos objetos e comandos Tauri.
 - Dados mockados concentrados em `src/data/mockLibrary.js` apenas como fallback web e referencia de seed.
+- Constantes compartilhadas de UI/dominio ficam em `src/constants/libraryConstants.js`.
 - Backend Tauri em `src-tauri` ja possui persistencia SQLite para a biblioteca, com seed idempotente dos 4 mocks e comandos `list_library_entries`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived`, `sync_local_games` e `launch_library_entry`.
 - A biblioteca principal exclui entradas arquivadas via `is_archived`; o backend tambem expoe o comando `set_library_entry_archived`. O frontend tem um botao de sincronizacao manual para importar jogos locais a partir de pastas conhecidas ou configuradas via ambiente. O scanner local ignora instaladores, componentes de runtime, servicos como EpicOnlineServices e diretorios de suporte, arquiva falsos positivos antigos desse tipo ao abrir o banco ou sincronizar, e encontra executaveis em subpastas comuns como `Binaries\Win64`.
 - A limpeza de falsos positivos locais no boot usa indices especificos em `library_entries` e `launch_actions`, e e ignorada rapidamente quando nao ha entradas locais ativas.

@@ -1,14 +1,27 @@
 import { X } from 'lucide-react'
+import { useEffect } from 'react'
+import { INSTALL_STATUS } from '../constants/libraryConstants'
 
 function ManualGameModal({
   form,
   isEditing,
-  error,
+  errors,
   onChange,
-  onClearError,
+  onClearErrors,
   onClose,
   onSubmit,
 }) {
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="manual-game-title">
@@ -28,12 +41,15 @@ function ManualGameModal({
             <input
               type="text"
               value={form.title}
+              aria-invalid={Boolean(errors.title)}
+              aria-describedby={errors.title ? 'manual-game-title-error' : undefined}
               onChange={(event) => {
                 onChange((currentForm) => ({ ...currentForm, title: event.target.value }))
-                onClearError('')
+                onClearErrors({})
               }}
               autoFocus
             />
+            {errors.title ? <span className="field-error" id="manual-game-title-error">{errors.title}</span> : null}
           </label>
 
           <label>
@@ -52,9 +68,12 @@ function ManualGameModal({
                 <input
                   type="radio"
                   name="installStatus"
-                  value="installed"
-                  checked={form.installStatus === 'installed'}
-                  onChange={() => onChange((currentForm) => ({ ...currentForm, installStatus: 'installed' }))}
+                  value={INSTALL_STATUS.INSTALLED}
+                  checked={form.installStatus === INSTALL_STATUS.INSTALLED}
+                  onChange={() => {
+                    onChange((currentForm) => ({ ...currentForm, installStatus: INSTALL_STATUS.INSTALLED }))
+                    onClearErrors({})
+                  }}
                 />
                 Instalado
               </label>
@@ -62,13 +81,17 @@ function ManualGameModal({
                 <input
                   type="radio"
                   name="installStatus"
-                  value="not_installed"
-                  checked={form.installStatus === 'not_installed'}
-                  onChange={() => onChange((currentForm) => ({ ...currentForm, installStatus: 'not_installed' }))}
+                  value={INSTALL_STATUS.NOT_INSTALLED}
+                  checked={form.installStatus === INSTALL_STATUS.NOT_INSTALLED}
+                  onChange={() => {
+                    onChange((currentForm) => ({ ...currentForm, installStatus: INSTALL_STATUS.NOT_INSTALLED }))
+                    onClearErrors({})
+                  }}
                 />
                 Nao instalado
               </label>
             </div>
+            {errors.installStatus ? <span className="field-error">{errors.installStatus}</span> : null}
           </fieldset>
 
           <label>
@@ -76,11 +99,17 @@ function ManualGameModal({
             <input
               type="text"
               value={form.launchTarget}
-              onChange={(event) => onChange((currentForm) => ({ ...currentForm, launchTarget: event.target.value }))}
+              aria-invalid={Boolean(errors.launchTarget)}
+              aria-describedby={errors.launchTarget ? 'manual-game-launch-error' : undefined}
+              onChange={(event) => {
+                onChange((currentForm) => ({ ...currentForm, launchTarget: event.target.value }))
+                onClearErrors({})
+              }}
             />
+            {errors.launchTarget ? <span className="field-error" id="manual-game-launch-error">{errors.launchTarget}</span> : null}
           </label>
 
-          {error ? <p className="form-error">{error}</p> : null}
+          {Object.keys(errors).length > 0 ? <p className="form-error">Revise os campos destacados.</p> : null}
 
           <div className="modal-actions">
             <button className="secondary-button" type="button" onClick={onClose}>

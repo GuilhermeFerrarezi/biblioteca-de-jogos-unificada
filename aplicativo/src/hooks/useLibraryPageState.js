@@ -1,5 +1,5 @@
 import { listen } from '@tauri-apps/api/event'
-import { useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   addPersistedManualGame,
   launchLibraryEntry,
@@ -7,27 +7,20 @@ import {
   setLibraryEntryArchived,
   syncLocalGames,
   updatePersistedManualGame,
-} from '../services/libraryApi'
-import { platformLabels } from '../data/mockLibrary'
+} from '../services/libraryService'
 import {
   buildManualLibraryEntry,
   emptyManualGameForm,
   getManualGameFormFromEntry,
-  getPlaytimeHours,
   getSelectedEntryIdForEntries,
+  validateManualGameInput,
 } from '../adapters/libraryEntryAdapter'
+import { useLibraryFiltering } from './useLibraryFiltering'
 
 const LIBRARY_BOOTSTRAP_COMPLETE_EVENT = 'library-bootstrap-complete'
 
 const hasTauriRuntime = () =>
   typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
-
-export const quickFilterLabels = {
-  all: 'Todos',
-  installed: 'Instalados',
-  steam: 'Steam',
-  local: 'Locais',
-}
 
 export function useLibraryPageState() {
   const [viewMode, setViewMode] = useState('grid')
@@ -42,11 +35,11 @@ export function useLibraryPageState() {
   const [isManualModalOpen, setIsManualModalOpen] = useState(false)
   const [editingEntryId, setEditingEntryId] = useState('')
   const [manualGameForm, setManualGameForm] = useState(emptyManualGameForm)
-  const [manualGameError, setManualGameError] = useState('')
-  const deferredSearchTerm = useDeferredValue(searchTerm)
+  const [manualGameErrors, setManualGameErrors] = useState({})
   const selectedEntry = entries.find((entry) => entry.id === selectedEntryId) ?? entries[0] ?? null
   const isEditingManualGame = editingEntryId !== ''
   const showLibraryLoading = isLibraryLoading || isBootstrapping
+  const { filteredEntries, installedCount, totalHours } = useLibraryFiltering(entries, searchTerm, quickFilter)
 
   useEffect(() => {
     let isMounted = true
@@ -132,51 +125,26 @@ export function useLibraryPageState() {
     }
   }, [])
 
-  const filteredEntries = useMemo(() => {
-    const normalizedSearch = deferredSearchTerm.trim().toLowerCase()
-
-    return entries.filter((entry) => {
-      const matchesSearch = normalizedSearch
-        ? [
-            entry.game.title,
-            platformLabels[entry.primaryPlatformId] ?? entry.primaryPlatformId,
-            entry.game.genres?.join(' ') ?? '',
-            entry.installStatus === 'installed' ? 'instalado' : 'nao instalado',
-          ].some((value) => value.toLowerCase().includes(normalizedSearch))
-        : true
-
-      const matchesQuickFilter =
-        quickFilter === 'all' ||
-        (quickFilter === 'installed' && entry.installStatus === 'installed') ||
-        quickFilter === entry.primaryPlatformId
-
-      return matchesSearch && matchesQuickFilter
-    })
-  }, [deferredSearchTerm, entries, quickFilter])
-
-  const installedCount = entries.filter((entry) => entry.installStatus === 'installed').length
-  const totalHours = entries.reduce((sum, entry) => sum + getPlaytimeHours(entry.game.playtime.totalMinutes), 0)
-
-  const closeManualModal = () => {
+  const closeManualModal = useCallback(() => {
     setIsManualModalOpen(false)
     setEditingEntryId('')
     setManualGameForm(emptyManualGameForm)
-    setManualGameError('')
-  }
+    setManualGameErrors({})
+  }, [])
 
-  const openManualGameModal = () => {
+  const openManualGameModal = useCallback(() => {
     setEditingEntryId('')
     setManualGameForm(emptyManualGameForm)
-    setManualGameError('')
+    setManualGameErrors({})
     setIsManualModalOpen(true)
-  }
+  }, [])
 
-  const openManualGameEditor = (entry) => {
+  const openManualGameEditor = useCallback((entry) => {
     setEditingEntryId(entry.id)
     setManualGameForm(getManualGameFormFromEntry(entry))
-    setManualGameError('')
+    setManualGameErrors({})
     setIsManualModalOpen(true)
-  }
+  }, [])
 
   const refreshEntries = async () => {
     const refreshedEntries = await listLibraryEntries().catch(() => null)
@@ -192,8 +160,10 @@ export function useLibraryPageState() {
   const handleManualGameSubmit = async (event) => {
     event.preventDefault()
 
-    if (!manualGameForm.title.trim()) {
-      setManualGameError('Informe o titulo do jogo.')
+    const validation = validateManualGameInput(manualGameForm)
+
+    if (!validation.isValid) {
+      setManualGameErrors(validation.errors)
       return
     }
 
@@ -232,10 +202,10 @@ export function useLibraryPageState() {
     }
   }
 
-  const handleSelectEntry = (entryId) => {
+  const handleSelectEntry = useCallback((entryId) => {
     setSelectedEntryId(entryId)
     setLaunchMessage('')
-  }
+  }, [])
 
   const handleLaunchSelectedEntry = async () => {
     if (!selectedEntry) {
@@ -345,11 +315,11 @@ export function useLibraryPageState() {
     openManualGameEditor(selectedEntry)
   }
 
-  const handleNavigationFilter = (filter) => {
+  const handleNavigationFilter = useCallback((filter) => {
     setQuickFilter(filter)
     setSearchTerm('')
     setLaunchMessage('')
-  }
+  }, [])
 
   return {
     entries,
@@ -370,8 +340,8 @@ export function useLibraryPageState() {
     isManualModalOpen,
     manualGameForm,
     setManualGameForm,
-    manualGameError,
-    setManualGameError,
+    manualGameErrors,
+    setManualGameErrors,
     isEditingManualGame,
     openManualGameModal,
     closeManualModal,

@@ -1,5 +1,11 @@
 import { CircleDot, Gamepad2, HardDrive, Library, Settings } from 'lucide-react'
 
+const navItems = Object.freeze([
+  { id: 'all', label: 'Biblioteca', icon: Library },
+  { id: 'steam', label: 'Steam', icon: CircleDot },
+  { id: 'local', label: 'Locais', icon: HardDrive },
+])
+
 function Sidebar({ quickFilter, onFilterChange, onAccountsClick }) {
   return (
     <aside className="sidebar" aria-label="Navegacao principal">
@@ -13,31 +19,23 @@ function Sidebar({ quickFilter, onFilterChange, onAccountsClick }) {
         </div>
       </div>
 
-      <nav className="nav-list" aria-label="Filtros da biblioteca">
-        <button
-          className={quickFilter === 'all' ? 'nav-item active' : 'nav-item'}
-          type="button"
-          onClick={() => onFilterChange('all')}
-        >
-          <Library size={18} aria-hidden="true" />
-          Biblioteca
-        </button>
-        <button
-          className={quickFilter === 'steam' ? 'nav-item active' : 'nav-item'}
-          type="button"
-          onClick={() => onFilterChange('steam')}
-        >
-          <CircleDot size={18} aria-hidden="true" />
-          Steam
-        </button>
-        <button
-          className={quickFilter === 'local' ? 'nav-item active' : 'nav-item'}
-          type="button"
-          onClick={() => onFilterChange('local')}
-        >
-          <HardDrive size={18} aria-hidden="true" />
-          Locais
-        </button>
+      <nav className="nav-list" aria-label="Filtros da biblioteca" role="navigation">
+        {navItems.map((item) => {
+          const Icon = item.icon
+
+          return (
+            <button
+              className={quickFilter === item.id ? 'nav-item active' : 'nav-item'}
+              type="button"
+              key={item.id}
+              aria-pressed={quickFilter === item.id}
+              onClick={() => onFilterChange(item.id)}
+            >
+              <Icon size={18} aria-hidden="true" />
+              {item.label}
+            </button>
+          )
+        })}
         <button className="nav-item" type="button" onClick={onAccountsClick}>
           <Settings size={18} aria-hidden="true" />
           Contas

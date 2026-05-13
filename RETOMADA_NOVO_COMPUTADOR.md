@@ -40,8 +40,10 @@ aplicativo/
     components/
     data/mockLibrary.js
     hooks/useLibraryPageState.js
+    hooks/useLibraryFiltering.js
     pages/LibraryPage.jsx
-    services/libraryApi.js
+    services/libraryService.js
+    constants/libraryConstants.js
     styles/library.css
   src-tauri/
     Cargo.toml
@@ -179,7 +181,7 @@ npm run tauri:dev
 
 A persistencia local inicial, a listagem unificada pelo backend, o arquivamento, a edicao de jogos manuais, o bootstrap assincrono da biblioteca, o lancamento local seguro e o `LocalGamesProvider` inicial ja foram implementados. A sincronizacao local agora e manual, com filtros contra falsos positivos e limpeza de entradas locais auxiliares antigas. O proximo corte deve ser a validacao manual do fluxo completo no Tauri e, depois disso, o inicio do `SteamProvider`.
 
-As proximas mudancas devem seguir `DIRETRIZES_DESENVOLVIMENTO.md`: frontend em JavaScript/JSX, backend Tauri em Rust, SQLite como persistencia principal, padrao Service-Adapter para providers e normalizacao para `LibraryEntry`. A reorganizacao inicial do frontend ja foi feita com `components`, `services`, `adapters`, `hooks`, `pages` e `styles`.
+As proximas mudancas devem seguir `DIRETRIZES_DESENVOLVIMENTO.md`: frontend em JavaScript/JSX, backend Tauri em Rust, SQLite como persistencia principal, padrao Service-Adapter para providers e normalizacao para `LibraryEntry`. A reorganizacao inicial do frontend ja foi feita com `components`, `services`, `adapters`, `hooks`, `pages`, `constants` e `styles`.
 
 Ordem sugerida:
 

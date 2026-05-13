@@ -1,15 +1,4 @@
-export const platformLabels = {
-  steam: 'Steam',
-  xbox: 'Xbox',
-  epic: 'Epic Games',
-  gog: 'GOG',
-  itch: 'itch.io',
-  'battle-net': 'Battle.net',
-  ubisoft: 'Ubisoft Connect',
-  ea: 'EA App',
-  local: 'Local',
-  manual: 'Manual',
-}
+export { PLATFORM_LABELS as platformLabels } from '../constants/libraryConstants'
 
 export const libraryEntries = [
   {

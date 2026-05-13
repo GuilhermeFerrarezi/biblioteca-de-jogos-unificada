@@ -72,6 +72,8 @@ Atualizacao em 2026-05-13: a reorganizacao inicial de frontend foi executada ant
 
 Atualizacao em 2026-05-13: foi criado `ESTRUTURA_BANCO_DADOS.md`, documentando o SQLite local, localizacao do arquivo, fluxo de inicializacao, tabelas, relacionamentos, indices, comandos principais e regras para evolucao do schema.
 
+Atualizacao em 2026-05-13: foram aplicadas recomendacoes dos documentos externos `GuilhermeFerrarezi Projeto Biblioteca de Jogos Unificada.docx` e `Biblioteca de Jogos Unificada.docx`. O service de frontend foi renomeado de `libraryApi.js` para `libraryService.js`; mocks passaram a ser carregados dinamicamente apenas em `import.meta.env.DEV`; constantes compartilhadas foram centralizadas em `src/constants/libraryConstants.js`; o adapter manual ganhou `Object.freeze` e validacao de entrada; `LibraryBrowser` foi quebrado em subcomponentes internos; `Sidebar`, filtros e alternancia de visualizacao receberam `aria-pressed`; `Topbar` recebeu `aria-busy` e acao para filtro; `ManualGameModal` passou a fechar com Escape e marcar campos invalidos; `StatsGrid` ganhou subcomponente de metrica; `ErrorBoundary` foi adicionado; e `library.css` passou a usar CSS Custom Properties para tokens principais. Validacoes passaram: `npm run lint`, `npm run build` e `cargo test` (26 testes).
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.
@@ -132,6 +134,8 @@ As diretrizes consolidadas ficam em `DIRETRIZES_DESENVOLVIMENTO.md`. Em resumo:
 - Separar UI, services, adapters, hooks, persistencia e operacoes nativas.
 - Usar o padrao Service-Adapter para novas integracoes como Steam, Xbox, Epic e providers locais.
 - Normalizar toda origem de dados para o contrato interno `LibraryEntry` antes de chegar na interface.
+- Centralizar constantes de dominio no frontend e validar formularios antes de chamar comandos Tauri.
+- Manter acessibilidade basica em controles, modais e processos assincronos.
 - Usar SQLite como fonte principal de persistencia no desktop; LocalStorage/IndexedDB somente como cache auxiliar de modo web quando necessario.
 - Evoluir a estrutura de pastas incrementalmente, sem refatoracao ampla desnecessaria.
 - Validar cada marco com `npm run lint`, `npm run build` e `cargo test` quando houver backend.

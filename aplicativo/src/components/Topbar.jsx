@@ -1,14 +1,14 @@
 import { FolderPlus, RefreshCw, SlidersHorizontal } from 'lucide-react'
 
-function Topbar({ entriesCount, isLocalSyncing, onAddManualGame, onSyncLocalGames }) {
+function Topbar({ entriesCount, isLocalSyncing, onAddManualGame, onFilterClick, onSyncLocalGames }) {
   return (
-    <header className="topbar">
+    <header className="topbar" aria-busy={isLocalSyncing}>
       <div>
         <h1>Biblioteca de jogos</h1>
         <p>{entriesCount} jogos catalogados para o MVP inicial</p>
       </div>
       <div className="toolbar">
-        <button className="icon-button" type="button" aria-label="Filtrar biblioteca" title="Filtrar biblioteca">
+        <button className="icon-button" type="button" aria-label="Filtrar biblioteca" title="Filtrar biblioteca" onClick={onFilterClick}>
           <SlidersHorizontal size={18} aria-hidden="true" />
         </button>
         <button
