@@ -10,10 +10,11 @@ Esta pasta guarda a divisao inicial de trabalho para criar o aplicativo de bibli
 ## Como usar em sessoes futuras
 
 1. Comece lendo `../CHECKPOINT.md`.
-2. Se estiver em outro computador, siga primeiro `../RETOMADA_NOVO_COMPUTADOR.md`.
-3. Escolha o agente mais adequado ao trabalho do momento.
-4. Use as skills indicadas no arquivo do agente.
-5. Ao concluir uma decisao ou marco importante, atualize `../CHECKPOINT.md`.
+2. Leia `../DIRETRIZES_DESENVOLVIMENTO.md` para seguir as regras arquiteturais atuais.
+3. Se estiver em outro computador, siga primeiro `../RETOMADA_NOVO_COMPUTADOR.md`.
+4. Escolha o agente mais adequado ao trabalho do momento.
+5. Use as skills indicadas no arquivo do agente.
+6. Ao concluir uma decisao ou marco importante, atualize `../CHECKPOINT.md`.
 
 ## Ordem recomendada
 

@@ -66,6 +66,8 @@ Atualizacao em 2026-05-12: a limpeza de falsos positivos locais no boot foi otim
 
 Atualizacao em 2026-05-13: a documentacao foi comparada com o estado atual do codigo. Confirmado que o backend expoe `list_library_entries`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived`, `sync_local_games` e `launch_library_entry`; o frontend consome esses comandos via `libraryApi.js` e mantem fallback web em `mockLibrary.js`. A pendencia de texto quebrado no botao de edicao nao foi encontrada no frontend atual (`Salvar alterações` esta correto). Validacoes passaram novamente: `npm run lint`, `npm run build` e `cargo test` (26 testes).
 
+Atualizacao em 2026-05-13: o documento externo `Projeto Biblioteca de Jogos Unificada.docx` foi incorporado ao projeto como `DIRETRIZES_DESENVOLVIMENTO.md`. As diretrizes foram adaptadas ao estado real da aplicacao: frontend em JavaScript/JSX, backend Tauri em Rust, SQLite como persistencia principal, uso gradual de `components`, `pages`, `services`, `adapters`, `hooks`, `assets` e `styles`, padrao Service-Adapter para providers, contrato interno baseado em `LibraryEntry` e criterios de aceite para novas features.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.
@@ -118,6 +120,18 @@ App Desktop
     +-- comandos por provider
 ```
 
+## Diretrizes de desenvolvimento
+
+As diretrizes consolidadas ficam em `DIRETRIZES_DESENVOLVIMENTO.md`. Em resumo:
+
+- Manter frontend em JavaScript/JSX e backend Tauri em Rust.
+- Separar UI, services, adapters, hooks, persistencia e operacoes nativas.
+- Usar o padrao Service-Adapter para novas integracoes como Steam, Xbox, Epic e providers locais.
+- Normalizar toda origem de dados para o contrato interno `LibraryEntry` antes de chegar na interface.
+- Usar SQLite como fonte principal de persistencia no desktop; LocalStorage/IndexedDB somente como cache auxiliar de modo web quando necessario.
+- Evoluir a estrutura de pastas incrementalmente, sem refatoracao ampla desnecessaria.
+- Validar cada marco com `npm run lint`, `npm run build` e `cargo test` quando houver backend.
+
 ## MVP recomendado
 
 1. App desktop Windows.
@@ -146,6 +160,7 @@ App Desktop
 4. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento anterior, mas ainda e uma margem apertada.
 5. Testar manualmente no Tauri o fluxo completo: abertura rapida, bootstrap dos 4 mocks, adicionar jogo manual, editar, arquivar, reabrir e confirmar persistencia.
 6. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
-7. Iniciar `SteamProvider` como primeira integracao real.
-8. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
+7. Antes ou durante o `SteamProvider`, comecar a extrair componentes/services/adapters conforme `DIRETRIZES_DESENVOLVIMENTO.md`.
+8. Iniciar `SteamProvider` como primeira integracao real usando padrao Service-Adapter e normalizacao para `LibraryEntry`.
+9. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
 

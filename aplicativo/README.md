@@ -62,9 +62,16 @@ Em um novo computador, siga o guia da raiz do projeto:
 ../RETOMADA_NOVO_COMPUTADOR.md
 ```
 
+As diretrizes de arquitetura e evolucao ficam em:
+
+```text
+../DIRETRIZES_DESENVOLVIMENTO.md
+```
+
 ## Proximas implementacoes
 
 - Validacao manual do fluxo completo de adicionar, editar e arquivar no Tauri.
+- Extracao gradual de componentes/services/adapters conforme a biblioteca crescer.
 - `SteamProvider` como primeira integracao real.
 - Melhorias no `LocalGamesProvider` inicial para configurar raizes pela UI.
 - Consulta filtrada/paginacao no backend para bibliotecas maiores.

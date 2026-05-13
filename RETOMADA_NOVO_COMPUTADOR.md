@@ -5,8 +5,9 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 ## Leitura inicial
 
 1. Leia `CHECKPOINT.md` na raiz do projeto.
-2. Leia `aplicativo/README.md`.
-3. Leia este arquivo ate o fim antes de instalar ou alterar qualquer coisa.
+2. Leia `DIRETRIZES_DESENVOLVIMENTO.md`.
+3. Leia `aplicativo/README.md`.
+4. Leia este arquivo ate o fim antes de instalar ou alterar qualquer coisa.
 
 ## Estado atual do aplicativo
 
@@ -27,6 +28,7 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 
 ```text
 CHECKPOINT.md
+DIRETRIZES_DESENVOLVIMENTO.md
 RETOMADA_NOVO_COMPUTADOR.md
 aplicativo/
   package.json
@@ -171,6 +173,8 @@ npm run tauri:dev
 
 A persistencia local inicial, a listagem unificada pelo backend, o arquivamento, a edicao de jogos manuais, o bootstrap assincrono da biblioteca, o lancamento local seguro e o `LocalGamesProvider` inicial ja foram implementados. A sincronizacao local agora e manual, com filtros contra falsos positivos e limpeza de entradas locais auxiliares antigas. O proximo corte deve ser a validacao manual do fluxo completo no Tauri e, depois disso, o inicio do `SteamProvider`.
 
+As proximas mudancas devem seguir `DIRETRIZES_DESENVOLVIMENTO.md`: frontend em JavaScript/JSX, backend Tauri em Rust, SQLite como persistencia principal, padrao Service-Adapter para providers, normalizacao para `LibraryEntry` e separacao gradual de `components`, `services`, `adapters`, `hooks` e `pages`.
+
 Ordem sugerida:
 
 1. Testar manualmente no Tauri: conferir se a janela abre rapido e a biblioteca carrega os 4 mocks apos o bootstrap.
@@ -178,8 +182,9 @@ Ordem sugerida:
 3. Manter `mockLibrary.js` apenas como fallback web e referencia de seed.
 4. Fechar e reabrir o app para confirmar persistencia SQLite dos jogos manuais e do arquivamento.
 5. Validar o fluxo manual de sincronizacao local no Tauri, preferencialmente com `BIBLIOTECA_JOGOS_LOCAL_ROOTS` apontando para uma pasta de teste.
-6. Em seguida, iniciar `SteamProvider` como primeira integracao real.
-7. Depois, adicionar consulta filtrada/paginacao no backend para suportar bibliotecas maiores.
+6. Extrair componentes/services/adapters conforme necessidade antes ou durante o `SteamProvider`.
+7. Em seguida, iniciar `SteamProvider` como primeira integracao real.
+8. Depois, adicionar consulta filtrada/paginacao no backend para suportar bibliotecas maiores.
 
 ## Criterios minimos antes de seguir para providers
 
@@ -195,6 +200,7 @@ Ordem sugerida:
 Sempre que houver marco importante, atualize:
 
 - `CHECKPOINT.md`: estado geral, decisoes e proxima sessao.
+- `DIRETRIZES_DESENVOLVIMENTO.md`: regras arquiteturais e criterios de aceite quando uma decisao de desenvolvimento mudar.
 - `aplicativo/README.md`: comandos, stack e estado especifico do app.
 - `RETOMADA_NOVO_COMPUTADOR.md`: requisitos ou passos de ambiente que mudarem.
 
