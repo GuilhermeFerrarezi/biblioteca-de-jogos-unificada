@@ -11,8 +11,9 @@ Estas diretrizes orientam a evolucao tecnica da Biblioteca de Jogos Unificada pa
 - Separar responsabilidades: componentes React cuidam de interface; services coordenam chamadas; adapters normalizam dados externos; o backend cuida de persistencia e operacoes nativas.
 - Manter um modelo interno unico de biblioteca, independentemente da origem do jogo.
 - Integrar plataformas por camadas, evitando chamadas diretas de API dentro de componentes visuais.
-- Preferir evolucao incremental: reorganizar pastas quando houver necessidade real ou quando uma area crescer, sem refatorar tudo de uma vez.
+- Preferir evolucao incremental, mas manter a organizacao atual de `components`, `pages`, `services`, `adapters`, `hooks`, `constants` e `styles` como base para novos desenvolvimentos.
 - Preservar verificacoes antes de cada marco: `npm run lint`, `npm run build` e `cargo test` com `CARGO_TARGET_DIR` local.
+- Antes de iniciar integracoes, migrations, seguranca, UX complexa ou metadados, consultar os agentes e skills em `cloude teste`.
 
 ## Organizacao Recomendada
 
@@ -100,6 +101,21 @@ Para futuras integracoes com Steam, Xbox, Epic ou outras plataformas:
 - A UI de contas/configuracoes deve separar claramente conexao, revogacao e estado de sincronizacao.
 - Tokens persistidos devem usar armazenamento local seguro quando disponivel no Tauri.
 - Endpoints nao documentados ou automacoes devem passar por revisao de risco antes de entrar no fluxo principal.
+- Toda conexao deve definir ciclo de vida de token: criacao, armazenamento seguro, renovacao, expiracao, revogacao e exclusao ao desconectar.
+- Tokens e sessoes devem ficar separados dos dados de biblioteca e nunca aparecer em logs, erros ou payloads enviados ao frontend sem necessidade.
+
+## Governanca de Agentes e Skills
+
+Os arquivos em `cloude teste/agents` e `cloude teste/skills` fazem parte das diretrizes do projeto. Eles devem ser usados como checklist operacional, especialmente em tarefas com risco maior.
+
+Regras:
+
+- Pesquisa de plataforma deve produzir matriz de viabilidade, compliance, limites, autenticacao, dados disponiveis e alternativa tecnica.
+- Nova integracao deve seguir contrato de provider, erro padronizado, estrategia de fallback local/cache e modelo de `LaunchAction`.
+- Mudancas em Tauri, tokens, IPC ou lancamento local devem passar pelas skills de hardening de seguranca.
+- Mudancas em UI devem seguir design system, acessibilidade basica, estados obrigatorios e criterios de performance para bibliotecas grandes.
+- Mudancas em metadados devem declarar hierarquia de fontes, regras de conflito, heuristicas de deduplicacao e campos preservados por plataforma.
+- Mudancas em SQLite devem ter versionamento, migration testavel, indices coerentes e preservacao de dados do usuario.
 
 ## Roadmap Orientado por Diretrizes
 
@@ -114,6 +130,8 @@ Para futuras integracoes com Steam, Xbox, Epic ou outras plataformas:
 - A UI continua funcionando com dados vazios, carregando, erro e sucesso.
 - O modo navegador mantem fallback de desenvolvimento quando aplicavel.
 - Mocks de desenvolvimento nao devem ser importados estaticamente por services usados em producao.
+- Integracoes novas documentam viabilidade, risco, autenticacao, limites, fallback e criterio de QA.
+- Mudancas de banco atualizam schema/migration e preservam dados existentes.
 - `npm run lint` e `npm run build` passam.
 - Mudancas no backend passam em `cargo test`.
 - Documentacao relevante e atualizada no mesmo marco.

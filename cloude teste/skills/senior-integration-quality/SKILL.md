@@ -24,8 +24,12 @@ Validar que cada mudanca deixa o aplicativo mais executavel, testavel e seguro, 
 
 - Frontend: `npm run build` e `npm run lint`.
 - Tauri: `npm run tauri:dev` somente quando Rust/Cargo e MSVC/Windows SDK estiverem disponiveis.
+- Backend: `cargo fmt`, `cargo check` e `cargo test` quando Rust ou SQLite forem alterados.
+- Banco: testar migration em banco vazio e upgrade de schema legado preservando dados do usuario.
 - Providers: testar conta desconectada, biblioteca vazia, erro de rede, rate limit, jogo instalado e nao instalado.
 - UI: testar largura desktop e estreita, textos longos, lista vazia e provider com erro.
+- Producao: confirmar que o build nao depende de mocks como caminho principal.
+- Resiliencia: confirmar que falha de provider nao impede listagem local ja persistida.
 
 ## Criterios de aceite do MVP
 

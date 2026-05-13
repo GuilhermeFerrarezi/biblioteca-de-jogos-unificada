@@ -7,8 +7,9 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 1. Leia `CHECKPOINT.md` na raiz do projeto.
 2. Leia `DIRETRIZES_DESENVOLVIMENTO.md`.
 3. Leia `ESTRUTURA_BANCO_DADOS.md`.
-4. Leia `aplicativo/README.md`.
-5. Leia este arquivo ate o fim antes de instalar ou alterar qualquer coisa.
+4. Leia `cloude teste/README_PROJETO.md` se for trabalhar com planejamento, providers, seguranca, UX, metadados, banco ou QA.
+5. Leia `aplicativo/README.md`.
+6. Leia este arquivo ate o fim antes de instalar ou alterar qualquer coisa.
 
 ## Estado atual do aplicativo
 
@@ -54,6 +55,8 @@ cloude teste/
   agents/
   skills/
 ```
+
+Os agentes e skills em `cloude teste` sao parte da governanca atual do projeto. Use-os como checklist antes de alterar integracoes de plataforma, contratos de provider, seguranca Tauri/Auth, metadados, UX de biblioteca, performance ou schema SQLite.
 
 ## Requisitos do ambiente
 
@@ -211,5 +214,6 @@ Sempre que houver marco importante, atualize:
 - `ESTRUTURA_BANCO_DADOS.md`: schema SQLite, indices, relacoes ou regras de migracao quando o backend persistente mudar.
 - `aplicativo/README.md`: comandos, stack e estado especifico do app.
 - `RETOMADA_NOVO_COMPUTADOR.md`: requisitos ou passos de ambiente que mudarem.
+- `cloude teste/README_PROJETO.md`, `cloude teste/agents` e `cloude teste/skills`: responsabilidades, checklists e criterios operacionais quando a forma de trabalho mudar.
 
 

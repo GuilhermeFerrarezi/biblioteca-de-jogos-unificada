@@ -17,30 +17,31 @@ description: Use ao implementar backend, dominio, persistencia local, providers,
 
 ```text
 src-tauri/src
-├─ domain/      contratos Rust equivalentes aos modelos TypeScript
-├─ storage/     SQLite, migrations e repositories
-├─ providers/   Steam, Local, Manual, futuros Xbox/Epic
-├─ services/    merge, sync, launch, metadata
-├─ commands/    comandos Tauri chamados pelo frontend
-└─ security/    vault, sanitizacao de logs, redacao de segredos
++-- domain/      contratos Rust do dominio
++-- storage/     SQLite, migrations e repositories
++-- providers/   Steam, Local, Manual, futuros Xbox/Epic
++-- services/    merge, sync, launch, metadata
++-- commands/    comandos Tauri chamados pelo frontend
++-- security/    vault, sanitizacao de logs, redacao de segredos
 ```
 
-Enquanto o backend Rust ainda nao estiver pronto, manter contratos TypeScript em `src/domain` alinhados com essa divisao.
+O frontend atual usa React com JavaScript/JSX. Contratos compartilhados devem ser mantidos por DTOs estaveis, adapters e constantes documentadas, nao por tipos TypeScript.
 
 ## Regras de implementacao
 
-- Preferir tipos explicitos a objetos soltos.
+- Preferir tipos Rust explicitos a objetos soltos.
 - Separar `Game` canonico de `LibraryEntry` e de dados brutos de provider.
-- Guardar IDs externos em `sources[]`, nunca substituir o ID interno por ID de loja.
-- Expor comandos de alto nivel para a UI: `list_library`, `sync_provider`, `add_manual_game`, `launch_game`.
-- Normalizar erros em formato estavel com `code`, `message` e `recoverable`.
+- Guardar IDs externos em `game_sources`, nunca substituir o ID interno por ID de loja.
+- Expor comandos de alto nivel para a UI, como `list_library_entries`, `sync_provider`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived` e `launch_library_entry`.
+- Normalizar erros em formato estavel com `code`, `message`, `recoverable` e `details` sanitizados.
 - Fazer providers retornarem resultado parcial quando possivel.
 - Redigir tokens, cookies, chaves API e caminhos sensiveis em logs.
+- Usar Repository pattern para isolar SQL de comandos Tauri e services.
 
 ## Persistencia local
 
 - Usar SQLite para biblioteca, contas, fontes externas, acoes de lancamento e historico de sync.
-- Criar migrations versionadas quando a camada nativa estiver ativa.
+- Criar migrations versionadas e testes de upgrade quando a estrutura mudar.
 - Manter segredos fora das tabelas comuns; usar vault do sistema operacional quando possivel.
 - Separar dados importados de edicoes manuais do usuario.
 
@@ -53,6 +54,6 @@ Enquanto o backend Rust ainda nao estiver pronto, manter contratos TypeScript em
 
 ## Verificacao minima
 
-- Rodar build/lint do frontend quando contratos TypeScript forem alterados.
-- Rodar testes backend assim que houver runner configurado.
-- Testar casos: biblioteca vazia, erro de provider, jogo instalado, jogo nao instalado, conta desconectada, token expirado.
+- Rodar `cargo fmt`, `cargo check` e `cargo test` quando backend for alterado.
+- Rodar `npm run lint` e `npm run build` quando DTOs consumidos pelo frontend forem alterados.
+- Testar casos: biblioteca vazia, erro de provider, jogo instalado, jogo nao instalado, conta desconectada, token expirado e migracao de banco legado.

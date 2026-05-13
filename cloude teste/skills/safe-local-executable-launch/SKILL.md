@@ -15,11 +15,14 @@ Permitir que o app abra executaveis locais cadastrados pelo usuario sem usar she
 - Usar API de processo direta, como `std::process::Command`.
 - Aceitar apenas caminho absoluto.
 - Validar que o caminho existe e aponta para arquivo.
+- Canonicalizar o caminho antes de executar.
 - No Windows, aceitar inicialmente apenas extensao `.exe`.
 - Rejeitar caminho vazio, relativo, diretorio, extensao nao suportada e arquivo inexistente.
+- Rejeitar caminhos remotos, compartilhamentos de rede e diretorios temporarios quando nao houver consentimento explicito.
 - Nao tentar elevar privilegios.
 - Nao registrar caminho completo em logs de erro, salvo quando o usuario ja estiver vendo esse caminho na UI como configuracao propria.
 - Argumentos devem ser lista estruturada, nunca string unica interpolada.
+- Sanitizar e validar argumentos; nunca interpolar entrada do usuario em uma linha de comando.
 - Diretorio de trabalho deve existir e ser diretorio; se ausente, usar o diretorio pai do executavel quando possivel.
 
 ## UX esperada

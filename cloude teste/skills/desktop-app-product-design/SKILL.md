@@ -30,6 +30,10 @@ A primeira tela deve ser a biblioteca utilizavel, com jogos, busca, filtros e es
 - Usar badges discretos para plataforma e status.
 - Evitar textos instrucionais longos dentro da UI.
 - Garantir que textos nao estourem em botoes, cards e barras laterais.
+- Manter tokens visuais centrais para cores, bordas, espacamentos e estados.
+- Garantir navegacao por teclado, foco visivel e atributos ARIA nos controles.
+- Para bibliotecas grandes, prever paginacao, filtros no backend ou virtualizacao.
+- Diferenciar claramente estado vazio, erro recuperavel, conta desconectada e sincronizacao em andamento.
 
 ## Estados obrigatorios
 
@@ -41,4 +45,3 @@ A primeira tela deve ser a biblioteca utilizavel, com jogos, busca, filtros e es
 - Jogo instalado.
 - Jogo nao instalado.
 - Sem internet.
-

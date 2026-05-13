@@ -14,6 +14,11 @@ Garantir que backend, frontend, Tauri, seguranca e compliance avancem juntos sem
 - Conferir acessibilidade basica, responsividade e estados obrigatorios da UI.
 - Manter criterios de aceite por fase.
 - Atualizar checkpoint quando houver marco tecnico ou decisao de risco.
+- Testar integracao entre Tauri IPC, SQLite, frontend e filesystem quando a entrega atravessar camadas.
+- Simular falhas controladas: provider offline, comando Tauri rejeitado, banco vazio, seed pendente e dados locais invalidos.
+- Validar persistencia real: cadastrar, editar, arquivar, fechar/reabrir e confirmar estado.
+- Conferir se migracoes rodam em banco vazio e banco legado.
+- Verificar que builds de producao nao carregam mocks de desenvolvimento indevidamente.
 
 ## Skills recomendadas
 
@@ -25,7 +30,7 @@ Garantir que backend, frontend, Tauri, seguranca e compliance avancem juntos sem
 ## Escopo inicial
 
 1. Validar cada mudanca com `npm run build` e `npm run lint`.
-2. Adicionar testes quando houver runner definido.
+2. Rodar `cargo test` quando houver backend, storage, Tauri ou contrato afetado.
 3. Validar prerequisitos nativos para Tauri: Rust/Cargo e MSVC/Windows SDK.
 4. Revisar SteamProvider antes de qualquer uso com dados reais.
 5. Registrar bloqueios e riscos no checkpoint.

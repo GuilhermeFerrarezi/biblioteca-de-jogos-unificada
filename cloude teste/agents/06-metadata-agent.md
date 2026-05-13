@@ -12,11 +12,17 @@ Unificar nomes, capas, IDs, generos, tempo de jogo e duplicatas vindos de lojas 
 - Escolher fontes de capa e screenshots.
 - Preservar dados especificos de cada plataforma.
 - Criar regras para jogos com multiplas copias em lojas diferentes.
+- Definir heuristicas objetivas de deduplicacao, incluindo normalizacao de titulo, IDs externos e similaridade aproximada.
+- Definir hierarquia de fontes para conflitos entre loja, metadata provider e edicoes manuais.
+- Definir politica de cache de metadados e invalidação.
+- Proteger overrides do usuario contra sobrescrita por sincronizacao.
 
 ## Skills recomendadas
 
 - `game-metadata-normalization`
 - `platform-integration-research`
+- `metadata-fallback-logic`
+- `deduplication-heuristics-engine`
 
 ## Entregaveis
 

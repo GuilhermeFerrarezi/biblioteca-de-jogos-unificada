@@ -15,6 +15,10 @@ Implementar a base backend do aplicativo, os contratos de dominio, persistencia 
 - Normalizar erros de providers, estados de sincronizacao e resultados parciais.
 - Evitar vazamento de tokens, cookies, caminhos sensiveis e dados pessoais em logs.
 - Escrever testes unitarios ou de integracao para regras criticas do backend.
+- Usar padrao Repository para acesso SQLite quando a area crescer alem de queries pontuais.
+- Padronizar erros backend antes de retornar por comandos Tauri.
+- Sanitizar entradas do frontend antes de escrita, sincronizacao, consulta SQL ou execucao local.
+- Manter boundaries claros entre `storage`, `launcher`, `providers`, `services` e `commands`.
 
 ## Skills recomendadas
 
@@ -24,6 +28,8 @@ Implementar a base backend do aplicativo, os contratos de dominio, persistencia 
 - `game-metadata-normalization`
 - `auth-token-security`
 - `api-compliance-review`
+- `provider-error-standardization`
+- `sqlite-schema-versioning`
 
 ## Escopo inicial
 
@@ -35,7 +41,7 @@ Implementar a base backend do aplicativo, os contratos de dominio, persistencia 
 
 ## Entregaveis
 
-- Codigo backend compilavel.
+- Codigo backend compilavel e testado.
 - Interfaces e implementacoes documentadas pelo proprio tipo.
 - Testes focados em merge de biblioteca, providers e persistencia.
 - Registro de riscos tecnicos quando uma integracao depender de API instavel.

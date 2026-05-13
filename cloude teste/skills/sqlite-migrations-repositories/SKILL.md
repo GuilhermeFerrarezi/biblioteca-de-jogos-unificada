@@ -17,6 +17,8 @@ Implementar a camada SQLite de forma previsivel, testavel e preparada para evolu
 - Evitar migracoes destrutivas sem plano de copia.
 - Cada migracao deve ter um objetivo pequeno e nome claro.
 - Falhas de migracao devem impedir inicializacao parcial silenciosa.
+- Para upgrades simples, preferir `ALTER TABLE` e `CREATE INDEX IF NOT EXISTS`.
+- Toda migration que altera tabela existente deve ter teste de upgrade a partir de schema legado.
 
 ## Repositories
 
@@ -78,6 +80,7 @@ Quando houver runner backend:
 
 - migracao cria schema em banco vazio;
 - migracao nao quebra se rodada novamente;
+- migration de banco legado preserva jogos manuais, arquivamentos, fontes e launch actions;
 - cadastro manual persiste;
 - listagem retorna jogo manual com launch action;
 - constraint impede fonte externa duplicada;

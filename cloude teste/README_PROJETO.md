@@ -12,9 +12,10 @@ Esta pasta guarda a divisao inicial de trabalho para criar o aplicativo de bibli
 1. Comece lendo `../CHECKPOINT.md`.
 2. Leia `../DIRETRIZES_DESENVOLVIMENTO.md` para seguir as regras arquiteturais atuais.
 3. Se estiver em outro computador, siga primeiro `../RETOMADA_NOVO_COMPUTADOR.md`.
-4. Escolha o agente mais adequado ao trabalho do momento.
-5. Use as skills indicadas no arquivo do agente.
-6. Ao concluir uma decisao ou marco importante, atualize `../CHECKPOINT.md`.
+4. Consulte `../ESTRUTURA_BANCO_DADOS.md` quando a tarefa tocar persistencia, migrations, providers ou dados locais.
+5. Escolha o agente mais adequado ao trabalho do momento.
+6. Use as skills indicadas no arquivo do agente e complemente com as skills transversais abaixo quando houver risco de arquitetura, seguranca, UX, metadados ou banco.
+7. Ao concluir uma decisao ou marco importante, atualize `../CHECKPOINT.md`.
 
 ## Ordem recomendada
 
@@ -37,3 +38,24 @@ Esta pasta guarda a divisao inicial de trabalho para criar o aplicativo de bibli
 - Use `09-senior-frontend-development-agent.md` para implementar componentes React, estado de UI, camada de API, fluxos de biblioteca e cadastro manual.
 - Use `10-senior-integration-qa-agent.md` para revisar integracao, builds, lint, testes, riscos de seguranca e criterios de aceite.
 - Use `11-senior-database-agent.md` com as skills `sqlite-local-persistence-design` e `sqlite-migrations-repositories` para definir schema SQLite, migracoes, repositories, constraints, indices e estrategia de persistencia local antes da implementacao da Fase 2.
+
+## Skills transversais adicionadas
+
+Use estas skills como reforco quando a tarefa ultrapassar uma camada isolada:
+
+- Governanca e escopo: `project-scoping-and-coordination`.
+- Pesquisa de plataforma: `platform-viability-matrix`, `platform-integration-research`, `api-compliance-review`.
+- Arquitetura: `architecture-extensibility-blueprint`, `launcher-provider-development`.
+- Seguranca: `tauri-desktop-security-hardening`, `auth-token-security`, `token-lifecycle-hardening`, `safe-local-executable-launch`.
+- Backend/providers: `provider-error-standardization`, `senior-backend-implementation`.
+- Frontend/UX: `ui-component-standardization`, `react-performance-optimization`, `desktop-app-product-design`, `senior-frontend-implementation`, `usability-heuristics-evaluation`.
+- Metadados: `metadata-fallback-logic`, `deduplication-heuristics-engine`, `game-metadata-normalization`.
+- Banco: `sqlite-local-persistence-design`, `sqlite-migrations-repositories`, `sqlite-schema-versioning`.
+- Qualidade integrada: `senior-integration-quality`.
+
+## Regras de alinhamento
+
+- O frontend atual e React 18 com JavaScript/JSX; nao assumir TypeScript nos documentos, exemplos ou novas tarefas.
+- O service principal do frontend e `src/services/libraryService.js`; mocks devem permanecer como fallback controlado de desenvolvimento.
+- Toda integracao nova deve ter matriz de viabilidade, risco de compliance, contrato de provider, erro padronizado, estrategia de cache/fallback e criterio de QA.
+- Toda alteracao de banco deve atualizar ou validar `ESTRUTURA_BANCO_DADOS.md` e incluir migration versionada quando necessario.

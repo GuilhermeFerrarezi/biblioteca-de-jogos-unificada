@@ -55,13 +55,22 @@ Defina pelo menos:
 - indice em `library_entries(install_status)`.
 - indice em `library_entries(primary_platform_id)`.
 - indice em `launch_actions(game_id, is_primary)`.
+- indices parciais para caminhos frequentes, como entradas locais ativas e acoes primarias por plataforma.
+- indices de limpeza para rotinas que arquivam falsos positivos sem varrer tabelas inteiras.
 
 ## Seed e fallback
 
-- `mockLibrary.ts` deve continuar servindo como seed/fallback de desenvolvimento, nao como fonte permanente depois que o banco existir.
+- `mockLibrary.js` deve continuar servindo como seed/fallback de desenvolvimento, nao como fonte permanente depois que o banco existir.
 - Seed inicial deve ser idempotente.
 - Dados criados pelo usuario nunca devem ser apagados por seed.
 - Se usar seed dos mocks, marque a origem como `seed` ou `manual/dev` para diferenciar de importacao real.
+
+## Versionamento de schema
+
+- Toda mudanca estrutural deve ter versao registrada em `schema_migrations`.
+- Preferir `ALTER TABLE` e `CREATE INDEX IF NOT EXISTS` para upgrades incrementais simples.
+- Migrations devem preservar jogos manuais, arquivamentos, launch actions e fontes externas.
+- Incluir teste de banco legado quando a migration mexer em tabela existente.
 
 ## Local do banco
 
@@ -75,6 +84,7 @@ Ao aplicar esta skill, entregue:
 
 - lista de tabelas com campos principais;
 - constraints e indices;
+- versao/migration proposta;
 - estrategia de seed/fallback;
 - local do arquivo SQLite;
 - riscos e decisoes adiadas.

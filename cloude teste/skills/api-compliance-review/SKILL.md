@@ -21,6 +21,17 @@ description: Use ao revisar termos de uso, privacidade, limites de API, endpoint
 - Alto: depende de endpoint interno, scraping, automacao de launcher ou comportamento nao garantido.
 - Bloqueado: termos proibem o uso ou exigem credenciais/senhas do usuario.
 
+## Matriz de risco por API
+
+Para cada plataforma, avalie separadamente:
+
+- Autenticacao e escopos exigidos.
+- Limites de requisicao, rate limit e latencia esperada.
+- Permissao de cache, retencao e redistribuicao de dados.
+- Estabilidade do contrato: oficial, documentado parcialmente, comunitario ou inferido.
+- Dados sensiveis envolvidos: tokens, IDs privados, biblioteca privada, localizacao de arquivos.
+- Alternativa aceitavel se a API nao puder ser usada.
+
 ## Saida esperada
 
 ```text
@@ -28,9 +39,13 @@ Plataforma:
 Uso pretendido:
 Permissao aparente:
 Risco:
+Escopos/autenticacao:
+Rate limits/latencia:
+Cache/retencao:
 Condicoes:
 Dados que podem ser armazenados:
 Dados que nao devem ser armazenados:
+Alternativa tecnica:
 Fontes:
 Recomendacao:
 ```
@@ -40,4 +55,3 @@ Recomendacao:
 - Nao dar parecer juridico definitivo.
 - Usar fontes oficiais quando possivel.
 - Se houver incerteza material, marcar como risco e propor alternativa tecnica.
-

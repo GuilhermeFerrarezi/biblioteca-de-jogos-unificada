@@ -33,6 +33,22 @@ refreshMetadata(game)
 disconnect()
 ```
 
+## Modelo minimo de LaunchAction
+
+```text
+LaunchAction
+- id
+- gameId
+- platformId
+- kind: uri | executable | launcher | manual
+- target
+- arguments[]
+- workingDirectory
+- isPrimary
+```
+
+O provider pode sugerir varias acoes, mas o core deve decidir qual fica como primaria.
+
 ## Estados comuns
 
 - `connected`
@@ -50,6 +66,8 @@ disconnect()
 - Logs nunca devem conter tokens, cookies, codigos OAuth ou caminhos sensiveis desnecessarios.
 - Provider experimental deve ser marcado como experimental no modelo e na UI.
 - Lancar um jogo deve preferir mecanismo oficial/local ja instalado antes de tentar alternativa fragil.
+- Sincronizacao incremental deve registrar quantos itens foram criados, atualizados, ignorados, arquivados e falharam.
+- Erros devem usar politica padronizada para permitir retry, fallback local e mensagem segura na UI.
 
 ## Testes minimos
 

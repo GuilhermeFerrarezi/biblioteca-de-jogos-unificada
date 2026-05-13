@@ -32,8 +32,11 @@ Para cada plataforma, produza:
 Plataforma:
 Status:
 Metodo recomendado:
+Classificacao de viabilidade:
 Dados disponiveis:
 Autenticacao:
+Limites/performance:
+Restricoes legais:
 Riscos:
 Fontes:
 Proxima acao:
@@ -45,3 +48,5 @@ Proxima acao:
 - Nao tratar endpoint nao documentado como contrato estavel.
 - Separar importacao de biblioteca, instalacao, atualizacao, lancamento, conquistas e tempo de jogo.
 - Marcar claramente qualquer inferencia.
+- Diferenciar viabilidade tecnica de permissao/compliance.
+- Registrar quando a integracao depender de manifesto local, launcher instalado, API publica, scraping ou projeto comunitario.
