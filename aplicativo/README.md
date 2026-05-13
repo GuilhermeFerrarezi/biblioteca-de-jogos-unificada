@@ -69,6 +69,12 @@ As diretrizes de arquitetura e evolucao ficam em:
 ../DIRETRIZES_DESENVOLVIMENTO.md
 ```
 
+A estrutura do SQLite local fica em:
+
+```text
+../ESTRUTURA_BANCO_DADOS.md
+```
+
 ## Proximas implementacoes
 
 - Validacao manual do fluxo completo de adicionar, editar e arquivar no Tauri.

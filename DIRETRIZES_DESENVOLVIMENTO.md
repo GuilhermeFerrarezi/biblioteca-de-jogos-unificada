@@ -73,6 +73,7 @@ Regras:
 - Migracoes e compatibilidade de schema devem ser testadas.
 - Seeds devem ser idempotentes.
 - Cache deve melhorar tempo de abertura, mas nao pode esconder erro de sincronizacao real.
+- A estrutura atual do SQLite deve ser mantida em `ESTRUTURA_BANCO_DADOS.md`.
 
 ## Credenciais e Contas
 

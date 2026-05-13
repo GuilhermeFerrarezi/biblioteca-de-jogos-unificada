@@ -6,8 +6,9 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 
 1. Leia `CHECKPOINT.md` na raiz do projeto.
 2. Leia `DIRETRIZES_DESENVOLVIMENTO.md`.
-3. Leia `aplicativo/README.md`.
-4. Leia este arquivo ate o fim antes de instalar ou alterar qualquer coisa.
+3. Leia `ESTRUTURA_BANCO_DADOS.md`.
+4. Leia `aplicativo/README.md`.
+5. Leia este arquivo ate o fim antes de instalar ou alterar qualquer coisa.
 
 ## Estado atual do aplicativo
 
@@ -29,6 +30,7 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 ```text
 CHECKPOINT.md
 DIRETRIZES_DESENVOLVIMENTO.md
+ESTRUTURA_BANCO_DADOS.md
 RETOMADA_NOVO_COMPUTADOR.md
 aplicativo/
   package.json
@@ -204,6 +206,7 @@ Sempre que houver marco importante, atualize:
 
 - `CHECKPOINT.md`: estado geral, decisoes e proxima sessao.
 - `DIRETRIZES_DESENVOLVIMENTO.md`: regras arquiteturais e criterios de aceite quando uma decisao de desenvolvimento mudar.
+- `ESTRUTURA_BANCO_DADOS.md`: schema SQLite, indices, relacoes ou regras de migracao quando o backend persistente mudar.
 - `aplicativo/README.md`: comandos, stack e estado especifico do app.
 - `RETOMADA_NOVO_COMPUTADOR.md`: requisitos ou passos de ambiente que mudarem.
 

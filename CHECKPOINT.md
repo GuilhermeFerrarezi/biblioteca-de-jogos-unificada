@@ -70,6 +70,8 @@ Atualizacao em 2026-05-13: o documento externo `Projeto Biblioteca de Jogos Unif
 
 Atualizacao em 2026-05-13: a reorganizacao inicial de frontend foi executada antes do `SteamProvider`. `App.jsx` passou a apenas renderizar `pages/LibraryPage.jsx`; a tela foi separada em `components/Sidebar.jsx`, `Topbar.jsx`, `StatsGrid.jsx`, `LibraryBrowser.jsx`, `GameDetailsPanel.jsx` e `ManualGameModal.jsx`; a logica de estado e fluxos foi movida para `hooks/useLibraryPageState.js`; a normalizacao/criacao de entradas manuais foi movida para `adapters/libraryEntryAdapter.js`; e os estilos foram movidos para `styles/library.css`. O comportamento visual e funcional foi preservado, e o texto do botao de edicao foi corrigido para `Salvar alterações`. Validacoes passaram: `npm run lint`, `npm run build` e `cargo test` (26 testes).
 
+Atualizacao em 2026-05-13: foi criado `ESTRUTURA_BANCO_DADOS.md`, documentando o SQLite local, localizacao do arquivo, fluxo de inicializacao, tabelas, relacionamentos, indices, comandos principais e regras para evolucao do schema.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.
@@ -133,6 +135,10 @@ As diretrizes consolidadas ficam em `DIRETRIZES_DESENVOLVIMENTO.md`. Em resumo:
 - Usar SQLite como fonte principal de persistencia no desktop; LocalStorage/IndexedDB somente como cache auxiliar de modo web quando necessario.
 - Evoluir a estrutura de pastas incrementalmente, sem refatoracao ampla desnecessaria.
 - Validar cada marco com `npm run lint`, `npm run build` e `cargo test` quando houver backend.
+
+## Banco de dados
+
+A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco principal fica em `%APPDATA%\com.bibliotecajogos.unificada\library.sqlite3` e e composto por `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres` e `schema_migrations`, com indices para listagem, filtros, acoes primarias e limpeza de falsos positivos locais.
 
 ## MVP recomendado
 
