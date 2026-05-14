@@ -297,7 +297,7 @@ export function useLibraryPageState() {
 
       await refreshEntries()
       setLaunchMessage(
-        `Sincronizacao Steam concluida: ${summary.inserted} novos, ${summary.updated} atualizados e ${summary.unavailable ?? 0} indisponiveis em ${summary.discovered} manifestos encontrados.`,
+        `Sincronizacao Steam concluida: ${summary.inserted} novos, ${summary.updated} atualizados, ${summary.archived ?? 0} arquivados e ${summary.unavailable ?? 0} indisponiveis em ${summary.discovered} manifestos encontrados.`,
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

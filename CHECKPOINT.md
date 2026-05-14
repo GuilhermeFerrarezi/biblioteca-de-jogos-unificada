@@ -84,6 +84,8 @@ Atualizacao em 2026-05-14: foi criado `ULTIMOS_DESENVOLVIMENTOS_APLICATIVO.md`, 
 
 Atualizacao em 2026-05-14: apos teste manual da sincronizacao Steam, foi corrigido um falso positivo do `SteamProvider` local. O AppID `228980` (`Steamworks Common Redistributables`) agora e rejeitado na descoberta por manifest e qualquer entrada Steam desse tipo ja importada e arquivada na proxima sincronizacao, removendo-a da listagem principal sem apagar dados. Foi adicionado teste Rust para garantir que redistribuiveis comuns da Steam sejam ignorados/arquivados.
 
+Atualizacao em 2026-05-14: apos revisao delegada aos agentes locais `04-backend-provider-agent.md`, `11-senior-database-agent.md` e `10-senior-integration-qa-agent.md`, a correcao do `Steamworks Common Redistributables` foi refinada. O arquivamento de entradas Steam tecnicas passou a ocorrer dentro da mesma transacao da sincronizacao, a heuristica automatica ficou baseada no AppID `228980`, e o feedback da UI passou a informar tambem a quantidade de entradas Steam arquivadas.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.

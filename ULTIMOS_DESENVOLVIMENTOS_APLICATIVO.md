@@ -94,6 +94,7 @@ Resultado registrado: frontend validado e suite Rust com 29 testes passando.
 
 ## Commits recentes relevantes
 
+- `87af4c2 fix(steam): ignore common redistributables`
 - `c61e6c7 docs(agents): require agent and skill workflow`
 - `d131d88 fix(steam): reconcile local sync state`
 - `da7d11b feat(steam): sync installed Steam games`

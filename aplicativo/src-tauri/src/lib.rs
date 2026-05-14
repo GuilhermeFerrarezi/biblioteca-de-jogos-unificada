@@ -1352,17 +1352,17 @@ mod storage {
         roots: &[PathBuf],
     ) -> rusqlite::Result<SyncSummaryDto> {
         let candidates = discover_steam_game_candidates(roots);
-        let archived = archive_rejected_steam_entries(connection)?;
         let existing_entries = list_steam_entries_by_source(connection)?;
         let mut summary = SyncSummaryDto {
             discovered: candidates.len(),
             inserted: 0,
             updated: 0,
-            archived,
+            archived: 0,
             unavailable: 0,
         };
 
         let transaction = connection.transaction()?;
+        summary.archived = archive_rejected_steam_entries(&transaction)?;
         let discovered_app_ids = candidates
             .iter()
             .map(|candidate| candidate.app_id.clone())
@@ -1381,7 +1381,7 @@ mod storage {
 
         for (app_id, existing_row) in &existing_entries {
             if !existing_row.is_archived
-                && !is_rejected_steam_app(app_id, &existing_row.title)
+                && !is_rejected_steam_app(app_id)
                 && !discovered_app_ids.contains(app_id)
                 && mark_steam_entry_unavailable(&transaction, existing_row)?
             {
@@ -1557,10 +1557,8 @@ mod storage {
                         continue;
                     }
 
-                    if let Some(candidate) =
-                        parse_steam_manifest_candidate(&manifest_path).filter(|candidate| {
-                            !is_rejected_steam_app(&candidate.app_id, &candidate.title)
-                        })
+                    if let Some(candidate) = parse_steam_manifest_candidate(&manifest_path)
+                        .filter(|candidate| !is_rejected_steam_app(&candidate.app_id))
                     {
                         candidates
                             .entry(candidate.app_id.clone())
@@ -1652,8 +1650,8 @@ mod storage {
         })
     }
 
-    fn is_rejected_steam_app(app_id: &str, title: &str) -> bool {
-        app_id == "228980" || normalize_name(title) == "steamworkscommonredistributables"
+    fn is_rejected_steam_app(app_id: &str) -> bool {
+        app_id == "228980"
     }
 
     fn key_value_pairs(contents: &str) -> Vec<(String, String)> {
@@ -2300,10 +2298,12 @@ mod storage {
         Ok(true)
     }
 
-    fn archive_rejected_steam_entries(connection: &Connection) -> rusqlite::Result<usize> {
+    fn archive_rejected_steam_entries(
+        transaction: &rusqlite::Transaction<'_>,
+    ) -> rusqlite::Result<usize> {
         let updated_at = now_iso();
 
-        connection.execute(
+        transaction.execute(
             r#"
             UPDATE library_entries
             SET is_archived = 1,
@@ -2315,10 +2315,7 @@ mod storage {
                 FROM games
                 JOIN game_sources ON game_sources.game_id = games.id
                 WHERE game_sources.platform_id = 'steam'
-                  AND (
-                    game_sources.external_id = '228980'
-                    OR lower(games.title) = lower('Steamworks Common Redistributables')
-                  )
+                  AND game_sources.external_id = '228980'
               )
             "#,
             params![updated_at],
