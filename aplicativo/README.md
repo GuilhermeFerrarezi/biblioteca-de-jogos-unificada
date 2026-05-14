@@ -48,11 +48,11 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - Frontend migrado para JavaScript/JSX; os modelos agora sao contratos de dados mantidos pelos objetos e comandos Tauri.
 - Dados mockados concentrados em `src/data/mockLibrary.js` apenas como fallback web e referencia de seed.
 - Constantes compartilhadas de UI/dominio ficam em `src/constants/libraryConstants.js`.
-- Backend Tauri em `src-tauri` ja possui persistencia SQLite para a biblioteca, com seed idempotente dos 4 mocks e comandos `list_library_entries`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived`, `sync_local_games`, `sync_steam_games`, `list_steam_account_config`, `save_steam_account_config`, `disconnect_steam_account_config` e `launch_library_entry`.
+- Backend Tauri em `src-tauri` ja possui persistencia SQLite para a biblioteca, com seed idempotente dos 4 mocks e comandos `list_library_entries`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived`, `sync_local_games`, `sync_steam_games`, `sync_steam_account_games`, `list_steam_account_config`, `save_steam_account_config`, `disconnect_steam_account_config` e `launch_library_entry`.
 - A biblioteca principal exclui entradas arquivadas via `is_archived`; o backend tambem expoe o comando `set_library_entry_archived`. O frontend tem um botao de sincronizacao manual para importar jogos locais a partir de pastas conhecidas ou configuradas via ambiente. O scanner local ignora instaladores, componentes de runtime, servicos como EpicOnlineServices e diretorios de suporte, arquiva falsos positivos antigos desse tipo ao abrir o banco ou sincronizar, e encontra executaveis em subpastas comuns como `Binaries\Win64`.
 - A limpeza de falsos positivos locais no boot usa indices especificos em `library_entries` e `launch_actions`, e e ignorada rapidamente quando nao ha entradas locais ativas.
 - O `LocalGamesProvider` nao varre bibliotecas Steam por padrao. A importacao Steam fica no comando `sync_steam_games`, que le `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos instalados sem exigir credenciais.
-- O frontend tem acoes separadas para sincronizar Steam e jogos locais. A sincronizacao Steam atual cobre instalacoes locais e cria acoes `steam://rungameid/<appid>`; a integracao Web API para biblioteca completa/playtime/metadados fica para o proximo corte.
+- O frontend tem acoes separadas para sincronizar jogos locais, Steam local por manifests e Steam por conta via Web API. A sincronizacao Steam por conta usa SteamID64 e a chave salva no AuthVault, cria acoes `steam://rungameid/<appid>` e importa playtime remoto quando a API retorna `playtime_forever`.
 - A area de Contas permite salvar/remover a configuracao local Steam por SteamID64 e a chave Steam Web API no AuthVault. O segredo fica no cofre do sistema operacional via backend Tauri e nunca e devolvido ao frontend; token/senha/cookies continuam fora do app.
 - O comando `launch_library_entry` abre executaveis locais para jogos manuais e locais persistidos, validando caminho absoluto, arquivo existente, extensao `.exe` e sem usar shell.
 - O banco local e criado em `%APPDATA%\\com.bibliotecajogos.unificada\\library.sqlite3`.
@@ -68,6 +68,12 @@ npm run tauri:dev
 ```
 
 A pasta deve conter `steamapps\appmanifest_<appid>.acf`. Se houver `steamapps\libraryfolders.vdf`, bibliotecas extras tambem sao lidas.
+
+## Sincronizacao Steam por conta
+
+Na area `Contas e integracoes`, salve o SteamID64 e a chave Steam Web API no AuthVault. Depois use `Sincronizar conta` para consultar a biblioteca via `IPlayerService/GetOwnedGames/v1`.
+
+A chave fica no cofre do sistema operacional e nao e devolvida ao frontend. A API da Steam pode retornar menos dados se a biblioteca da conta nao estiver visivel para a chave/conta usada.
 
 ## Ambiente nativo
 
@@ -93,8 +99,8 @@ A estrutura do SQLite local fica em:
 
 ## Proximas implementacoes
 
-- Validacao manual do fluxo completo de adicionar, editar, arquivar, sincronizar Steam e sincronizar locais no Tauri.
-- Evoluir `SteamProvider` para consumir a chave do AuthVault somente no backend e chamar a Web API para biblioteca completa, playtime e metadados.
+- Validacao manual do fluxo completo de adicionar, editar, arquivar, sincronizar locais, Steam local e Steam por conta no Tauri.
+- Evoluir metadados remotos da Steam alem de nome/playtime, mantendo fallback local por manifests.
 - Melhorias no `LocalGamesProvider` inicial para configurar raizes pela UI.
 - Consulta filtrada/paginacao no backend para bibliotecas maiores.
 

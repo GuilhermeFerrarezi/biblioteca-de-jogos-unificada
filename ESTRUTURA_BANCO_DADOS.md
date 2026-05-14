@@ -236,6 +236,19 @@ A chave Steam Web API nao fica no SQLite. Ela e salva pelo backend no cofre do s
 
 O frontend recebe somente o estado `isConfigured`; a chave nunca e devolvida pela API Tauri. Remover a configuracao Steam tambem tenta remover o segredo do cofre e preserva os jogos ja importados.
 
+### Sincronizacao Steam por conta
+
+O comando Tauri `sync_steam_account_games` usa o SteamID64 de `provider_account_configs` e a chave do AuthVault para consultar `IPlayerService/GetOwnedGames/v1`.
+
+Regras de persistencia:
+
+1. `game_sources.platform_id = 'steam'`.
+2. `game_sources.external_id` guarda o AppID Steam.
+3. Jogos remotos sem manifest local entram com `library_entries.install_status = 'not_installed'` e `games.installed = 0`.
+4. Jogos ja detectados por manifest local continuam `installed`.
+5. `playtime_forever` atualiza `games.playtime_total_minutes`.
+6. A acao primaria continua `steam://rungameid/<appid>`.
+
 ## Regras para evoluir o schema
 
 - Toda mudanca de schema deve ser idempotente.

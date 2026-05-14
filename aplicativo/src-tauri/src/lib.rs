@@ -38,6 +38,7 @@ pub fn run() {
             commands::update_manual_game,
             commands::sync_local_games,
             commands::sync_steam_games,
+            commands::sync_steam_account_games,
             commands::list_steam_account_config,
             commands::save_steam_account_config,
             commands::disconnect_steam_account_config,
@@ -85,7 +86,7 @@ mod auth_vault {
     const STEAM_PROVIDER_ID: &str = "steam";
     const STEAM_API_KEY_KIND: &str = "steam_web_api_key";
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Clone, Debug, Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct SteamApiKeyInput {
         api_key: String,
@@ -120,6 +121,7 @@ mod auth_vault {
 
     pub trait SecretVault {
         fn has_secret(&self, account: &str) -> Result<bool, AuthVaultError>;
+        fn get_secret(&self, account: &str) -> Result<Option<String>, AuthVaultError>;
         fn set_secret(&self, account: &str, secret: &str) -> Result<(), AuthVaultError>;
         fn delete_secret(&self, account: &str) -> Result<(), AuthVaultError>;
     }
@@ -135,6 +137,17 @@ mod auth_vault {
             match entry.get_password() {
                 Ok(_) => Ok(true),
                 Err(keyring::Error::NoEntry) => Ok(false),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable),
+            }
+        }
+
+        fn get_secret(&self, account: &str) -> Result<Option<String>, AuthVaultError> {
+            let entry = keyring::Entry::new(KEYRING_SERVICE, account)
+                .map_err(|_| AuthVaultError::SecureStorageUnavailable)?;
+
+            match entry.get_password() {
+                Ok(secret) => Ok(Some(secret)),
+                Err(keyring::Error::NoEntry) => Ok(None),
                 Err(_) => Err(AuthVaultError::SecureStorageUnavailable),
             }
         }
@@ -165,6 +178,12 @@ mod auth_vault {
         Ok(steam_api_key_status(
             vault.has_secret(STEAM_API_KEY_ACCOUNT)?,
         ))
+    }
+
+    pub fn get_steam_api_key<Vault: SecretVault>(
+        vault: &Vault,
+    ) -> Result<Option<String>, AuthVaultError> {
+        vault.get_secret(STEAM_API_KEY_ACCOUNT)
     }
 
     pub fn save_steam_api_key<Vault: SecretVault>(
@@ -221,6 +240,10 @@ mod auth_vault {
         impl SecretVault for FakeSecretVault {
             fn has_secret(&self, _account: &str) -> Result<bool, AuthVaultError> {
                 Ok(self.secret.lock().expect("lock fake vault").is_some())
+            }
+
+            fn get_secret(&self, _account: &str) -> Result<Option<String>, AuthVaultError> {
+                Ok(self.secret.lock().expect("lock fake vault").clone())
             }
 
             fn set_secret(&self, _account: &str, secret: &str) -> Result<(), AuthVaultError> {
@@ -295,8 +318,180 @@ mod auth_vault {
     }
 }
 
+mod steam_web_api {
+    use serde::Deserialize;
+    use std::fmt;
+
+    const GET_OWNED_GAMES_URL: &str =
+        "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct SteamOwnedGame {
+        pub app_id: String,
+        pub title: String,
+        pub playtime_total_minutes: i64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SteamWebApiError {
+        RequestFailed,
+        InvalidResponse,
+    }
+
+    impl fmt::Display for SteamWebApiError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                SteamWebApiError::RequestFailed => {
+                    write!(formatter, "Nao foi possivel consultar a Steam Web API.")
+                }
+                SteamWebApiError::InvalidResponse => {
+                    write!(formatter, "A Steam Web API retornou uma resposta invalida.")
+                }
+            }
+        }
+    }
+
+    pub trait SteamWebApiClient {
+        fn get_owned_games(
+            &self,
+            api_key: &str,
+            steam_id64: &str,
+        ) -> Result<SteamOwnedGamesResponse, SteamWebApiError>;
+    }
+
+    #[derive(Default)]
+    pub struct UreqSteamWebApiClient;
+
+    impl SteamWebApiClient for UreqSteamWebApiClient {
+        fn get_owned_games(
+            &self,
+            api_key: &str,
+            steam_id64: &str,
+        ) -> Result<SteamOwnedGamesResponse, SteamWebApiError> {
+            ureq::get(GET_OWNED_GAMES_URL)
+                .query("key", api_key)
+                .query("steamid", steam_id64)
+                .query("include_appinfo", "1")
+                .query("include_played_free_games", "1")
+                .query("format", "json")
+                .call()
+                .map_err(|_| SteamWebApiError::RequestFailed)?
+                .into_json::<SteamOwnedGamesResponse>()
+                .map_err(|_| SteamWebApiError::InvalidResponse)
+        }
+    }
+
+    #[derive(Clone, Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamOwnedGamesResponse {
+        response: SteamOwnedGamesPayload,
+    }
+
+    #[derive(Clone, Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamOwnedGamesPayload {
+        games: Option<Vec<SteamOwnedGamePayload>>,
+    }
+
+    #[derive(Clone, Debug, Deserialize)]
+    struct SteamOwnedGamePayload {
+        appid: u64,
+        name: Option<String>,
+        playtime_forever: Option<i64>,
+    }
+
+    pub fn fetch_owned_games<Client: SteamWebApiClient>(
+        client: &Client,
+        api_key: &str,
+        steam_id64: &str,
+    ) -> Result<Vec<SteamOwnedGame>, SteamWebApiError> {
+        let response = client.get_owned_games(api_key, steam_id64)?;
+        let games = response
+            .response
+            .games
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|game| {
+                let title = game.name?.trim().to_string();
+
+                if title.is_empty() {
+                    return None;
+                }
+
+                Some(SteamOwnedGame {
+                    app_id: game.appid.to_string(),
+                    title,
+                    playtime_total_minutes: game.playtime_forever.unwrap_or(0).max(0),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok(games)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        struct FakeSteamWebApiClient {
+            response: SteamOwnedGamesResponse,
+        }
+
+        impl SteamWebApiClient for FakeSteamWebApiClient {
+            fn get_owned_games(
+                &self,
+                api_key: &str,
+                steam_id64: &str,
+            ) -> Result<SteamOwnedGamesResponse, SteamWebApiError> {
+                assert_eq!(api_key, "SECRET");
+                assert_eq!(steam_id64, "76561198000000000");
+
+                Ok(SteamOwnedGamesResponse {
+                    response: SteamOwnedGamesPayload {
+                        games: self.response.response.games.clone(),
+                    },
+                })
+            }
+        }
+
+        #[test]
+        fn fetch_owned_games_normalizes_valid_response() {
+            let client = FakeSteamWebApiClient {
+                response: SteamOwnedGamesResponse {
+                    response: SteamOwnedGamesPayload {
+                        games: Some(vec![
+                            SteamOwnedGamePayload {
+                                appid: 413150,
+                                name: Some("Stardew Valley".to_string()),
+                                playtime_forever: Some(120),
+                            },
+                            SteamOwnedGamePayload {
+                                appid: 10,
+                                name: None,
+                                playtime_forever: Some(1),
+                            },
+                        ]),
+                    },
+                },
+            };
+
+            let games =
+                fetch_owned_games(&client, "SECRET", "76561198000000000").expect("fetch games");
+
+            assert_eq!(
+                games,
+                vec![SteamOwnedGame {
+                    app_id: "413150".to_string(),
+                    title: "Stardew Valley".to_string(),
+                    playtime_total_minutes: 120,
+                }]
+            );
+        }
+    }
+}
+
 mod commands {
-    use super::{auth_vault, launcher, storage, AppState};
+    use super::{auth_vault, launcher, steam_web_api, storage, AppState};
     use tauri::State;
 
     #[tauri::command]
@@ -354,6 +549,44 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         storage::sync_steam_games(&mut connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn sync_steam_account_games(
+        state: State<'_, AppState>,
+    ) -> Result<storage::SyncSummaryDto, String> {
+        let steam_id64 = {
+            let connection = state
+                .connection
+                .lock()
+                .map_err(|_| "failed to lock local database".to_string())?;
+            let account_config = storage::list_steam_account_config(&connection)
+                .map_err(|error| error.to_string())?;
+
+            account_config
+                .steam_id64()
+                .ok_or_else(|| {
+                    "Configure um SteamID64 antes de sincronizar a conta Steam.".to_string()
+                })?
+                .to_string()
+        };
+        let vault = auth_vault::SystemSecretVault;
+        let api_key = auth_vault::get_steam_api_key(&vault)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                "Salve a chave Steam Web API no cofre antes de sincronizar a conta Steam."
+                    .to_string()
+            })?;
+        let client = steam_web_api::UreqSteamWebApiClient::default();
+        let remote_games = steam_web_api::fetch_owned_games(&client, &api_key, &steam_id64)
+            .map_err(|error| error.to_string())?;
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::sync_steam_account_games(&mut connection, remote_games)
+            .map_err(|error| error.to_string())
     }
 
     #[tauri::command]
@@ -718,6 +951,7 @@ mod launcher {
 }
 
 mod storage {
+    use super::steam_web_api::SteamOwnedGame;
     use chrono::{SecondsFormat, Utc};
     use rusqlite::{params, Connection, OptionalExtension};
     use serde::{Deserialize, Serialize};
@@ -876,6 +1110,12 @@ mod storage {
         configured_at: Option<String>,
         disconnected_at: Option<String>,
         updated_at: Option<String>,
+    }
+
+    impl SteamAccountConfigDto {
+        pub fn steam_id64(&self) -> Option<&str> {
+            self.steam_id64.as_deref()
+        }
     }
 
     #[derive(Debug, Serialize)]
@@ -1776,6 +2016,8 @@ mod storage {
         app_id: String,
         title: String,
         install_path: Option<String>,
+        is_installed: bool,
+        playtime_total_minutes: Option<i64>,
         source_id: String,
         game_id: String,
         entry_id: String,
@@ -1793,11 +2035,32 @@ mod storage {
         sync_steam_games_from_roots(connection, &roots)
     }
 
+    pub fn sync_steam_account_games(
+        connection: &mut Connection,
+        remote_games: Vec<SteamOwnedGame>,
+    ) -> rusqlite::Result<SyncSummaryDto> {
+        let candidates = remote_games
+            .into_iter()
+            .filter(|game| !is_rejected_steam_app(&game.app_id))
+            .map(steam_account_game_candidate)
+            .collect::<Vec<_>>();
+
+        sync_steam_candidates(connection, candidates, false)
+    }
+
     fn sync_steam_games_from_roots(
         connection: &mut Connection,
         roots: &[PathBuf],
     ) -> rusqlite::Result<SyncSummaryDto> {
         let candidates = discover_steam_game_candidates(roots);
+        sync_steam_candidates(connection, candidates, true)
+    }
+
+    fn sync_steam_candidates(
+        connection: &mut Connection,
+        candidates: Vec<SteamGameCandidate>,
+        reconcile_missing_as_unavailable: bool,
+    ) -> rusqlite::Result<SyncSummaryDto> {
         let existing_entries = list_steam_entries_by_source(connection)?;
         let mut summary = SyncSummaryDto {
             discovered: candidates.len(),
@@ -1826,7 +2089,8 @@ mod storage {
         }
 
         for (app_id, existing_row) in &existing_entries {
-            if !existing_row.is_archived
+            if reconcile_missing_as_unavailable
+                && !existing_row.is_archived
                 && !is_rejected_steam_app(app_id)
                 && !discovered_app_ids.contains(app_id)
                 && mark_steam_entry_unavailable(&transaction, existing_row)?
@@ -1837,6 +2101,23 @@ mod storage {
 
         transaction.commit()?;
         Ok(summary)
+    }
+
+    fn steam_account_game_candidate(game: SteamOwnedGame) -> SteamGameCandidate {
+        let slug = create_slug(&game.title);
+
+        SteamGameCandidate {
+            source_id: format!("source-steam-{}", game.app_id),
+            game_id: format!("game-steam-{slug}-{}", game.app_id),
+            entry_id: format!("entry-steam-{slug}-{}", game.app_id),
+            launch_id: format!("launch-steam-{}", game.app_id),
+            app_id: game.app_id,
+            title: game.title.clone(),
+            install_path: None,
+            is_installed: false,
+            playtime_total_minutes: Some(game.playtime_total_minutes),
+            accent_color: deterministic_accent_color(&game.title),
+        }
     }
 
     fn sync_local_games_from_roots(
@@ -2092,6 +2373,8 @@ mod storage {
             app_id,
             title,
             install_path,
+            is_installed: true,
+            playtime_total_minutes: None,
             accent_color,
         })
     }
@@ -2521,16 +2804,24 @@ mod storage {
         candidate: &SteamGameCandidate,
     ) -> rusqlite::Result<()> {
         let now = now_iso();
+        let install_status = if candidate.is_installed {
+            "installed"
+        } else {
+            "not_installed"
+        };
+        let playtime_total_minutes = candidate.playtime_total_minutes.unwrap_or(0);
         transaction.execute(
             r#"
             INSERT INTO games (
               id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, 1, 0, ?4, ?5, ?5)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
             "#,
             params![
                 candidate.game_id,
                 candidate.title,
                 candidate.title,
+                candidate.is_installed as i64,
+                playtime_total_minutes,
                 candidate.accent_color,
                 now,
             ],
@@ -2539,9 +2830,9 @@ mod storage {
             r#"
             INSERT INTO library_entries (
               id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
-            ) VALUES (?1, ?2, 'steam', 'installed', 'Nunca', 0, ?3, ?3)
+            ) VALUES (?1, ?2, 'steam', ?3, 'Nunca', 0, ?4, ?4)
             "#,
-            params![candidate.entry_id, candidate.game_id, now],
+            params![candidate.entry_id, candidate.game_id, install_status, now],
         )?;
         transaction.execute(
             r#"
@@ -2579,19 +2870,34 @@ mod storage {
     ) -> rusqlite::Result<bool> {
         let launch_target = format!("steam://rungameid/{}", candidate.app_id);
         let current_action = find_steam_primary_action(transaction, &existing_row.game_id)?;
+        let next_working_directory = candidate.install_path.clone().or_else(|| {
+            current_action
+                .as_ref()
+                .and_then(|action| action.working_directory.clone())
+        });
+        let next_installed = existing_row.installed || candidate.is_installed;
+        let next_install_status = if next_installed {
+            "installed"
+        } else {
+            "not_installed"
+        };
+        let next_playtime_total_minutes = candidate
+            .playtime_total_minutes
+            .unwrap_or(existing_row.playtime_total_minutes);
         let needs_action_update = current_action
             .as_ref()
             .map(|action| {
                 action.kind != "uri"
                     || action.label != launch_target
                     || action.target != launch_target
-                    || action.working_directory != candidate.install_path
+                    || action.working_directory != next_working_directory
             })
             .unwrap_or(true);
         let needs_entry_update = existing_row.title != candidate.title
             || existing_row.sort_title != candidate.title
-            || !existing_row.installed
-            || existing_row.install_status != "installed"
+            || existing_row.installed != next_installed
+            || existing_row.install_status != next_install_status
+            || existing_row.playtime_total_minutes != next_playtime_total_minutes
             || existing_row.accent_color.as_deref() != Some(candidate.accent_color);
 
         if !needs_entry_update && !needs_action_update {
@@ -2606,15 +2912,18 @@ mod storage {
                 UPDATE games
                 SET title = ?2,
                     sort_title = ?3,
-                    installed = 1,
-                    accent_color = ?4,
-                    updated_at = ?5
+                    installed = ?4,
+                    playtime_total_minutes = ?5,
+                    accent_color = ?6,
+                    updated_at = ?7
                 WHERE id = ?1
                 "#,
                 params![
                     existing_row.game_id,
                     candidate.title,
                     candidate.title,
+                    next_installed as i64,
+                    next_playtime_total_minutes,
                     candidate.accent_color,
                     updated_at,
                 ],
@@ -2622,11 +2931,11 @@ mod storage {
             transaction.execute(
                 r#"
                 UPDATE library_entries
-                SET install_status = 'installed',
-                    updated_at = ?2
+                SET install_status = ?2,
+                    updated_at = ?3
                 WHERE id = ?1
                 "#,
-                params![existing_row.entry_id, updated_at],
+                params![existing_row.entry_id, next_install_status, updated_at],
             )?;
         }
 
@@ -2636,7 +2945,7 @@ mod storage {
                 &existing_row.game_id,
                 &candidate.launch_id,
                 &launch_target,
-                candidate.install_path.as_deref(),
+                next_working_directory.as_deref(),
             )?;
         }
 
@@ -3350,6 +3659,102 @@ mod storage {
         }
 
         #[test]
+        fn sync_steam_account_games_imports_remote_library_as_not_installed() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-account-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+            let summary = sync_steam_account_games(
+                &mut connection,
+                vec![SteamOwnedGame {
+                    app_id: "413150".to_string(),
+                    title: "Stardew Valley".to_string(),
+                    playtime_total_minutes: 480,
+                }],
+            )
+            .expect("sync steam account games");
+            let entries = list_library_entries(&connection).expect("list steam account entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.unavailable, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].primary_platform_id, "steam");
+            assert_eq!(entries[0].install_status, "not_installed");
+            assert!(!entries[0].game.installed);
+            assert_eq!(entries[0].game.playtime.total_minutes, 480);
+            assert_eq!(
+                entries[0].game.launch_actions[0].target,
+                "steam://rungameid/413150"
+            );
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_steam_account_games_preserves_local_install_state_and_updates_playtime() {
+            let steam_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-account-local-root-{}",
+                timestamp_millis()
+            ));
+            let steamapps = steam_root.join("steamapps");
+            let common = steamapps.join("common").join("Portal 2");
+            let manifest = steamapps.join("appmanifest_620.acf");
+
+            std::fs::create_dir_all(&common).expect("create steam library");
+            std::fs::write(
+                &manifest,
+                r#""AppState"
+{
+  "appid" "620"
+  "name" "Portal 2"
+  "installdir" "Portal 2"
+}
+"#,
+            )
+            .expect("write steam manifest");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-account-local-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
+                .expect("sync local steam games");
+            let summary = sync_steam_account_games(
+                &mut connection,
+                vec![SteamOwnedGame {
+                    app_id: "620".to_string(),
+                    title: "Portal 2".to_string(),
+                    playtime_total_minutes: 240,
+                }],
+            )
+            .expect("sync account steam games");
+            let entries = list_library_entries(&connection).expect("list merged steam entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 0);
+            assert_eq!(summary.updated, 1);
+            assert_eq!(summary.unavailable, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].install_status, "installed");
+            assert!(entries[0].game.installed);
+            assert_eq!(entries[0].game.playtime.total_minutes, 240);
+            assert_eq!(
+                entries[0].game.launch_actions[0]
+                    .working_directory
+                    .as_deref(),
+                Some(common.to_string_lossy().as_ref())
+            );
+
+            let _ = std::fs::remove_dir_all(steam_root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
         fn sync_steam_games_ignores_and_archives_common_redistributables() {
             let steam_root = std::env::temp_dir().join(format!(
                 "biblioteca-jogos-steam-redist-root-{}",
@@ -3385,6 +3790,8 @@ mod storage {
                 game_id: "game-steam-common-redistributables-228980".to_string(),
                 entry_id: "entry-steam-common-redistributables-228980".to_string(),
                 launch_id: "launch-steam-228980".to_string(),
+                is_installed: true,
+                playtime_total_minutes: None,
                 accent_color: "#64748b",
             };
 

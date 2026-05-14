@@ -162,6 +162,8 @@ Atualizacao em 2026-05-14: foi adicionado o primeiro corte seguro de configuraca
 
 Atualizacao em 2026-05-14: foi adicionado o AuthVault inicial para chave Steam Web API. O backend usa o cofre do sistema operacional via `keyring` 3.6.3 e expoe `get_steam_api_key_status`, `save_steam_api_key` e `delete_steam_api_key`; o frontend mostra apenas estado configurado/nao configurado e nunca recebe a chave salva. A chave e validada como hexadecimal ASCII de 32 caracteres, erros nao ecoam o segredo e a sincronizacao por conta ainda nao chama a Web API.
 
+Atualizacao em 2026-05-14: foi implementado o primeiro corte da sincronizacao Steam por conta. O novo comando Tauri `sync_steam_account_games` le o SteamID64 salvo em `provider_account_configs`, busca a chave Steam Web API somente no AuthVault e consulta `IPlayerService/GetOwnedGames/v1` com `include_appinfo=1`, `include_played_free_games=1` e `format=json`. Jogos remotos sao persistidos como Steam com launch action `steam://rungameid/<appid>` e `install_status = not_installed` quando nao ha manifest local; jogos ja instalados por manifest permanecem `installed`, preservando diretorio de trabalho. `playtime_forever` passa a atualizar `games.playtime_total_minutes`. O frontend ganhou acao separada `Sincronizar conta` na tela de Contas. Validacoes passaram: `npm run lint`, `npm run build`, `cargo check` e `cargo test` (41 testes).
+
 ## MVP recomendado
 
 1. App desktop Windows.
@@ -190,7 +192,7 @@ Atualizacao em 2026-05-14: foi adicionado o AuthVault inicial para chave Steam W
 4. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento anterior, mas ainda e uma margem apertada.
 5. Testar manualmente no Tauri o fluxo completo: abertura rapida, bootstrap dos 4 mocks, adicionar jogo manual, editar, arquivar, reabrir e confirmar persistencia.
 6. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
-7. Iniciar `SteamProvider` como primeira integracao real usando padrao Service-Adapter e normalizacao para `LibraryEntry`.
-8. Evoluir o `SteamProvider` para consumir a chave do AuthVault somente no backend e chamar a Web API para biblioteca completa, playtime e metadados, mantendo fallback local por manifests.
+7. Validar manualmente no Tauri a sincronizacao Steam local e por conta, incluindo biblioteca privada/nao visivel e chave invalida.
+8. Evoluir metadados remotos da Steam alem de nome/playtime, mantendo fallback local por manifests.
 9. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
 

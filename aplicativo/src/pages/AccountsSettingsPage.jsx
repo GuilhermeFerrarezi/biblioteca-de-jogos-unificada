@@ -82,7 +82,14 @@ const accountProviders = Object.freeze([
   },
 ])
 
-function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary, onSyncSteamGames }) {
+function AccountsSettingsPage({
+  feedbackMessage,
+  isSteamAccountSyncing,
+  isSteamSyncing,
+  onBackToLibrary,
+  onSyncSteamAccountGames,
+  onSyncSteamGames,
+}) {
   const steamIdInputId = useId()
   const steamIdErrorId = useId()
   const steamApiKeyInputId = useId()
@@ -317,6 +324,7 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
   const isSteamSettingsBusy =
     isSteamSettingsLoading || isSteamSettingsSaving || isSteamSettingsDisconnecting
   const isSteamApiKeyBusy = isSteamApiKeyLoading || isSteamApiKeySaving || isSteamApiKeyDeleting
+  const canSyncSteamAccount = isSteamConfigured && isSteamApiKeyConfigured && !isSteamApiKeyBusy
 
   return (
     <section className="accounts-page" aria-labelledby="accounts-title">
@@ -439,7 +447,7 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
           <div>
             <span className="summary-kicker">AuthVault</span>
             <h2 id="steam-api-key-title">Steam Web API</h2>
-            <p>Guarda a chave no cofre do sistema para liberar a integracao por conta em um corte futuro.</p>
+            <p>Usa o cofre do sistema para sincronizar a biblioteca da conta pela Web API.</p>
           </div>
           <span className="account-status" data-tone={isSteamApiKeyBackendAvailable ? 'ready' : 'planned'}>
             {isSteamApiKeyBackendAvailable ? <CheckCircle2 size={14} aria-hidden="true" /> : <Clock3 size={14} aria-hidden="true" />}
@@ -491,6 +499,14 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
               </button>
               <button className="primary-button" type="submit" disabled={isSteamApiKeyBusy}>
                 {isSteamApiKeySaving ? 'Salvando' : 'Salvar no cofre'}
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={!canSyncSteamAccount || isSteamAccountSyncing}
+                onClick={onSyncSteamAccountGames}
+              >
+                {isSteamAccountSyncing ? 'Sincronizando' : 'Sincronizar conta'}
               </button>
             </div>
           </div>

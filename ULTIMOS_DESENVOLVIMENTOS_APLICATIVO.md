@@ -39,7 +39,7 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - Steam tambem permite salvar/remover a chave Web API no AuthVault local, sem devolver o segredo ao frontend.
 - Xbox/Game Pass e Epic Games ficam como integracoes planejadas.
 - A tela nao pede senha, token, cookie ou Steam Guard.
-- A sincronizacao por conta via Web API da Steam continua bloqueada para etapa futura; este corte apenas guarda a chave com cofre seguro.
+- A tela tem acoes separadas para sincronizar Steam local por manifests e sincronizar a conta Steam pela Web API.
 
 ## Persistencia SQLite
 
@@ -88,7 +88,10 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - A configuracao local por SteamID64 usa os comandos `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config`.
 - O AuthVault inicial usa o cofre do sistema operacional via backend Tauri para a chave Steam Web API.
 - Os comandos `get_steam_api_key_status`, `save_steam_api_key` e `delete_steam_api_key` nunca retornam o segredo para o frontend.
-- A integracao Steam via Web API ainda nao foi implementada; o proximo corte deve consumir a chave apenas no backend.
+- O comando `sync_steam_account_games` consulta `IPlayerService/GetOwnedGames/v1` usando SteamID64 e a chave do AuthVault somente no backend.
+- Jogos retornados pela Web API entram como Steam com `install_status = not_installed` quando nao existem manifests locais.
+- O playtime remoto de `playtime_forever` e salvo em `games.playtime_total_minutes`.
+- Jogos ja instalados por manifest continuam como `installed`, preservando diretorio de trabalho e acao `steam://rungameid/<appid>`.
 
 ## Validacoes recentes
 
@@ -105,7 +108,7 @@ $env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\BibliotecaJogosUnificada\cargo-target
 cargo test
 ```
 
-Resultado registrado: frontend validado e suite Rust com 38 testes passando.
+Resultado registrado: frontend validado e suite Rust com 41 testes passando.
 
 ## Commits recentes relevantes
 
@@ -123,6 +126,6 @@ Resultado registrado: frontend validado e suite Rust com 38 testes passando.
 ## Proximos cortes recomendados
 
 1. Validar manualmente no Tauri: cadastro, edicao, arquivamento, reabertura, sincronizacao local e sincronizacao Steam.
-2. Evoluir Steam com Web API/configuracao de conta para biblioteca completa, playtime e metadados.
+2. Validar manualmente no Tauri o fluxo Steam por conta com SteamID64, chave no AuthVault e biblioteca publica/visivel.
 3. Adicionar consulta filtrada/paginacao no backend para bibliotecas maiores.
 4. Criar tela de contas/configuracoes para conexoes futuras.

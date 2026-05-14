@@ -31,8 +31,10 @@ function LibraryPage() {
         {activeSection === 'accounts' ? (
           <AccountsSettingsPage
             feedbackMessage={library.launchMessage}
+            isSteamAccountSyncing={library.isSteamAccountSyncing}
             isSteamSyncing={library.isSteamSyncing}
             onBackToLibrary={() => setActiveSection('library')}
+            onSyncSteamAccountGames={library.handleSyncSteamAccountGames}
             onSyncSteamGames={library.handleSyncSteamGames}
           />
         ) : (

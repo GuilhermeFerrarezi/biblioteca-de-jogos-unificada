@@ -23,8 +23,8 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 - Edicao de jogos manuais tambem ja existe, reutilizando o mesmo modal de cadastro.
 - O botao `Jogar` abre a URI quando a acao e do tipo `uri`, como `steam://rungameid/...`.
 - Executaveis locais de jogos manuais e locais persistidos ja sao iniciados por comando Tauri seguro, sem shell, com validacao de caminho absoluto local, arquivo existente e extensao `.exe`.
-- O backend Tauri ja possui persistencia SQLite, migration e compatibilidade de schema no boot, seed idempotente dos 4 mocks em background, comando `list_library_entries` para a listagem unificada, `set_library_entry_archived` para arquivamento, `update_manual_game` para edicao de jogos manuais e `launch_library_entry` para lancamento local seguro. O `LocalGamesProvider` inicial ja existe como comando `sync_local_games`, com importacao incremental e acionamento manual pela interface. A sincronizacao local nao roda mais no boot para preservar tempo de abertura. O scanner local evita bibliotecas Steam por padrao, ignora instaladores/runtimes/servicos como EpicOnlineServices, encontra executaveis em subpastas comuns como `Binaries\Win64` e arquiva falsos positivos locais antigos no boot ou na sincronizacao. O primeiro corte do `SteamProvider` local ja existe como comando `sync_steam_games`, lendo `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos Steam instalados sem credenciais. A area de Contas ja salva/remove a configuracao local Steam por SteamID64 via `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config`; tambem salva/remove a chave Steam Web API no AuthVault via `get_steam_api_key_status`, `save_steam_api_key` e `delete_steam_api_key`, sem devolver o segredo ao frontend. Ainda nao ha sincronizacao por conta via Web API neste corte.
-- Ultima revisao confirmada em 2026-05-14: `npm run lint`, `npm run build`, `cargo check` e `cargo test` passaram. A suite Rust esta com 38 testes.
+- O backend Tauri ja possui persistencia SQLite, migration e compatibilidade de schema no boot, seed idempotente dos 4 mocks em background, comando `list_library_entries` para a listagem unificada, `set_library_entry_archived` para arquivamento, `update_manual_game` para edicao de jogos manuais e `launch_library_entry` para lancamento local seguro. O `LocalGamesProvider` inicial ja existe como comando `sync_local_games`, com importacao incremental e acionamento manual pela interface. A sincronizacao local nao roda mais no boot para preservar tempo de abertura. O scanner local evita bibliotecas Steam por padrao, ignora instaladores/runtimes/servicos como EpicOnlineServices, encontra executaveis em subpastas comuns como `Binaries\Win64` e arquiva falsos positivos locais antigos no boot ou na sincronizacao. O `SteamProvider` tem sincronizacao local por `sync_steam_games`, lendo `libraryfolders.vdf` e `appmanifest_*.acf`, e sincronizacao por conta por `sync_steam_account_games`, usando SteamID64 + chave Steam Web API guardada no AuthVault. A chave nunca e devolvida ao frontend.
+- Ultima revisao confirmada em 2026-05-14: `npm run lint`, `npm run build`, `cargo check` e `cargo test` passaram. A suite Rust esta com 41 testes.
 
 ## Estrutura importante
 
@@ -198,7 +198,7 @@ npm run tauri:dev
 
 ## Ponto exato para continuar
 
-A persistencia local inicial, a listagem unificada pelo backend, o arquivamento, a edicao de jogos manuais, o bootstrap assincrono da biblioteca, o lancamento local seguro, o `LocalGamesProvider` inicial e o primeiro `SteamProvider` local ja foram implementados. A sincronizacao local e Steam sao manuais. O proximo corte deve ser a validacao manual do fluxo completo no Tauri e, depois disso, a evolucao da Steam com Web API/configuracao de conta para biblioteca completa, playtime e metadados.
+A persistencia local inicial, a listagem unificada pelo backend, o arquivamento, a edicao de jogos manuais, o bootstrap assincrono da biblioteca, o lancamento local seguro, o `LocalGamesProvider`, o `SteamProvider` local e o `SteamProvider` por conta ja foram implementados. A sincronizacao local, Steam local e Steam por conta sao manuais. O proximo corte deve ser a validacao manual do fluxo completo no Tauri e, depois disso, evolucao de metadados remotos e tratamento fino de erros/privacidade da Steam.
 
 As proximas mudancas devem seguir `DIRETRIZES_DESENVOLVIMENTO.md`: frontend em JavaScript/JSX, backend Tauri em Rust, SQLite como persistencia principal, padrao Service-Adapter para providers e normalizacao para `LibraryEntry`. A reorganizacao inicial do frontend ja foi feita com `components`, `services`, `adapters`, `hooks`, `pages`, `constants` e `styles`.
 
@@ -210,7 +210,7 @@ Ordem sugerida:
 4. Fechar e reabrir o app para confirmar persistencia SQLite dos jogos manuais e do arquivamento.
 5. Validar o fluxo manual de sincronizacao local no Tauri, preferencialmente com `BIBLIOTECA_JOGOS_LOCAL_ROOTS` apontando para uma pasta de teste.
 6. Validar o fluxo manual de sincronizacao Steam no Tauri, preferencialmente com `BIBLIOTECA_JOGOS_STEAM_ROOTS` apontando para uma pasta de teste.
-7. Evoluir a Steam com Web API/configuracao de conta para biblioteca completa, playtime e metadados.
+7. Validar a Steam por Web API com SteamID64, chave no AuthVault, biblioteca publica/visivel, chave invalida e conta sem jogos retornados.
 8. Depois, adicionar consulta filtrada/paginacao no backend para suportar bibliotecas maiores.
 
 ## Criterios minimos antes de seguir para providers

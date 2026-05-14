@@ -87,6 +87,14 @@ export const syncSteamGames = async () => {
   return invoke('sync_steam_games')
 }
 
+export const syncSteamAccountGames = async () => {
+  if (!hasTauriRuntime()) {
+    return null
+  }
+
+  return invoke('sync_steam_account_games')
+}
+
 export const getSteamAccountSettings = async () => {
   if (!hasTauriRuntime()) {
     return {

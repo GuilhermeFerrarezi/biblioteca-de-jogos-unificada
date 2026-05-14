@@ -5,6 +5,7 @@ import {
   launchLibraryEntry,
   listLibraryEntries,
   setLibraryEntryArchived,
+  syncSteamAccountGames,
   syncLocalGames,
   syncSteamGames,
   updatePersistedManualGame,
@@ -34,6 +35,7 @@ export function useLibraryPageState() {
   const [isBootstrapping, setIsBootstrapping] = useState(true)
   const [isLocalSyncing, setIsLocalSyncing] = useState(false)
   const [isSteamSyncing, setIsSteamSyncing] = useState(false)
+  const [isSteamAccountSyncing, setIsSteamAccountSyncing] = useState(false)
   const [isManualModalOpen, setIsManualModalOpen] = useState(false)
   const [editingEntryId, setEditingEntryId] = useState('')
   const [manualGameForm, setManualGameForm] = useState(emptyManualGameForm)
@@ -307,6 +309,34 @@ export function useLibraryPageState() {
     }
   }
 
+  const handleSyncSteamAccountGames = async () => {
+    if (isSteamAccountSyncing) {
+      return
+    }
+
+    setIsSteamAccountSyncing(true)
+    setLaunchMessage('Sincronizando biblioteca Steam por conta...')
+
+    try {
+      const summary = await syncSteamAccountGames()
+
+      if (!summary) {
+        setLaunchMessage('Sincronizacao por conta Steam disponivel apenas no aplicativo Tauri.')
+        return
+      }
+
+      await refreshEntries()
+      setLaunchMessage(
+        `Sincronizacao da conta Steam concluida: ${summary.inserted} novos, ${summary.updated} atualizados e ${summary.discovered} jogos retornados pela Web API.`,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setLaunchMessage(`Nao foi possivel sincronizar a conta Steam: ${message}`)
+    } finally {
+      setIsSteamAccountSyncing(false)
+    }
+  }
+
   const handleInstallAction = () => {
     if (!selectedEntry) {
       setLaunchMessage('Nenhum jogo selecionado.')
@@ -378,6 +408,7 @@ export function useLibraryPageState() {
     setLaunchMessage,
     isLocalSyncing,
     isSteamSyncing,
+    isSteamAccountSyncing,
     isManualModalOpen,
     manualGameForm,
     setManualGameForm,
@@ -395,6 +426,7 @@ export function useLibraryPageState() {
     handleNavigationFilter,
     handleSelectEntry,
     handleSyncLocalGames,
+    handleSyncSteamAccountGames,
     handleSyncSteamGames,
   }
 }
