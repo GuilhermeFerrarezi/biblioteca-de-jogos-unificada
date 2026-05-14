@@ -86,6 +86,8 @@ Atualizacao em 2026-05-14: apos teste manual da sincronizacao Steam, foi corrigi
 
 Atualizacao em 2026-05-14: apos revisao delegada aos agentes locais `04-backend-provider-agent.md`, `11-senior-database-agent.md` e `10-senior-integration-qa-agent.md`, a correcao do `Steamworks Common Redistributables` foi refinada. O arquivamento de entradas Steam tecnicas passou a ocorrer dentro da mesma transacao da sincronizacao, a heuristica automatica ficou baseada no AppID `228980`, e o feedback da UI passou a informar tambem a quantidade de entradas Steam arquivadas.
 
+Atualizacao em 2026-05-14: foi implementado o primeiro corte da area `Contas e integracoes`, com execucao delegada ao agente local de frontend/UX e revisao de escopo pelo agente de seguranca/QA. O botao `Contas` da sidebar agora abre uma tela real para Steam, Xbox/Game Pass e Epic. A Steam exibe o estado de sincronizacao local ativa e permite disparar a sincronizacao Steam ja existente; Xbox e Epic aparecem como integracoes planejadas. A tela nao pede nem salva API key, token, senha, cookie ou Steam Guard, preservando a decisao de implementar `AuthVault`/cofre seguro antes da Web API. Validacoes passaram: `npm run lint` e `npm run build`.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.

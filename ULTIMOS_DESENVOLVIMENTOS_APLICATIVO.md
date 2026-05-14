@@ -30,6 +30,15 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - Foi adicionado `ErrorBoundary` para reduzir queda total da interface em erros de renderizacao.
 - O botao de filtros executa uma acao real de limpar filtros.
 
+## Contas e configuracoes
+
+- O botao `Contas` da sidebar agora abre uma area real de `Contas e integracoes`.
+- A tela mostra Steam, Xbox/Game Pass e Epic Games em linhas de integracao.
+- Steam indica que a sincronizacao local por manifests ja esta ativa e permite disparar essa sincronizacao.
+- Xbox/Game Pass e Epic Games ficam como integracoes planejadas.
+- A tela nao pede API key, token, senha, cookie ou Steam Guard.
+- A Web API da Steam fica bloqueada para etapa futura ate existir armazenamento seguro no backend/Tauri.
+
 ## Persistencia SQLite
 
 - O backend Tauri usa SQLite local em `%APPDATA%\com.bibliotecajogos.unificada\library.sqlite3`.
@@ -94,6 +103,7 @@ Resultado registrado: frontend validado e suite Rust com 29 testes passando.
 
 ## Commits recentes relevantes
 
+- `a99f0cf fix(steam): apply provider agent review`
 - `87af4c2 fix(steam): ignore common redistributables`
 - `c61e6c7 docs(agents): require agent and skill workflow`
 - `d131d88 fix(steam): reconcile local sync state`

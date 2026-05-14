@@ -39,6 +39,7 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - A ponte com Tauri fica em `src/services/libraryService.js`, com fallback web carregado dinamicamente apenas em desenvolvimento.
 - Visualizacao padrao por capas, com alternativa em lista.
 - Sidebar, resumo da biblioteca, busca, filtros rapidos e painel de detalhes.
+- Area de `Contas e integracoes` acessivel pela sidebar, com Steam, Xbox/Game Pass e Epic preparados para evolucao.
 - Selecao real de jogo por clique ou teclado.
 - Cadastro manual de jogos implementado com persistencia SQLite no Tauri e fallback em memoria no navegador.
 - Edicao de jogos manuais reutiliza o mesmo modal de cadastro e persiste via comando Tauri.
@@ -52,6 +53,7 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - A limpeza de falsos positivos locais no boot usa indices especificos em `library_entries` e `launch_actions`, e e ignorada rapidamente quando nao ha entradas locais ativas.
 - O `LocalGamesProvider` nao varre bibliotecas Steam por padrao. A importacao Steam fica no comando `sync_steam_games`, que le `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos instalados sem exigir credenciais.
 - O frontend tem acoes separadas para sincronizar Steam e jogos locais. A sincronizacao Steam atual cobre instalacoes locais e cria acoes `steam://rungameid/<appid>`; a integracao Web API para biblioteca completa/playtime/metadados fica para o proximo corte.
+- A area de Contas nao solicita nem persiste segredos. API key/token/senha/cookies ficam fora do frontend ate existir `AuthVault`/cofre seguro no backend.
 - O comando `launch_library_entry` abre executaveis locais para jogos manuais e locais persistidos, validando caminho absoluto, arquivo existente, extensao `.exe` e sem usar shell.
 - O banco local e criado em `%APPDATA%\\com.bibliotecajogos.unificada\\library.sqlite3`.
 - No Tauri, o frontend carrega a biblioteca pelo comando `list_library_entries`; no navegador comum, usa os mocks como fallback de desenvolvimento.

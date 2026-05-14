@@ -6,7 +6,9 @@ const navItems = Object.freeze([
   { id: 'local', label: 'Locais', icon: HardDrive },
 ])
 
-function Sidebar({ quickFilter, onFilterChange, onAccountsClick }) {
+function Sidebar({ activeSection, quickFilter, onFilterChange, onAccountsClick }) {
+  const isAccountsActive = activeSection === 'accounts'
+
   return (
     <aside className="sidebar" aria-label="Navegacao principal">
       <div className="brand">
@@ -25,10 +27,10 @@ function Sidebar({ quickFilter, onFilterChange, onAccountsClick }) {
 
           return (
             <button
-              className={quickFilter === item.id ? 'nav-item active' : 'nav-item'}
+              className={activeSection === 'library' && quickFilter === item.id ? 'nav-item active' : 'nav-item'}
               type="button"
               key={item.id}
-              aria-pressed={quickFilter === item.id}
+              aria-pressed={activeSection === 'library' && quickFilter === item.id}
               onClick={() => onFilterChange(item.id)}
             >
               <Icon size={18} aria-hidden="true" />
@@ -36,7 +38,12 @@ function Sidebar({ quickFilter, onFilterChange, onAccountsClick }) {
             </button>
           )
         })}
-        <button className="nav-item" type="button" onClick={onAccountsClick}>
+        <button
+          className={isAccountsActive ? 'nav-item active' : 'nav-item'}
+          type="button"
+          aria-pressed={isAccountsActive}
+          onClick={onAccountsClick}
+        >
           <Settings size={18} aria-hidden="true" />
           Contas
         </button>
