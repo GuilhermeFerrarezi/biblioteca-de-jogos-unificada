@@ -156,7 +156,9 @@ As diretrizes consolidadas ficam em `DIRETRIZES_DESENVOLVIMENTO.md`. Em resumo:
 
 ## Banco de dados
 
-A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco principal fica em `%APPDATA%\com.bibliotecajogos.unificada\library.sqlite3` e e composto por `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres` e `schema_migrations`, com indices para listagem, filtros, acoes primarias e limpeza de falsos positivos locais.
+A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco principal fica em `%APPDATA%\com.bibliotecajogos.unificada\library.sqlite3` e e composto por `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres`, `provider_account_configs` e `schema_migrations`, com indices para listagem, filtros, acoes primarias e limpeza de falsos positivos locais.
+
+Atualizacao em 2026-05-14: foi adicionado o primeiro corte seguro de configuracao local da conta Steam. O backend Tauri criou os comandos `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config`; o frontend permite salvar/remover somente SteamID64 publico e estado local da integracao. Este corte nao faz login real, nao chama Web API e nao solicita nem persiste API key, token, senha, cookie ou Steam Guard. A desconexao remove a configuracao local e preserva os jogos Steam ja importados.
 
 ## MVP recomendado
 
@@ -187,6 +189,6 @@ A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco
 5. Testar manualmente no Tauri o fluxo completo: abertura rapida, bootstrap dos 4 mocks, adicionar jogo manual, editar, arquivar, reabrir e confirmar persistencia.
 6. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
 7. Iniciar `SteamProvider` como primeira integracao real usando padrao Service-Adapter e normalizacao para `LibraryEntry`.
-8. Evoluir o `SteamProvider` com Web API/configuracao de conta para biblioteca completa, playtime e metadados, mantendo fallback local por manifests.
+8. Evoluir o `SteamProvider` com Web API/AuthVault para biblioteca completa, playtime e metadados, mantendo fallback local por manifests e sem armazenar segredos fora do cofre seguro.
 9. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
 

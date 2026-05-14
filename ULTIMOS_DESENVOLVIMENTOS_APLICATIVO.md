@@ -35,6 +35,7 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - O botao `Contas` da sidebar agora abre uma area real de `Contas e integracoes`.
 - A tela mostra Steam, Xbox/Game Pass e Epic Games em linhas de integracao.
 - Steam indica que a sincronizacao local por manifests ja esta ativa e permite disparar essa sincronizacao.
+- Steam agora permite salvar e remover a configuracao local por SteamID64.
 - Xbox/Game Pass e Epic Games ficam como integracoes planejadas.
 - A tela nao pede API key, token, senha, cookie ou Steam Guard.
 - A Web API da Steam fica bloqueada para etapa futura ate existir armazenamento seguro no backend/Tauri.
@@ -42,7 +43,8 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 ## Persistencia SQLite
 
 - O backend Tauri usa SQLite local em `%APPDATA%\com.bibliotecajogos.unificada\library.sqlite3`.
-- O schema atual inclui `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres` e `schema_migrations`.
+- O schema atual inclui `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres`, `provider_account_configs` e `schema_migrations`.
+- `provider_account_configs` guarda somente estado local de integracao e SteamID64 publico, sem segredos.
 - O seed dos 4 mocks roda em background, sem bloquear a abertura do app.
 - A listagem principal vem do comando Tauri `list_library_entries`.
 - Entradas arquivadas sao preservadas no banco e ocultadas da listagem principal.
@@ -82,7 +84,8 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - O sync e idempotente: nao altera timestamps nem conta update quando nada mudou.
 - Quando um manifest some, a entrada e preservada e marcada como `not_installed`, sem arquivar automaticamente.
 - O AppID `228980` (`Steamworks Common Redistributables`) e filtrado por nao representar um jogo; se ja tiver sido importado, a proxima sincronizacao o arquiva.
-- A integracao Steam via Web API ainda nao foi implementada.
+- A configuracao local por SteamID64 usa os comandos `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config`.
+- A integracao Steam via Web API ainda nao foi implementada e continua bloqueada ate existir `AuthVault`/cofre seguro.
 
 ## Validacoes recentes
 
@@ -99,7 +102,7 @@ $env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\BibliotecaJogosUnificada\cargo-target
 cargo test
 ```
 
-Resultado registrado: frontend validado e suite Rust com 29 testes passando.
+Resultado registrado: frontend validado e suite Rust com 34 testes passando.
 
 ## Commits recentes relevantes
 

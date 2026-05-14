@@ -38,6 +38,9 @@ pub fn run() {
             commands::update_manual_game,
             commands::sync_local_games,
             commands::sync_steam_games,
+            commands::list_steam_account_config,
+            commands::save_steam_account_config,
+            commands::disconnect_steam_account_config,
             commands::set_library_entry_archived,
             commands::launch_library_entry,
         ])
@@ -129,6 +132,44 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         storage::sync_steam_games(&mut connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn list_steam_account_config(
+        state: State<'_, AppState>,
+    ) -> Result<storage::SteamAccountConfigDto, String> {
+        let connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::list_steam_account_config(&connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn save_steam_account_config(
+        input: storage::SteamAccountConfigInput,
+        state: State<'_, AppState>,
+    ) -> Result<storage::SteamAccountConfigDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::save_steam_account_config(&mut connection, input)
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn disconnect_steam_account_config(
+        state: State<'_, AppState>,
+    ) -> Result<storage::SteamAccountConfigDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::disconnect_steam_account_config(&mut connection).map_err(|error| error.to_string())
     }
 
     #[tauri::command]
@@ -510,6 +551,17 @@ mod storage {
         PRIMARY KEY (game_id, genre)
       );
 
+      CREATE TABLE IF NOT EXISTS provider_account_configs (
+        provider_id TEXT PRIMARY KEY,
+        auth_state TEXT NOT NULL,
+        steam_id64 TEXT,
+        configured_at TEXT,
+        disconnected_at TEXT,
+        updated_at TEXT NOT NULL,
+        CHECK (provider_id <> 'steam' OR steam_id64 IS NULL OR (length(steam_id64) = 17 AND steam_id64 NOT GLOB '*[^0-9]*')),
+        CHECK (auth_state IN ('configured', 'disconnected'))
+      );
+
       CREATE INDEX IF NOT EXISTS idx_games_sort_title ON games(sort_title);
       CREATE INDEX IF NOT EXISTS idx_library_entries_install_status ON library_entries(install_status);
       CREATE INDEX IF NOT EXISTS idx_library_entries_platform ON library_entries(primary_platform_id);
@@ -521,8 +573,18 @@ mod storage {
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?1)",
             params![now_iso()],
         )?;
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?1)",
+            params![now_iso()],
+        )?;
 
         Ok(())
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct SteamAccountConfigInput {
+        steam_id64: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -555,6 +617,17 @@ mod storage {
         updated: usize,
         archived: usize,
         unavailable: usize,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamAccountConfigDto {
+        provider_id: String,
+        auth_state: String,
+        steam_id64: Option<String>,
+        configured_at: Option<String>,
+        disconnected_at: Option<String>,
+        updated_at: Option<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -701,6 +774,64 @@ mod storage {
 
         rows.map(|row| row.and_then(|entry| hydrate_entry(connection, entry)))
             .collect()
+    }
+
+    pub fn list_steam_account_config(
+        connection: &Connection,
+    ) -> rusqlite::Result<SteamAccountConfigDto> {
+        find_steam_account_config(connection)
+            .map(|config| config.unwrap_or_else(default_steam_config))
+    }
+
+    pub fn save_steam_account_config(
+        connection: &mut Connection,
+        input: SteamAccountConfigInput,
+    ) -> rusqlite::Result<SteamAccountConfigDto> {
+        let steam_id64 = normalize_steam_id64(input.steam_id64)?;
+        let now = now_iso();
+        let transaction = connection.transaction()?;
+
+        transaction.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id, auth_state, steam_id64, configured_at, disconnected_at, updated_at
+            ) VALUES ('steam', 'configured', ?1, ?2, NULL, ?2)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              auth_state = 'configured',
+              steam_id64 = excluded.steam_id64,
+              configured_at = COALESCE(provider_account_configs.configured_at, excluded.configured_at),
+              disconnected_at = NULL,
+              updated_at = excluded.updated_at
+            "#,
+            params![steam_id64, now],
+        )?;
+        transaction.commit()?;
+
+        list_steam_account_config(connection)
+    }
+
+    pub fn disconnect_steam_account_config(
+        connection: &mut Connection,
+    ) -> rusqlite::Result<SteamAccountConfigDto> {
+        let now = now_iso();
+        let transaction = connection.transaction()?;
+
+        transaction.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id, auth_state, steam_id64, configured_at, disconnected_at, updated_at
+            ) VALUES ('steam', 'disconnected', NULL, NULL, ?1, ?1)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              auth_state = 'disconnected',
+              steam_id64 = NULL,
+              disconnected_at = excluded.disconnected_at,
+              updated_at = excluded.updated_at
+            "#,
+            params![now],
+        )?;
+        transaction.commit()?;
+
+        list_steam_account_config(connection)
     }
 
     pub fn add_manual_game(
@@ -1129,6 +1260,73 @@ mod storage {
         }
 
         Ok(false)
+    }
+
+    fn find_steam_account_config(
+        connection: &Connection,
+    ) -> rusqlite::Result<Option<SteamAccountConfigDto>> {
+        connection
+            .query_row(
+                r#"
+                SELECT provider_id, auth_state, steam_id64, configured_at, disconnected_at, updated_at
+                FROM provider_account_configs
+                WHERE provider_id = 'steam'
+                "#,
+                [],
+                |row| {
+                    Ok(SteamAccountConfigDto {
+                        provider_id: row.get(0)?,
+                        auth_state: row.get(1)?,
+                        steam_id64: row.get(2)?,
+                        configured_at: row.get(3)?,
+                        disconnected_at: row.get(4)?,
+                        updated_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    fn default_steam_config() -> SteamAccountConfigDto {
+        SteamAccountConfigDto {
+            provider_id: "steam".to_string(),
+            auth_state: "disconnected".to_string(),
+            steam_id64: None,
+            configured_at: None,
+            disconnected_at: None,
+            updated_at: None,
+        }
+    }
+
+    fn normalize_steam_id64(value: Option<String>) -> rusqlite::Result<Option<String>> {
+        value
+            .map(|steam_id64| {
+                let steam_id64 = steam_id64.trim();
+
+                if steam_id64.is_empty() {
+                    return Ok(None);
+                }
+
+                if is_valid_steam_id64(steam_id64) {
+                    Ok(Some(steam_id64.to_string()))
+                } else {
+                    Err(rusqlite::Error::InvalidParameterName(
+                        "SteamID64 deve conter 17 digitos validos.".to_string(),
+                    ))
+                }
+            })
+            .unwrap_or(Ok(None))
+    }
+
+    fn is_valid_steam_id64(value: &str) -> bool {
+        const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
+
+        value.len() == 17
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+            && value
+                .parse::<u64>()
+                .map(|id| id >= STEAM_ID64_BASE)
+                .unwrap_or(false)
     }
 
     struct SeedLibraryEntry {
@@ -2588,6 +2786,17 @@ mod storage {
                 .map(|value| value.is_some())
         }
 
+        fn table_exists(connection: &Connection, table_name: &str) -> rusqlite::Result<bool> {
+            connection
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    params![table_name],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map(|value| value.is_some())
+        }
+
         #[test]
         fn migration_creates_schema_version() {
             let connection = Connection::open_in_memory().expect("open in-memory database");
@@ -2595,12 +2804,14 @@ mod storage {
             migrate(&connection).expect("apply migration");
 
             let version: i64 = connection
-                .query_row("SELECT version FROM schema_migrations", [], |row| {
+                .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
                     row.get(0)
                 })
                 .expect("read schema version");
 
-            assert_eq!(version, 1);
+            assert_eq!(version, 2);
+            assert!(table_exists(&connection, "provider_account_configs")
+                .expect("check account config table"));
         }
 
         #[test]
@@ -2645,6 +2856,104 @@ mod storage {
             let entries = list_library_entries(&connection).expect("list empty entries");
 
             assert!(entries.is_empty());
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn open_database_starts_with_disconnected_steam_account_config() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-config-empty-{}.sqlite3",
+                timestamp_millis()
+            ));
+
+            let connection = open_database(&path).expect("open empty database");
+            let config = list_steam_account_config(&connection).expect("list default steam config");
+
+            assert_eq!(config.provider_id, "steam");
+            assert_eq!(config.auth_state, "disconnected");
+            assert_eq!(config.steam_id64, None);
+            assert_eq!(config.configured_at, None);
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn save_steam_account_config_accepts_valid_steam_id64() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+
+            let config = save_steam_account_config(
+                &mut connection,
+                SteamAccountConfigInput {
+                    steam_id64: Some("76561198000000000".to_string()),
+                },
+            )
+            .expect("save steam config");
+
+            assert_eq!(config.provider_id, "steam");
+            assert_eq!(config.auth_state, "configured");
+            assert_eq!(config.steam_id64, Some("76561198000000000".to_string()));
+            assert!(config.configured_at.is_some());
+            assert!(config.disconnected_at.is_none());
+            assert!(config.updated_at.is_some());
+        }
+
+        #[test]
+        fn save_steam_account_config_rejects_invalid_steam_id64() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+
+            let result = save_steam_account_config(
+                &mut connection,
+                SteamAccountConfigInput {
+                    steam_id64: Some("not-a-steam-id".to_string()),
+                },
+            );
+            let config =
+                list_steam_account_config(&connection).expect("list steam config after rejection");
+
+            assert!(result.is_err());
+            assert_eq!(config.auth_state, "disconnected");
+            assert_eq!(config.steam_id64, None);
+        }
+
+        #[test]
+        fn disconnect_steam_account_config_preserves_steam_library_entries() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-config-disconnect-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            save_steam_account_config(
+                &mut connection,
+                SteamAccountConfigInput {
+                    steam_id64: Some("76561198000000000".to_string()),
+                },
+            )
+            .expect("save steam config");
+            let before = list_library_entries(&connection).expect("list entries before disconnect");
+            let config = disconnect_steam_account_config(&mut connection)
+                .expect("disconnect steam account config");
+            let after = list_library_entries(&connection).expect("list entries after disconnect");
+
+            assert_eq!(config.auth_state, "disconnected");
+            assert_eq!(config.steam_id64, None);
+            assert!(config.disconnected_at.is_some());
+            assert_eq!(
+                before
+                    .iter()
+                    .filter(|entry| entry.primary_platform_id == "steam")
+                    .count(),
+                after
+                    .iter()
+                    .filter(|entry| entry.primary_platform_id == "steam")
+                    .count()
+            );
+            assert!(after
+                .iter()
+                .any(|entry| entry.primary_platform_id == "steam"));
 
             let _ = std::fs::remove_file(path);
         }

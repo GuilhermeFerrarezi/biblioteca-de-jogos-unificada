@@ -6,8 +6,29 @@ import {
   Cloud,
   Gamepad2,
   KeyRound,
+  LogOut,
   Store,
 } from 'lucide-react'
+import { useEffect, useId, useState } from 'react'
+import {
+  disconnectSteamAccountSettings,
+  getSteamAccountSettings,
+  saveSteamAccountSettings,
+} from '../services/libraryService'
+
+const STEAM_ID64_PATTERN = /^\d{17}$/
+
+const validateSteamId64 = (steamId64) => {
+  if (!steamId64.trim()) {
+    return 'Informe um SteamID64.'
+  }
+
+  if (!STEAM_ID64_PATTERN.test(steamId64.trim())) {
+    return 'Use apenas 17 digitos numericos.'
+  }
+
+  return ''
+}
 
 const accountProviders = Object.freeze([
   {
@@ -46,6 +67,126 @@ const accountProviders = Object.freeze([
 ])
 
 function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary, onSyncSteamGames }) {
+  const steamIdInputId = useId()
+  const steamIdErrorId = useId()
+  const [steamId64, setSteamId64] = useState('')
+  const [steamIdError, setSteamIdError] = useState('')
+  const [steamSettingsMessage, setSteamSettingsMessage] = useState('')
+  const [isSteamSettingsLoading, setIsSteamSettingsLoading] = useState(true)
+  const [isSteamSettingsSaving, setIsSteamSettingsSaving] = useState(false)
+  const [isSteamSettingsDisconnecting, setIsSteamSettingsDisconnecting] = useState(false)
+  const [isSteamSettingsBackendAvailable, setIsSteamSettingsBackendAvailable] = useState(false)
+  const [steamAuthState, setSteamAuthState] = useState('disconnected')
+  const trimmedSteamId64 = steamId64.trim()
+  const isSteamConfigured = steamAuthState === 'configured' && Boolean(trimmedSteamId64)
+
+  useEffect(() => {
+    let isMounted = true
+
+    const loadSteamSettings = async () => {
+      setIsSteamSettingsLoading(true)
+
+      try {
+        const settings = await getSteamAccountSettings()
+
+        if (!isMounted) {
+          return
+        }
+
+        setSteamId64(settings.steamId64)
+        setSteamAuthState(settings.authState)
+        setIsSteamSettingsBackendAvailable(settings.isBackendAvailable)
+        setSteamSettingsMessage(
+          settings.isBackendAvailable
+            ? 'Configuracao local Steam pronta.'
+            : 'Comando de configuracao Steam aguardando backend.',
+        )
+      } catch {
+        if (isMounted) {
+          setSteamSettingsMessage('Nao foi possivel carregar a configuracao Steam.')
+        }
+      } finally {
+        if (isMounted) {
+          setIsSteamSettingsLoading(false)
+        }
+      }
+    }
+
+    void loadSteamSettings()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  const handleSteamId64Change = (event) => {
+    const value = event.target.value.replace(/\D/g, '').slice(0, 17)
+
+    setSteamId64(value)
+    if (steamIdError) {
+      setSteamIdError(validateSteamId64(value))
+    }
+  }
+
+  const handleSteamSettingsSubmit = async (event) => {
+    event.preventDefault()
+
+    const validationError = validateSteamId64(trimmedSteamId64)
+
+    if (validationError) {
+      setSteamIdError(validationError)
+      setSteamSettingsMessage('Revise o SteamID64 antes de salvar.')
+      return
+    }
+
+    setSteamIdError('')
+    setIsSteamSettingsSaving(true)
+    setSteamSettingsMessage('Salvando configuracao Steam...')
+
+    try {
+      const result = await saveSteamAccountSettings({ steamId64: trimmedSteamId64 })
+
+      setIsSteamSettingsBackendAvailable(result.isBackendAvailable)
+      setSteamAuthState(result.authState)
+      setSteamId64(result.steamId64 || trimmedSteamId64)
+      setSteamSettingsMessage(
+        result.saved
+          ? 'SteamID64 salvo na configuracao local.'
+          : 'Backend ainda nao expoe o comando de salvar SteamID64.',
+      )
+    } catch {
+      setSteamSettingsMessage('Nao foi possivel salvar a configuracao Steam.')
+    } finally {
+      setIsSteamSettingsSaving(false)
+    }
+  }
+
+  const handleSteamSettingsDisconnect = async () => {
+    setIsSteamSettingsDisconnecting(true)
+    setSteamSettingsMessage('Removendo configuracao local Steam...')
+
+    try {
+      const result = await disconnectSteamAccountSettings()
+
+      setIsSteamSettingsBackendAvailable(result.isBackendAvailable)
+      setSteamAuthState(result.authState)
+      setSteamId64(result.steamId64)
+      setSteamIdError('')
+      setSteamSettingsMessage(
+        result.disconnected
+          ? 'Configuracao local Steam removida. Jogos importados foram preservados.'
+          : 'Backend ainda nao expoe o comando de desconectar Steam.',
+      )
+    } catch {
+      setSteamSettingsMessage('Nao foi possivel remover a configuracao Steam.')
+    } finally {
+      setIsSteamSettingsDisconnecting(false)
+    }
+  }
+
+  const isSteamSettingsBusy =
+    isSteamSettingsLoading || isSteamSettingsSaving || isSteamSettingsDisconnecting
+
   return (
     <section className="accounts-page" aria-labelledby="accounts-title">
       <header className="topbar accounts-topbar">
@@ -75,7 +216,7 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
           <div>
             <span className="summary-kicker">Seguranca</span>
             <strong>Nenhum segredo solicitado</strong>
-            <p>Esta tela ainda nao pede API key, token ou senha.</p>
+            <p>SteamID64 e identificador publico. API key, token, senha e cookie ficam fora desta etapa.</p>
           </div>
           <div className="summary-row">
             <KeyRound size={18} aria-hidden="true" />
@@ -83,7 +224,15 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
           </div>
           <div className="summary-row">
             <Cloud size={18} aria-hidden="true" />
-            <span>Web API Steam: proxima etapa</span>
+            <span>Web API e AuthVault: etapa futura</span>
+          </div>
+          <div className="summary-row">
+            <CheckCircle2 size={18} aria-hidden="true" />
+            <span>
+              {isSteamSettingsBackendAvailable
+                ? `Configuracao Steam: ${isSteamConfigured ? 'local salva' : 'nao configurada'}`
+                : 'Configuracao Steam: aguardando comandos'}
+            </span>
           </div>
           {feedbackMessage ? (
             <div className="account-feedback" role="status" aria-live="polite">
@@ -92,6 +241,65 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
           ) : null}
         </aside>
       </div>
+
+      <section className="steam-settings-panel" aria-labelledby="steam-settings-title" aria-busy={isSteamSettingsBusy}>
+        <div className="steam-settings-heading">
+          <div>
+            <span className="summary-kicker">Steam</span>
+            <h2 id="steam-settings-title">SteamID64</h2>
+            <p>Usado para preparar a sincronizacao por conta quando os comandos estiverem disponiveis.</p>
+          </div>
+          <span className="account-status" data-tone={isSteamSettingsBackendAvailable ? 'ready' : 'planned'}>
+            {isSteamSettingsBackendAvailable ? <CheckCircle2 size={14} aria-hidden="true" /> : <Clock3 size={14} aria-hidden="true" />}
+            {isSteamSettingsBackendAvailable ? (isSteamConfigured ? 'Configuracao local' : 'Nao configurada') : 'Aguardando backend'}
+          </span>
+        </div>
+
+        <form className="steam-settings-form" onSubmit={handleSteamSettingsSubmit}>
+          <label htmlFor={steamIdInputId}>
+            <span>SteamID64</span>
+            <input
+              id={steamIdInputId}
+              inputMode="numeric"
+              maxLength={17}
+              pattern="[0-9]{17}"
+              placeholder="76561198000000000"
+              type="text"
+              value={steamId64}
+              aria-describedby={steamIdError ? steamIdErrorId : undefined}
+              aria-invalid={steamIdError ? 'true' : 'false'}
+              disabled={isSteamSettingsLoading}
+              onChange={handleSteamId64Change}
+            />
+          </label>
+
+          {steamIdError ? (
+            <p className="form-error" id={steamIdErrorId}>
+              {steamIdError}
+            </p>
+          ) : null}
+
+          <div className="steam-settings-actions">
+            <p role="status" aria-live="polite">
+              {steamSettingsMessage}
+            </p>
+            <div className="steam-settings-buttons">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isSteamSettingsBusy || !isSteamConfigured}
+                onClick={handleSteamSettingsDisconnect}
+              >
+                <LogOut size={18} aria-hidden="true" />
+                {isSteamSettingsDisconnecting ? 'Removendo' : 'Remover configuracao'}
+              </button>
+              <button className="primary-button" type="submit" disabled={isSteamSettingsBusy}>
+                {isSteamSettingsSaving ? 'Salvando' : 'Salvar SteamID64'}
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
     </section>
   )
 }

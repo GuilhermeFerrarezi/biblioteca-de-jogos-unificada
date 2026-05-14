@@ -29,6 +29,7 @@ O seed dos 4 mocks nao roda no caminho critico do boot. Ele e executado em backg
 
 ```text
 schema_migrations
+provider_account_configs
 
 games
   1 -- 1 library_entries
@@ -47,8 +48,27 @@ Controla a versao aplicada do schema.
 
 | Coluna | Tipo | Regra | Uso |
 | --- | --- | --- | --- |
-| `version` | `INTEGER` | `PRIMARY KEY` | Versao da migracao aplicada. Hoje o schema registra `1`. |
+| `version` | `INTEGER` | `PRIMARY KEY` | Versao da migracao aplicada. Hoje o schema registra ate `2`. |
 | `applied_at` | `TEXT` | `NOT NULL` | Timestamp ISO da aplicacao da migracao. |
+
+### `provider_account_configs`
+
+Guarda apenas estado de configuracao de integracoes. Nao armazena senha, cookie, token, Steam Guard ou API key.
+
+| Coluna | Tipo | Regra | Uso |
+| --- | --- | --- | --- |
+| `provider_id` | `TEXT` | `PRIMARY KEY` | Provider configurado. Neste corte, `steam`. |
+| `auth_state` | `TEXT` | `NOT NULL`, `configured` ou `disconnected` | Estado da integracao sem representar login real. |
+| `steam_id64` | `TEXT` | Opcional, 17 digitos quando informado | Identificador publico/opcional da conta Steam. |
+| `configured_at` | `TEXT` | Opcional | Primeiro timestamp ISO em que a integracao foi marcada como configurada. |
+| `disconnected_at` | `TEXT` | Opcional | Timestamp ISO da ultima desconexao. |
+| `updated_at` | `TEXT` | `NOT NULL` | Timestamp ISO da ultima alteracao. |
+
+Regras de seguranca:
+
+- `save_steam_account_config` aceita somente `steamId64` opcional.
+- Payloads com campos desconhecidos sao rejeitados pelo backend.
+- Desconectar a conta limpa `steam_id64` e muda o estado para `disconnected`, mas preserva os jogos Steam ja importados.
 
 ### `games`
 
@@ -203,6 +223,12 @@ Regras atuais:
 A sincronizacao e idempotente: se o AppID ja existir em `game_sources`, a entrada e atualizada em vez de duplicada.
 Quando um AppID Steam persistido deixa de aparecer nos manifests locais, a entrada e preservada, mas `games.installed` passa para `0` e `library_entries.install_status` passa para `not_installed`. Arquivamento continua sendo decisao explicita do usuario.
 Entradas tecnicas da Steam que nao representam jogos, como AppID `228980` (`Steamworks Common Redistributables`), sao rejeitadas na descoberta e arquivadas caso ja tenham sido importadas antes.
+
+### Configuracao de conta Steam
+
+Os comandos Tauri `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config` gerenciam somente a configuracao local da integracao Steam.
+
+Este primeiro corte nao faz login real, nao chama Web API e nao pede nem persiste API key/token/senha/cookie/Steam Guard. O objetivo e permitir que a UI registre que a integracao Steam foi configurada ou desconectada e, opcionalmente, associe um SteamID64 valido para evolucoes futuras.
 
 ## Regras para evoluir o schema
 

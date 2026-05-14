@@ -869,6 +869,94 @@ button:disabled {
   font-size: 13px;
 }
 
+.steam-settings-panel {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-panel);
+}
+
+.steam-settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+
+.steam-settings-heading h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.steam-settings-heading p {
+  margin: 6px 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.steam-settings-form {
+  display: grid;
+  gap: 10px;
+}
+
+.steam-settings-form label {
+  display: grid;
+  gap: 8px;
+  color: var(--color-subtle);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.steam-settings-form input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-input);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.steam-settings-form input:focus {
+  border-color: var(--color-accent-strong);
+  outline: 2px solid rgba(45, 212, 191, 0.24);
+  outline-offset: 1px;
+}
+
+.steam-settings-form input[aria-invalid='true'] {
+  border-color: #f87171;
+}
+
+.steam-settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.steam-settings-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.steam-settings-actions p {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -937,6 +1025,18 @@ button:disabled {
   .account-row .primary-button,
   .account-row .secondary-button {
     grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .steam-settings-heading,
+  .steam-settings-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .steam-settings-buttons,
+  .steam-settings-actions .primary-button,
+  .steam-settings-actions .secondary-button {
     width: 100%;
   }
 }
