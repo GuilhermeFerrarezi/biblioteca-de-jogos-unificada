@@ -108,7 +108,7 @@ $env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\BibliotecaJogosUnificada\cargo-target
 cargo test
 ```
 
-Resultado registrado: frontend validado e suite Rust com 41 testes passando.
+Resultado registrado: frontend validado e suite Rust com 42 testes passando.
 
 ## Commits recentes relevantes
 

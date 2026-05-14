@@ -193,6 +193,10 @@ mod auth_vault {
         let api_key = normalize_steam_api_key(input.api_key)?;
 
         vault.set_secret(STEAM_API_KEY_ACCOUNT, &api_key)?;
+        if vault.get_secret(STEAM_API_KEY_ACCOUNT)? != Some(api_key) {
+            return Err(AuthVaultError::SecureStorageUnavailable);
+        }
+
         Ok(steam_api_key_status(true))
     }
 
@@ -983,6 +987,7 @@ mod storage {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&connection)?;
         ensure_archived_column(&connection)?;
+        ensure_provider_account_config_columns(&connection)?;
         ensure_active_entries_index(&connection)?;
         ensure_local_cleanup_indexes(&connection)?;
         archive_rejected_local_entries(&connection)?;
@@ -1077,6 +1082,35 @@ mod storage {
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?1)",
             params![now_iso()],
         )?;
+
+        Ok(())
+    }
+
+    fn ensure_provider_account_config_columns(connection: &Connection) -> rusqlite::Result<()> {
+        if !table_exists(connection, "provider_account_configs")? {
+            return Ok(());
+        }
+
+        if !table_has_column(connection, "provider_account_configs", "auth_state")? {
+            connection.execute(
+                "ALTER TABLE provider_account_configs ADD COLUMN auth_state TEXT NOT NULL DEFAULT 'disconnected'",
+                [],
+            )?;
+        }
+
+        if !table_has_column(connection, "provider_account_configs", "configured_at")? {
+            connection.execute(
+                "ALTER TABLE provider_account_configs ADD COLUMN configured_at TEXT",
+                [],
+            )?;
+        }
+
+        if !table_has_column(connection, "provider_account_configs", "disconnected_at")? {
+            connection.execute(
+                "ALTER TABLE provider_account_configs ADD COLUMN disconnected_at TEXT",
+                [],
+            )?;
+        }
 
         Ok(())
     }
@@ -1766,6 +1800,17 @@ mod storage {
         }
 
         Ok(false)
+    }
+
+    fn table_exists(connection: &Connection, table_name: &str) -> rusqlite::Result<bool> {
+        connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table_name],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|value| value.is_some())
     }
 
     fn find_steam_account_config(
@@ -3449,6 +3494,55 @@ mod storage {
             assert_eq!(config.auth_state, "disconnected");
             assert_eq!(config.steam_id64, None);
             assert_eq!(config.configured_at, None);
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn open_database_upgrades_legacy_provider_account_config_schema() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-legacy-provider-config-{}.sqlite3",
+                timestamp_millis()
+            ));
+            {
+                let connection = Connection::open(&path).expect("open legacy database");
+                connection
+                    .execute_batch(
+                        r#"
+                        CREATE TABLE provider_account_configs (
+                          provider_id TEXT PRIMARY KEY,
+                          account_id TEXT,
+                          steam_id64 TEXT,
+                          config_json TEXT,
+                          updated_at TEXT NOT NULL
+                        );
+                        INSERT INTO provider_account_configs (
+                          provider_id, account_id, steam_id64, config_json, updated_at
+                        ) VALUES (
+                          'steam', NULL, '76561198000000000', '{}', '2026-05-14T00:00:00Z'
+                        );
+                        "#,
+                    )
+                    .expect("create legacy provider config table");
+            }
+
+            let connection = open_database(&path).expect("upgrade legacy provider config database");
+            let config = list_steam_account_config(&connection).expect("list upgraded config");
+
+            assert_eq!(config.auth_state, "disconnected");
+            assert_eq!(config.steam_id64, Some("76561198000000000".to_string()));
+            assert!(
+                table_has_column(&connection, "provider_account_configs", "auth_state")
+                    .expect("check auth_state column")
+            );
+            assert!(
+                table_has_column(&connection, "provider_account_configs", "configured_at")
+                    .expect("check configured_at column")
+            );
+            assert!(
+                table_has_column(&connection, "provider_account_configs", "disconnected_at")
+                    .expect("check disconnected_at column")
+            );
 
             let _ = std::fs::remove_file(path);
         }
