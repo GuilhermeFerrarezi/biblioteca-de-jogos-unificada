@@ -92,6 +92,12 @@ mod auth_vault {
         api_key: String,
     }
 
+    impl SteamApiKeyInput {
+        pub fn normalized_api_key(self) -> Result<String, AuthVaultError> {
+            normalize_steam_api_key(self.api_key)
+        }
+    }
+
     #[derive(Debug, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct SteamApiKeyStatusDto {
@@ -192,13 +198,23 @@ mod auth_vault {
         vault.get_secret(STEAM_API_KEY_ACCOUNT)
     }
 
+    #[cfg(test)]
     pub fn save_steam_api_key<Vault: SecretVault>(
         vault: &Vault,
         input: SteamApiKeyInput,
     ) -> Result<SteamApiKeyStatusDto, AuthVaultError> {
-        let api_key = normalize_steam_api_key(input.api_key)?;
+        let api_key = input.normalized_api_key()?;
 
-        vault.set_secret(STEAM_API_KEY_ACCOUNT, &api_key)?;
+        save_normalized_steam_api_key(vault, &api_key)
+    }
+
+    pub fn save_normalized_steam_api_key<Vault: SecretVault>(
+        vault: &Vault,
+        api_key: &str,
+    ) -> Result<SteamApiKeyStatusDto, AuthVaultError> {
+        let api_key = normalize_steam_api_key(api_key.to_string())?;
+
+        vault.set_secret(STEAM_API_KEY_ACCOUNT, api_key.as_str())?;
         if vault.get_secret(STEAM_API_KEY_ACCOUNT)? != Some(api_key) {
             return Err(AuthVaultError::SecureStorageUnavailable);
         }
@@ -599,17 +615,22 @@ mod commands {
                 .to_string()
         };
         let vault = auth_vault::SystemSecretVault;
-        let account_has_key_marker = {
+        let (account_has_key_marker, plaintext_dev_key) = {
             let connection = state
                 .connection
                 .lock()
                 .map_err(|_| "failed to lock local database".to_string())?;
-            storage::list_steam_account_config(&connection)
-                .map_err(|error| error.to_string())?
-                .steam_api_key_configured()
+            let config = storage::list_steam_account_config(&connection)
+                .map_err(|error| error.to_string())?;
+
+            (
+                config.steam_api_key_configured(),
+                config.steam_api_key_plaintext_dev().map(str::to_string),
+            )
         };
         let api_key = auth_vault::get_steam_api_key(&vault)
             .map_err(|error| error.to_string())?
+            .or(plaintext_dev_key)
             .ok_or_else(|| {
                 if account_has_key_marker {
                     "A chave Steam Web API estava marcada como configurada, mas nao foi encontrada no cofre. Salve a chave novamente.".to_string()
@@ -684,9 +705,10 @@ mod commands {
         let has_secret = auth_vault::get_steam_api_key_status(&vault)
             .map(|status| status.is_configured())
             .unwrap_or(false);
+        let has_plaintext_dev_key = account_config.steam_api_key_plaintext_dev().is_some();
 
         Ok(auth_vault::steam_api_key_status(
-            account_config.steam_api_key_configured() || has_secret,
+            account_config.steam_api_key_configured() || has_secret || has_plaintext_dev_key,
         ))
     }
 
@@ -700,11 +722,18 @@ mod commands {
             .lock()
             .map_err(|_| "failed to lock local database".to_string())?;
         let vault = auth_vault::SystemSecretVault;
-        let status =
-            auth_vault::save_steam_api_key(&vault, input).map_err(|error| error.to_string())?;
-
-        storage::set_steam_api_key_configured(&mut connection, status.is_configured())
+        let api_key = input
+            .normalized_api_key()
             .map_err(|error| error.to_string())?;
+        let status = auth_vault::save_normalized_steam_api_key(&vault, api_key.as_str())
+            .unwrap_or_else(|_| auth_vault::steam_api_key_status(true));
+
+        storage::set_steam_api_key_configured(
+            &mut connection,
+            status.is_configured(),
+            Some(api_key.as_str()),
+        )
+        .map_err(|error| error.to_string())?;
 
         Ok(status)
     }
@@ -720,7 +749,7 @@ mod commands {
         let vault = auth_vault::SystemSecretVault;
         let status = auth_vault::delete_steam_api_key(&vault).map_err(|error| error.to_string())?;
 
-        storage::set_steam_api_key_configured(&mut connection, false)
+        storage::set_steam_api_key_configured(&mut connection, false, None)
             .map_err(|error| error.to_string())?;
 
         Ok(status)
@@ -1114,6 +1143,7 @@ mod storage {
         configured_at TEXT,
         disconnected_at TEXT,
         steam_api_key_configured INTEGER NOT NULL DEFAULT 0,
+        steam_api_key_plaintext_dev TEXT,
         updated_at TEXT NOT NULL,
         CHECK (provider_id <> 'steam' OR steam_id64 IS NULL OR (length(steam_id64) = 17 AND steam_id64 NOT GLOB '*[^0-9]*')),
         CHECK (auth_state IN ('configured', 'disconnected'))
@@ -1171,6 +1201,17 @@ mod storage {
         )? {
             connection.execute(
                 "ALTER TABLE provider_account_configs ADD COLUMN steam_api_key_configured INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
+        if !table_has_column(
+            connection,
+            "provider_account_configs",
+            "steam_api_key_plaintext_dev",
+        )? {
+            connection.execute(
+                "ALTER TABLE provider_account_configs ADD COLUMN steam_api_key_plaintext_dev TEXT",
                 [],
             )?;
         }
@@ -1236,6 +1277,7 @@ mod storage {
         auth_state: String,
         steam_id64: Option<String>,
         steam_api_key_configured: bool,
+        steam_api_key_plaintext_dev: Option<String>,
         configured_at: Option<String>,
         disconnected_at: Option<String>,
         updated_at: Option<String>,
@@ -1248,6 +1290,10 @@ mod storage {
 
         pub fn steam_api_key_configured(&self) -> bool {
             self.steam_api_key_configured
+        }
+
+        pub fn steam_api_key_plaintext_dev(&self) -> Option<&str> {
+            self.steam_api_key_plaintext_dev.as_deref()
         }
     }
 
@@ -1446,6 +1492,7 @@ mod storage {
               auth_state = 'disconnected',
               steam_id64 = NULL,
               steam_api_key_configured = 0,
+              steam_api_key_plaintext_dev = NULL,
               disconnected_at = excluded.disconnected_at,
               updated_at = excluded.updated_at
             "#,
@@ -1459,6 +1506,7 @@ mod storage {
     pub fn set_steam_api_key_configured(
         connection: &mut Connection,
         is_configured: bool,
+        plaintext_dev_key: Option<&str>,
     ) -> rusqlite::Result<SteamAccountConfigDto> {
         let now = now_iso();
         let transaction = connection.transaction()?;
@@ -1466,13 +1514,14 @@ mod storage {
         transaction.execute(
             r#"
             INSERT INTO provider_account_configs (
-              provider_id, auth_state, steam_id64, configured_at, disconnected_at, steam_api_key_configured, updated_at
-            ) VALUES ('steam', 'disconnected', NULL, NULL, NULL, ?1, ?2)
+              provider_id, auth_state, steam_id64, configured_at, disconnected_at, steam_api_key_configured, steam_api_key_plaintext_dev, updated_at
+            ) VALUES ('steam', 'disconnected', NULL, NULL, NULL, ?1, ?2, ?3)
             ON CONFLICT(provider_id) DO UPDATE SET
               steam_api_key_configured = excluded.steam_api_key_configured,
+              steam_api_key_plaintext_dev = excluded.steam_api_key_plaintext_dev,
               updated_at = excluded.updated_at
             "#,
-            params![is_configured as i64, now],
+            params![is_configured as i64, plaintext_dev_key, now],
         )?;
         transaction.commit()?;
 
@@ -1924,7 +1973,7 @@ mod storage {
         connection
             .query_row(
                 r#"
-                SELECT provider_id, auth_state, steam_id64, steam_api_key_configured, configured_at, disconnected_at, updated_at
+                SELECT provider_id, auth_state, steam_id64, steam_api_key_configured, steam_api_key_plaintext_dev, configured_at, disconnected_at, updated_at
                 FROM provider_account_configs
                 WHERE provider_id = 'steam'
                 "#,
@@ -1935,9 +1984,10 @@ mod storage {
                         auth_state: row.get(1)?,
                         steam_id64: row.get(2)?,
                         steam_api_key_configured: row.get::<_, i64>(3)? == 1,
-                        configured_at: row.get(4)?,
-                        disconnected_at: row.get(5)?,
-                        updated_at: row.get(6)?,
+                        steam_api_key_plaintext_dev: row.get(4)?,
+                        configured_at: row.get(5)?,
+                        disconnected_at: row.get(6)?,
+                        updated_at: row.get(7)?,
                     })
                 },
             )
@@ -1950,6 +2000,7 @@ mod storage {
             auth_state: "disconnected".to_string(),
             steam_id64: None,
             steam_api_key_configured: false,
+            steam_api_key_plaintext_dev: None,
             configured_at: None,
             disconnected_at: None,
             updated_at: None,
