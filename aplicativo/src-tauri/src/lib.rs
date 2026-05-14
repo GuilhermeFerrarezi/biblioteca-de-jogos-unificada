@@ -334,6 +334,8 @@ mod steam_web_api {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum SteamWebApiError {
+        AccessDenied,
+        RateLimited,
         RequestFailed,
         InvalidResponse,
     }
@@ -341,6 +343,18 @@ mod steam_web_api {
     impl fmt::Display for SteamWebApiError {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
+                SteamWebApiError::AccessDenied => {
+                    write!(
+                        formatter,
+                        "A Steam recusou a consulta. Verifique a chave Web API, o SteamID64 e a visibilidade da biblioteca."
+                    )
+                }
+                SteamWebApiError::RateLimited => {
+                    write!(
+                        formatter,
+                        "A Steam limitou temporariamente as consultas. Aguarde alguns minutos e tente novamente."
+                    )
+                }
                 SteamWebApiError::RequestFailed => {
                     write!(formatter, "Nao foi possivel consultar a Steam Web API.")
                 }
@@ -375,7 +389,11 @@ mod steam_web_api {
                 .query("include_played_free_games", "1")
                 .query("format", "json")
                 .call()
-                .map_err(|_| SteamWebApiError::RequestFailed)?
+                .map_err(|error| match error {
+                    ureq::Error::Status(401 | 403, _) => SteamWebApiError::AccessDenied,
+                    ureq::Error::Status(429, _) => SteamWebApiError::RateLimited,
+                    _ => SteamWebApiError::RequestFailed,
+                })?
                 .into_json::<SteamOwnedGamesResponse>()
                 .map_err(|_| SteamWebApiError::InvalidResponse)
         }

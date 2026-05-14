@@ -169,8 +169,10 @@ function AccountsSettingsPage({
         setIsSteamApiKeyBackendAvailable(status.isBackendAvailable)
         setIsSteamApiKeyConfigured(status.isConfigured)
         setSteamApiKeyMessage(
-          status.isBackendAvailable
-            ? 'Cofre Steam pronto.'
+          status.isBackendAvailable && status.isConfigured
+            ? 'Chave salva no cofre. Por seguranca, o valor nao e exibido.'
+            : status.isBackendAvailable
+              ? 'Cofre Steam pronto. Salve a chave Web API para sincronizar a conta.'
             : 'Comando do AuthVault Steam aguardando backend.',
         )
       } catch {
@@ -288,7 +290,7 @@ function AccountsSettingsPage({
       setSteamApiKey('')
       setSteamApiKeyMessage(
         result.saved
-          ? 'Chave Steam salva no cofre seguro.'
+          ? 'Chave Steam salva no cofre seguro. Por seguranca, o campo foi limpo.'
           : 'Backend ainda nao expoe o comando de salvar chave Steam.',
       )
     } catch {
@@ -354,8 +356,8 @@ function AccountsSettingsPage({
         <aside className="accounts-summary" aria-label="Estado das integracoes">
           <div>
             <span className="summary-kicker">Seguranca</span>
-            <strong>Nenhum segredo solicitado</strong>
-            <p>SteamID64 e identificador publico. API key, token, senha e cookie ficam fora desta etapa.</p>
+            <strong>Segredos ficam no cofre</strong>
+            <p>SteamID64 e publico. A chave Web API fica no AuthVault e nao volta para a interface.</p>
           </div>
           <div className="summary-row">
             <KeyRound size={18} aria-hidden="true" />
@@ -365,7 +367,9 @@ function AccountsSettingsPage({
           </div>
           <div className="summary-row">
             <Cloud size={18} aria-hidden="true" />
-            <span>Web API e AuthVault: etapa futura</span>
+            <span>
+              Web API: {canSyncSteamAccount ? 'pronta para sincronizar' : 'aguardando SteamID64 e chave'}
+            </span>
           </div>
           <div className="summary-row">
             <CheckCircle2 size={18} aria-hidden="true" />
@@ -388,7 +392,7 @@ function AccountsSettingsPage({
           <div>
             <span className="summary-kicker">Steam</span>
             <h2 id="steam-settings-title">SteamID64</h2>
-            <p>Usado para preparar a sincronizacao por conta quando os comandos estiverem disponiveis.</p>
+            <p>Identifica a conta consultada pela sincronizacao Web API.</p>
           </div>
           <span className="account-status" data-tone={isSteamSettingsBackendAvailable ? 'ready' : 'planned'}>
             {isSteamSettingsBackendAvailable ? <CheckCircle2 size={14} aria-hidden="true" /> : <Clock3 size={14} aria-hidden="true" />}
@@ -475,6 +479,9 @@ function AccountsSettingsPage({
               disabled={isSteamApiKeyLoading}
               onChange={handleSteamApiKeyChange}
             />
+            {isSteamApiKeyConfigured ? (
+              <small className="field-hint">Chave salva no cofre. O valor nao e carregado na tela.</small>
+            ) : null}
           </label>
 
           {steamApiKeyError ? (

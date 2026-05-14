@@ -686,6 +686,12 @@ button:disabled {
   margin-top: -3px;
 }
 
+.field-hint {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .manual-game-form input[aria-invalid='true'] {
   border-color: #ef4444;
   box-shadow: 0 0 0 3px rgb(239 68 68 / 16%);

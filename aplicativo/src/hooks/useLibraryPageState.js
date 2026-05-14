@@ -326,6 +326,13 @@ export function useLibraryPageState() {
       }
 
       await refreshEntries()
+      if (summary.discovered === 0) {
+        setLaunchMessage(
+          'A Steam Web API respondeu, mas nao retornou jogos. Verifique se a biblioteca da conta esta publica/visivel para a chave usada.',
+        )
+        return
+      }
+
       setLaunchMessage(
         `Sincronizacao da conta Steam concluida: ${summary.inserted} novos, ${summary.updated} atualizados e ${summary.discovered} jogos retornados pela Web API.`,
       )
