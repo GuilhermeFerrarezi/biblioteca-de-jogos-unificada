@@ -82,6 +82,8 @@ Atualizacao em 2026-05-13: as diretrizes de governanca foram reforcadas para exi
 
 Atualizacao em 2026-05-14: foi criado `ULTIMOS_DESENVOLVIMENTOS_APLICATIVO.md`, um resumo de leitura rapida dos marcos recentes do aplicativo. O arquivo consolida governanca de agentes/skills, reorganizacao do frontend, melhorias de UI/acessibilidade, persistencia SQLite, jogos manuais, lancamento seguro, `LocalGamesProvider`, primeiro corte do `SteamProvider` local, validacoes recentes, commits relevantes e proximos cortes recomendados.
 
+Atualizacao em 2026-05-14: apos teste manual da sincronizacao Steam, foi corrigido um falso positivo do `SteamProvider` local. O AppID `228980` (`Steamworks Common Redistributables`) agora e rejeitado na descoberta por manifest e qualquer entrada Steam desse tipo ja importada e arquivada na proxima sincronizacao, removendo-a da listagem principal sem apagar dados. Foi adicionado teste Rust para garantir que redistribuiveis comuns da Steam sejam ignorados/arquivados.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.

@@ -1352,12 +1352,13 @@ mod storage {
         roots: &[PathBuf],
     ) -> rusqlite::Result<SyncSummaryDto> {
         let candidates = discover_steam_game_candidates(roots);
+        let archived = archive_rejected_steam_entries(connection)?;
         let existing_entries = list_steam_entries_by_source(connection)?;
         let mut summary = SyncSummaryDto {
             discovered: candidates.len(),
             inserted: 0,
             updated: 0,
-            archived: 0,
+            archived,
             unavailable: 0,
         };
 
@@ -1379,7 +1380,9 @@ mod storage {
         }
 
         for (app_id, existing_row) in &existing_entries {
-            if !discovered_app_ids.contains(app_id)
+            if !existing_row.is_archived
+                && !is_rejected_steam_app(app_id, &existing_row.title)
+                && !discovered_app_ids.contains(app_id)
                 && mark_steam_entry_unavailable(&transaction, existing_row)?
             {
                 summary.unavailable += 1;
@@ -1554,7 +1557,11 @@ mod storage {
                         continue;
                     }
 
-                    if let Some(candidate) = parse_steam_manifest_candidate(&manifest_path) {
+                    if let Some(candidate) =
+                        parse_steam_manifest_candidate(&manifest_path).filter(|candidate| {
+                            !is_rejected_steam_app(&candidate.app_id, &candidate.title)
+                        })
+                    {
                         candidates
                             .entry(candidate.app_id.clone())
                             .or_insert(candidate);
@@ -1643,6 +1650,10 @@ mod storage {
             install_path,
             accent_color,
         })
+    }
+
+    fn is_rejected_steam_app(app_id: &str, title: &str) -> bool {
+        app_id == "228980" || normalize_name(title) == "steamworkscommonredistributables"
     }
 
     fn key_value_pairs(contents: &str) -> Vec<(String, String)> {
@@ -2289,6 +2300,31 @@ mod storage {
         Ok(true)
     }
 
+    fn archive_rejected_steam_entries(connection: &Connection) -> rusqlite::Result<usize> {
+        let updated_at = now_iso();
+
+        connection.execute(
+            r#"
+            UPDATE library_entries
+            SET is_archived = 1,
+                updated_at = ?1
+            WHERE primary_platform_id = 'steam'
+              AND is_archived = 0
+              AND game_id IN (
+                SELECT games.id
+                FROM games
+                JOIN game_sources ON game_sources.game_id = games.id
+                WHERE game_sources.platform_id = 'steam'
+                  AND (
+                    game_sources.external_id = '228980'
+                    OR lower(games.title) = lower('Steamworks Common Redistributables')
+                  )
+              )
+            "#,
+            params![updated_at],
+        )
+    }
+
     fn insert_local_entry(
         transaction: &rusqlite::Transaction<'_>,
         candidate: &LocalGameCandidate,
@@ -2754,6 +2790,68 @@ mod storage {
             assert_eq!(entries[0].primary_platform_id, "steam");
             assert_eq!(entries[0].install_status, "not_installed");
             assert!(!entries[0].game.installed);
+
+            let _ = std::fs::remove_dir_all(steam_root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_steam_games_ignores_and_archives_common_redistributables() {
+            let steam_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-redist-root-{}",
+                timestamp_millis()
+            ));
+            let steamapps = steam_root.join("steamapps");
+            let common = steamapps.join("common").join("Steamworks Shared");
+            let manifest = steamapps.join("appmanifest_228980.acf");
+
+            std::fs::create_dir_all(&common).expect("create steam redist library");
+            std::fs::write(
+                &manifest,
+                r#""AppState"
+{
+  "appid" "228980"
+  "name" "Steamworks Common Redistributables"
+  "installdir" "Steamworks Shared"
+}
+"#,
+            )
+            .expect("write steam redist manifest");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-redist-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+            let stale_candidate = SteamGameCandidate {
+                app_id: "228980".to_string(),
+                title: "Steamworks Common Redistributables".to_string(),
+                install_path: Some(common.to_string_lossy().to_string()),
+                source_id: "source-steam-228980".to_string(),
+                game_id: "game-steam-common-redistributables-228980".to_string(),
+                entry_id: "entry-steam-common-redistributables-228980".to_string(),
+                launch_id: "launch-steam-228980".to_string(),
+                accent_color: "#64748b",
+            };
+
+            {
+                let transaction = connection.transaction().expect("start transaction");
+                insert_steam_entry(&transaction, &stale_candidate)
+                    .expect("insert stale redist entry");
+                transaction.commit().expect("commit stale redist entry");
+            }
+
+            let summary =
+                sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
+                    .expect("sync steam redist");
+            let entries = list_library_entries(&connection).expect("list steam entries");
+
+            assert_eq!(summary.discovered, 0);
+            assert_eq!(summary.inserted, 0);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 1);
+            assert_eq!(summary.unavailable, 0);
+            assert!(entries.is_empty());
 
             let _ = std::fs::remove_dir_all(steam_root);
             let _ = std::fs::remove_file(path);

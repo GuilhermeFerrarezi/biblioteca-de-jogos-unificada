@@ -72,6 +72,7 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - A acao primaria usa `steam://rungameid/<appid>`.
 - O sync e idempotente: nao altera timestamps nem conta update quando nada mudou.
 - Quando um manifest some, a entrada e preservada e marcada como `not_installed`, sem arquivar automaticamente.
+- O AppID `228980` (`Steamworks Common Redistributables`) e filtrado por nao representar um jogo; se ja tiver sido importado, a proxima sincronizacao o arquiva.
 - A integracao Steam via Web API ainda nao foi implementada.
 
 ## Validacoes recentes
