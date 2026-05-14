@@ -41,6 +41,9 @@ pub fn run() {
             commands::list_steam_account_config,
             commands::save_steam_account_config,
             commands::disconnect_steam_account_config,
+            commands::get_steam_api_key_status,
+            commands::save_steam_api_key,
+            commands::delete_steam_api_key,
             commands::set_library_entry_archived,
             commands::launch_library_entry,
         ])
@@ -73,8 +76,227 @@ fn bootstrap_library(
     });
 }
 
+mod auth_vault {
+    use serde::{Deserialize, Serialize};
+    use std::fmt;
+
+    const KEYRING_SERVICE: &str = "com.bibliotecajogos.unificada";
+    const STEAM_API_KEY_ACCOUNT: &str = "steam-web-api-key";
+    const STEAM_PROVIDER_ID: &str = "steam";
+    const STEAM_API_KEY_KIND: &str = "steam_web_api_key";
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct SteamApiKeyInput {
+        api_key: String,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamApiKeyStatusDto {
+        provider_id: String,
+        secret_kind: String,
+        is_configured: bool,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum AuthVaultError {
+        InvalidSteamApiKey,
+        SecureStorageUnavailable,
+    }
+
+    impl fmt::Display for AuthVaultError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                AuthVaultError::InvalidSteamApiKey => {
+                    write!(formatter, "Steam Web API key invalida.")
+                }
+                AuthVaultError::SecureStorageUnavailable => {
+                    write!(formatter, "Cofre seguro indisponivel para a chave Steam.")
+                }
+            }
+        }
+    }
+
+    pub trait SecretVault {
+        fn has_secret(&self, account: &str) -> Result<bool, AuthVaultError>;
+        fn set_secret(&self, account: &str, secret: &str) -> Result<(), AuthVaultError>;
+        fn delete_secret(&self, account: &str) -> Result<(), AuthVaultError>;
+    }
+
+    #[derive(Default)]
+    pub struct SystemSecretVault;
+
+    impl SecretVault for SystemSecretVault {
+        fn has_secret(&self, account: &str) -> Result<bool, AuthVaultError> {
+            let entry = keyring::Entry::new(KEYRING_SERVICE, account)
+                .map_err(|_| AuthVaultError::SecureStorageUnavailable)?;
+
+            match entry.get_password() {
+                Ok(_) => Ok(true),
+                Err(keyring::Error::NoEntry) => Ok(false),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable),
+            }
+        }
+
+        fn set_secret(&self, account: &str, secret: &str) -> Result<(), AuthVaultError> {
+            let entry = keyring::Entry::new(KEYRING_SERVICE, account)
+                .map_err(|_| AuthVaultError::SecureStorageUnavailable)?;
+
+            entry
+                .set_password(secret)
+                .map_err(|_| AuthVaultError::SecureStorageUnavailable)
+        }
+
+        fn delete_secret(&self, account: &str) -> Result<(), AuthVaultError> {
+            let entry = keyring::Entry::new(KEYRING_SERVICE, account)
+                .map_err(|_| AuthVaultError::SecureStorageUnavailable)?;
+
+            match entry.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable),
+            }
+        }
+    }
+
+    pub fn get_steam_api_key_status<Vault: SecretVault>(
+        vault: &Vault,
+    ) -> Result<SteamApiKeyStatusDto, AuthVaultError> {
+        Ok(steam_api_key_status(
+            vault.has_secret(STEAM_API_KEY_ACCOUNT)?,
+        ))
+    }
+
+    pub fn save_steam_api_key<Vault: SecretVault>(
+        vault: &Vault,
+        input: SteamApiKeyInput,
+    ) -> Result<SteamApiKeyStatusDto, AuthVaultError> {
+        let api_key = normalize_steam_api_key(input.api_key)?;
+
+        vault.set_secret(STEAM_API_KEY_ACCOUNT, &api_key)?;
+        Ok(steam_api_key_status(true))
+    }
+
+    pub fn delete_steam_api_key<Vault: SecretVault>(
+        vault: &Vault,
+    ) -> Result<SteamApiKeyStatusDto, AuthVaultError> {
+        vault.delete_secret(STEAM_API_KEY_ACCOUNT)?;
+        Ok(steam_api_key_status(false))
+    }
+
+    fn steam_api_key_status(is_configured: bool) -> SteamApiKeyStatusDto {
+        SteamApiKeyStatusDto {
+            provider_id: STEAM_PROVIDER_ID.to_string(),
+            secret_kind: STEAM_API_KEY_KIND.to_string(),
+            is_configured,
+        }
+    }
+
+    fn normalize_steam_api_key(value: String) -> Result<String, AuthVaultError> {
+        let api_key = value.trim();
+
+        if api_key.len() == 32 && api_key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            Ok(api_key.to_ascii_uppercase())
+        } else {
+            Err(AuthVaultError::InvalidSteamApiKey)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct FakeSecretVault {
+            secret: Mutex<Option<String>>,
+        }
+
+        impl FakeSecretVault {
+            fn stored_secret(&self) -> Option<String> {
+                self.secret.lock().expect("lock fake vault").clone()
+            }
+        }
+
+        impl SecretVault for FakeSecretVault {
+            fn has_secret(&self, _account: &str) -> Result<bool, AuthVaultError> {
+                Ok(self.secret.lock().expect("lock fake vault").is_some())
+            }
+
+            fn set_secret(&self, _account: &str, secret: &str) -> Result<(), AuthVaultError> {
+                *self.secret.lock().expect("lock fake vault") = Some(secret.to_string());
+                Ok(())
+            }
+
+            fn delete_secret(&self, _account: &str) -> Result<(), AuthVaultError> {
+                *self.secret.lock().expect("lock fake vault") = None;
+                Ok(())
+            }
+        }
+
+        #[test]
+        fn steam_api_key_status_starts_unconfigured() {
+            let vault = FakeSecretVault::default();
+            let status = get_steam_api_key_status(&vault).expect("get status");
+
+            assert_eq!(status.provider_id, "steam");
+            assert_eq!(status.secret_kind, "steam_web_api_key");
+            assert!(!status.is_configured);
+        }
+
+        #[test]
+        fn save_steam_api_key_stores_normalized_secret_without_returning_it() {
+            let vault = FakeSecretVault::default();
+            let status = save_steam_api_key(
+                &vault,
+                SteamApiKeyInput {
+                    api_key: " 0123456789abcdef0123456789abcdef ".to_string(),
+                },
+            )
+            .expect("save api key");
+
+            assert!(status.is_configured);
+            assert_eq!(
+                vault.stored_secret(),
+                Some("0123456789ABCDEF0123456789ABCDEF".to_string())
+            );
+        }
+
+        #[test]
+        fn save_steam_api_key_rejects_invalid_secret() {
+            let vault = FakeSecretVault::default();
+            let result = save_steam_api_key(
+                &vault,
+                SteamApiKeyInput {
+                    api_key: "not-a-valid-key".to_string(),
+                },
+            );
+
+            assert!(matches!(result, Err(AuthVaultError::InvalidSteamApiKey)));
+            assert_eq!(vault.stored_secret(), None);
+        }
+
+        #[test]
+        fn delete_steam_api_key_clears_secret() {
+            let vault = FakeSecretVault::default();
+            save_steam_api_key(
+                &vault,
+                SteamApiKeyInput {
+                    api_key: "0123456789abcdef0123456789abcdef".to_string(),
+                },
+            )
+            .expect("save api key");
+
+            let status = delete_steam_api_key(&vault).expect("delete api key");
+
+            assert!(!status.is_configured);
+            assert_eq!(vault.stored_secret(), None);
+        }
+    }
+}
+
 mod commands {
-    use super::{launcher, storage, AppState};
+    use super::{auth_vault, launcher, storage, AppState};
     use tauri::State;
 
     #[tauri::command]
@@ -168,8 +390,34 @@ mod commands {
             .connection
             .lock()
             .map_err(|_| "failed to lock local database".to_string())?;
+        let vault = auth_vault::SystemSecretVault;
+
+        auth_vault::delete_steam_api_key(&vault).map_err(|error| error.to_string())?;
 
         storage::disconnect_steam_account_config(&mut connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn get_steam_api_key_status() -> Result<auth_vault::SteamApiKeyStatusDto, String> {
+        let vault = auth_vault::SystemSecretVault;
+
+        auth_vault::get_steam_api_key_status(&vault).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn save_steam_api_key(
+        input: auth_vault::SteamApiKeyInput,
+    ) -> Result<auth_vault::SteamApiKeyStatusDto, String> {
+        let vault = auth_vault::SystemSecretVault;
+
+        auth_vault::save_steam_api_key(&vault, input).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn delete_steam_api_key() -> Result<auth_vault::SteamApiKeyStatusDto, String> {
+        let vault = auth_vault::SystemSecretVault;
+
+        auth_vault::delete_steam_api_key(&vault).map_err(|error| error.to_string())
     }
 
     #[tauri::command]

@@ -53,7 +53,7 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - A limpeza de falsos positivos locais no boot usa indices especificos em `library_entries` e `launch_actions`, e e ignorada rapidamente quando nao ha entradas locais ativas.
 - O `LocalGamesProvider` nao varre bibliotecas Steam por padrao. A importacao Steam fica no comando `sync_steam_games`, que le `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos instalados sem exigir credenciais.
 - O frontend tem acoes separadas para sincronizar Steam e jogos locais. A sincronizacao Steam atual cobre instalacoes locais e cria acoes `steam://rungameid/<appid>`; a integracao Web API para biblioteca completa/playtime/metadados fica para o proximo corte.
-- A area de Contas permite salvar/remover somente a configuracao local Steam por SteamID64. Ela nao solicita nem persiste segredos; API key/token/senha/cookies ficam fora do frontend ate existir `AuthVault`/cofre seguro no backend.
+- A area de Contas permite salvar/remover a configuracao local Steam por SteamID64 e a chave Steam Web API no AuthVault. O segredo fica no cofre do sistema operacional via backend Tauri e nunca e devolvido ao frontend; token/senha/cookies continuam fora do app.
 - O comando `launch_library_entry` abre executaveis locais para jogos manuais e locais persistidos, validando caminho absoluto, arquivo existente, extensao `.exe` e sem usar shell.
 - O banco local e criado em `%APPDATA%\\com.bibliotecajogos.unificada\\library.sqlite3`.
 - No Tauri, o frontend carrega a biblioteca pelo comando `list_library_entries`; no navegador comum, usa os mocks como fallback de desenvolvimento.
@@ -94,7 +94,7 @@ A estrutura do SQLite local fica em:
 ## Proximas implementacoes
 
 - Validacao manual do fluxo completo de adicionar, editar, arquivar, sincronizar Steam e sincronizar locais no Tauri.
-- Evoluir `SteamProvider` com Web API/AuthVault para biblioteca completa, playtime e metadados.
+- Evoluir `SteamProvider` para consumir a chave do AuthVault somente no backend e chamar a Web API para biblioteca completa, playtime e metadados.
 - Melhorias no `LocalGamesProvider` inicial para configurar raizes pela UI.
 - Consulta filtrada/paginacao no backend para bibliotecas maiores.
 

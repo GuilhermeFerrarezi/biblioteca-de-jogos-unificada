@@ -228,7 +228,13 @@ Entradas tecnicas da Steam que nao representam jogos, como AppID `228980` (`Stea
 
 Os comandos Tauri `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config` gerenciam somente a configuracao local da integracao Steam.
 
-Este primeiro corte nao faz login real, nao chama Web API e nao pede nem persiste API key/token/senha/cookie/Steam Guard. O objetivo e permitir que a UI registre que a integracao Steam foi configurada ou desconectada e, opcionalmente, associe um SteamID64 valido para evolucoes futuras.
+Esta configuracao de conta nao faz login real, nao chama Web API e nao persiste API key/token/senha/cookie/Steam Guard no SQLite. O objetivo e permitir que a UI registre que a integracao Steam foi configurada ou desconectada e, opcionalmente, associe um SteamID64 valido para evolucoes futuras.
+
+### AuthVault Steam Web API
+
+A chave Steam Web API nao fica no SQLite. Ela e salva pelo backend no cofre do sistema operacional via `keyring` e gerenciada pelos comandos Tauri `get_steam_api_key_status`, `save_steam_api_key` e `delete_steam_api_key`.
+
+O frontend recebe somente o estado `isConfigured`; a chave nunca e devolvida pela API Tauri. Remover a configuracao Steam tambem tenta remover o segredo do cofre e preserva os jogos ja importados.
 
 ## Regras para evoluir o schema
 

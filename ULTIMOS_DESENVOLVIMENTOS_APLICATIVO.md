@@ -36,9 +36,10 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - A tela mostra Steam, Xbox/Game Pass e Epic Games em linhas de integracao.
 - Steam indica que a sincronizacao local por manifests ja esta ativa e permite disparar essa sincronizacao.
 - Steam agora permite salvar e remover a configuracao local por SteamID64.
+- Steam tambem permite salvar/remover a chave Web API no AuthVault local, sem devolver o segredo ao frontend.
 - Xbox/Game Pass e Epic Games ficam como integracoes planejadas.
-- A tela nao pede API key, token, senha, cookie ou Steam Guard.
-- A Web API da Steam fica bloqueada para etapa futura ate existir armazenamento seguro no backend/Tauri.
+- A tela nao pede senha, token, cookie ou Steam Guard.
+- A sincronizacao por conta via Web API da Steam continua bloqueada para etapa futura; este corte apenas guarda a chave com cofre seguro.
 
 ## Persistencia SQLite
 
@@ -85,7 +86,9 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - Quando um manifest some, a entrada e preservada e marcada como `not_installed`, sem arquivar automaticamente.
 - O AppID `228980` (`Steamworks Common Redistributables`) e filtrado por nao representar um jogo; se ja tiver sido importado, a proxima sincronizacao o arquiva.
 - A configuracao local por SteamID64 usa os comandos `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config`.
-- A integracao Steam via Web API ainda nao foi implementada e continua bloqueada ate existir `AuthVault`/cofre seguro.
+- O AuthVault inicial usa o cofre do sistema operacional via backend Tauri para a chave Steam Web API.
+- Os comandos `get_steam_api_key_status`, `save_steam_api_key` e `delete_steam_api_key` nunca retornam o segredo para o frontend.
+- A integracao Steam via Web API ainda nao foi implementada; o proximo corte deve consumir a chave apenas no backend.
 
 ## Validacoes recentes
 
@@ -102,7 +105,7 @@ $env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\BibliotecaJogosUnificada\cargo-target
 cargo test
 ```
 
-Resultado registrado: frontend validado e suite Rust com 34 testes passando.
+Resultado registrado: frontend validado e suite Rust com 38 testes passando.
 
 ## Commits recentes relevantes
 

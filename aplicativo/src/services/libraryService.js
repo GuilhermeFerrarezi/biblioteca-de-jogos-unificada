@@ -10,6 +10,12 @@ const STEAM_ACCOUNT_COMMANDS = Object.freeze({
   disconnectConfig: 'disconnect_steam_account_config',
 })
 
+const STEAM_API_KEY_COMMANDS = Object.freeze({
+  getStatus: 'get_steam_api_key_status',
+  save: 'save_steam_api_key',
+  delete: 'delete_steam_api_key',
+})
+
 const isMissingCommandError = (error) => {
   const message = error instanceof Error ? error.message : String(error)
 
@@ -174,6 +180,93 @@ export const disconnectSteamAccountSettings = async () => {
     }
 
     throw new Error('Nao foi possivel desconectar a configuracao Steam.')
+  }
+}
+
+export const getSteamApiKeyStatus = async () => {
+  if (!hasTauriRuntime()) {
+    return {
+      isBackendAvailable: false,
+      isConfigured: false,
+    }
+  }
+
+  try {
+    const status = await invoke(STEAM_API_KEY_COMMANDS.getStatus)
+
+    return {
+      isBackendAvailable: true,
+      isConfigured: Boolean(status?.isConfigured),
+    }
+  } catch (error) {
+    if (isMissingCommandError(error)) {
+      return {
+        isBackendAvailable: false,
+        isConfigured: false,
+      }
+    }
+
+    throw new Error('Nao foi possivel consultar o cofre Steam.')
+  }
+}
+
+export const saveSteamApiKey = async ({ apiKey }) => {
+  if (!hasTauriRuntime()) {
+    return {
+      isBackendAvailable: false,
+      isConfigured: false,
+      saved: false,
+    }
+  }
+
+  try {
+    const status = await invoke(STEAM_API_KEY_COMMANDS.save, { input: { apiKey } })
+
+    return {
+      isBackendAvailable: true,
+      isConfigured: Boolean(status?.isConfigured),
+      saved: true,
+    }
+  } catch (error) {
+    if (isMissingCommandError(error)) {
+      return {
+        isBackendAvailable: false,
+        isConfigured: false,
+        saved: false,
+      }
+    }
+
+    throw new Error('Nao foi possivel salvar a chave Steam no cofre.')
+  }
+}
+
+export const deleteSteamApiKey = async () => {
+  if (!hasTauriRuntime()) {
+    return {
+      deleted: false,
+      isBackendAvailable: false,
+      isConfigured: false,
+    }
+  }
+
+  try {
+    const status = await invoke(STEAM_API_KEY_COMMANDS.delete)
+
+    return {
+      deleted: true,
+      isBackendAvailable: true,
+      isConfigured: Boolean(status?.isConfigured),
+    }
+  } catch (error) {
+    if (isMissingCommandError(error)) {
+      return {
+        deleted: false,
+        isBackendAvailable: false,
+        isConfigured: false,
+      }
+    }
+
+    throw new Error('Nao foi possivel remover a chave Steam do cofre.')
   }
 }
 

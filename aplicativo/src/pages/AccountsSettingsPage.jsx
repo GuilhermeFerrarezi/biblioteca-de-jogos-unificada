@@ -11,12 +11,16 @@ import {
 } from 'lucide-react'
 import { useEffect, useId, useState } from 'react'
 import {
+  deleteSteamApiKey,
   disconnectSteamAccountSettings,
   getSteamAccountSettings,
+  getSteamApiKeyStatus,
+  saveSteamApiKey,
   saveSteamAccountSettings,
 } from '../services/libraryService'
 
 const STEAM_ID64_PATTERN = /^\d{17}$/
+const STEAM_API_KEY_PATTERN = /^[a-fA-F0-9]{32}$/
 
 const validateSteamId64 = (steamId64) => {
   if (!steamId64.trim()) {
@@ -25,6 +29,18 @@ const validateSteamId64 = (steamId64) => {
 
   if (!STEAM_ID64_PATTERN.test(steamId64.trim())) {
     return 'Use apenas 17 digitos numericos.'
+  }
+
+  return ''
+}
+
+const validateSteamApiKey = (apiKey) => {
+  if (!apiKey.trim()) {
+    return 'Informe a chave Web API.'
+  }
+
+  if (!STEAM_API_KEY_PATTERN.test(apiKey.trim())) {
+    return 'Use uma chave hexadecimal de 32 caracteres.'
   }
 
   return ''
@@ -69,15 +85,26 @@ const accountProviders = Object.freeze([
 function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary, onSyncSteamGames }) {
   const steamIdInputId = useId()
   const steamIdErrorId = useId()
+  const steamApiKeyInputId = useId()
+  const steamApiKeyErrorId = useId()
   const [steamId64, setSteamId64] = useState('')
   const [steamIdError, setSteamIdError] = useState('')
   const [steamSettingsMessage, setSteamSettingsMessage] = useState('')
+  const [steamApiKey, setSteamApiKey] = useState('')
+  const [steamApiKeyError, setSteamApiKeyError] = useState('')
+  const [steamApiKeyMessage, setSteamApiKeyMessage] = useState('')
   const [isSteamSettingsLoading, setIsSteamSettingsLoading] = useState(true)
   const [isSteamSettingsSaving, setIsSteamSettingsSaving] = useState(false)
   const [isSteamSettingsDisconnecting, setIsSteamSettingsDisconnecting] = useState(false)
   const [isSteamSettingsBackendAvailable, setIsSteamSettingsBackendAvailable] = useState(false)
+  const [isSteamApiKeyLoading, setIsSteamApiKeyLoading] = useState(true)
+  const [isSteamApiKeySaving, setIsSteamApiKeySaving] = useState(false)
+  const [isSteamApiKeyDeleting, setIsSteamApiKeyDeleting] = useState(false)
+  const [isSteamApiKeyBackendAvailable, setIsSteamApiKeyBackendAvailable] = useState(false)
+  const [isSteamApiKeyConfigured, setIsSteamApiKeyConfigured] = useState(false)
   const [steamAuthState, setSteamAuthState] = useState('disconnected')
   const trimmedSteamId64 = steamId64.trim()
+  const trimmedSteamApiKey = steamApiKey.trim()
   const isSteamConfigured = steamAuthState === 'configured' && Boolean(trimmedSteamId64)
 
   useEffect(() => {
@@ -113,6 +140,44 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
     }
 
     void loadSteamSettings()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isMounted = true
+
+    const loadSteamApiKeyStatus = async () => {
+      setIsSteamApiKeyLoading(true)
+
+      try {
+        const status = await getSteamApiKeyStatus()
+
+        if (!isMounted) {
+          return
+        }
+
+        setIsSteamApiKeyBackendAvailable(status.isBackendAvailable)
+        setIsSteamApiKeyConfigured(status.isConfigured)
+        setSteamApiKeyMessage(
+          status.isBackendAvailable
+            ? 'Cofre Steam pronto.'
+            : 'Comando do AuthVault Steam aguardando backend.',
+        )
+      } catch {
+        if (isMounted) {
+          setSteamApiKeyMessage('Nao foi possivel consultar o cofre Steam.')
+        }
+      } finally {
+        if (isMounted) {
+          setIsSteamApiKeyLoading(false)
+        }
+      }
+    }
+
+    void loadSteamApiKeyStatus()
 
     return () => {
       isMounted = false
@@ -184,8 +249,74 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
     }
   }
 
+  const handleSteamApiKeyChange = (event) => {
+    const value = event.target.value.replace(/\s/g, '').slice(0, 32)
+
+    setSteamApiKey(value)
+    if (steamApiKeyError) {
+      setSteamApiKeyError(validateSteamApiKey(value))
+    }
+  }
+
+  const handleSteamApiKeySubmit = async (event) => {
+    event.preventDefault()
+
+    const validationError = validateSteamApiKey(trimmedSteamApiKey)
+
+    if (validationError) {
+      setSteamApiKeyError(validationError)
+      setSteamApiKeyMessage('Revise a chave antes de salvar no cofre.')
+      return
+    }
+
+    setSteamApiKeyError('')
+    setIsSteamApiKeySaving(true)
+    setSteamApiKeyMessage('Salvando chave Steam no cofre seguro...')
+
+    try {
+      const result = await saveSteamApiKey({ apiKey: trimmedSteamApiKey })
+
+      setIsSteamApiKeyBackendAvailable(result.isBackendAvailable)
+      setIsSteamApiKeyConfigured(result.isConfigured)
+      setSteamApiKey('')
+      setSteamApiKeyMessage(
+        result.saved
+          ? 'Chave Steam salva no cofre seguro.'
+          : 'Backend ainda nao expoe o comando de salvar chave Steam.',
+      )
+    } catch {
+      setSteamApiKeyMessage('Nao foi possivel salvar a chave Steam no cofre.')
+    } finally {
+      setIsSteamApiKeySaving(false)
+    }
+  }
+
+  const handleSteamApiKeyDelete = async () => {
+    setIsSteamApiKeyDeleting(true)
+    setSteamApiKeyMessage('Removendo chave Steam do cofre seguro...')
+
+    try {
+      const result = await deleteSteamApiKey()
+
+      setIsSteamApiKeyBackendAvailable(result.isBackendAvailable)
+      setIsSteamApiKeyConfigured(result.isConfigured)
+      setSteamApiKey('')
+      setSteamApiKeyError('')
+      setSteamApiKeyMessage(
+        result.deleted
+          ? 'Chave Steam removida do cofre seguro.'
+          : 'Backend ainda nao expoe o comando de remover chave Steam.',
+      )
+    } catch {
+      setSteamApiKeyMessage('Nao foi possivel remover a chave Steam do cofre.')
+    } finally {
+      setIsSteamApiKeyDeleting(false)
+    }
+  }
+
   const isSteamSettingsBusy =
     isSteamSettingsLoading || isSteamSettingsSaving || isSteamSettingsDisconnecting
+  const isSteamApiKeyBusy = isSteamApiKeyLoading || isSteamApiKeySaving || isSteamApiKeyDeleting
 
   return (
     <section className="accounts-page" aria-labelledby="accounts-title">
@@ -220,7 +351,9 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
           </div>
           <div className="summary-row">
             <KeyRound size={18} aria-hidden="true" />
-            <span>Credenciais: nao configuradas</span>
+            <span>
+              Credenciais: {isSteamApiKeyConfigured ? 'cofre Steam configurado' : 'nao configuradas'}
+            </span>
           </div>
           <div className="summary-row">
             <Cloud size={18} aria-hidden="true" />
@@ -295,6 +428,69 @@ function AccountsSettingsPage({ feedbackMessage, isSteamSyncing, onBackToLibrary
               </button>
               <button className="primary-button" type="submit" disabled={isSteamSettingsBusy}>
                 {isSteamSettingsSaving ? 'Salvando' : 'Salvar SteamID64'}
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section className="steam-settings-panel" aria-labelledby="steam-api-key-title" aria-busy={isSteamApiKeyBusy}>
+        <div className="steam-settings-heading">
+          <div>
+            <span className="summary-kicker">AuthVault</span>
+            <h2 id="steam-api-key-title">Steam Web API</h2>
+            <p>Guarda a chave no cofre do sistema para liberar a integracao por conta em um corte futuro.</p>
+          </div>
+          <span className="account-status" data-tone={isSteamApiKeyBackendAvailable ? 'ready' : 'planned'}>
+            {isSteamApiKeyBackendAvailable ? <CheckCircle2 size={14} aria-hidden="true" /> : <Clock3 size={14} aria-hidden="true" />}
+            {isSteamApiKeyBackendAvailable
+              ? isSteamApiKeyConfigured
+                ? 'Cofre configurado'
+                : 'Cofre vazio'
+              : 'Aguardando backend'}
+          </span>
+        </div>
+
+        <form className="steam-settings-form" onSubmit={handleSteamApiKeySubmit}>
+          <label htmlFor={steamApiKeyInputId}>
+            <span>Chave Web API</span>
+            <input
+              id={steamApiKeyInputId}
+              autoComplete="off"
+              inputMode="text"
+              maxLength={32}
+              placeholder={isSteamApiKeyConfigured ? 'Chave salva no cofre' : '32 caracteres hexadecimais'}
+              type="password"
+              value={steamApiKey}
+              aria-describedby={steamApiKeyError ? steamApiKeyErrorId : undefined}
+              aria-invalid={steamApiKeyError ? 'true' : 'false'}
+              disabled={isSteamApiKeyLoading}
+              onChange={handleSteamApiKeyChange}
+            />
+          </label>
+
+          {steamApiKeyError ? (
+            <p className="form-error" id={steamApiKeyErrorId}>
+              {steamApiKeyError}
+            </p>
+          ) : null}
+
+          <div className="steam-settings-actions">
+            <p role="status" aria-live="polite">
+              {steamApiKeyMessage}
+            </p>
+            <div className="steam-settings-buttons">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isSteamApiKeyBusy || !isSteamApiKeyConfigured}
+                onClick={handleSteamApiKeyDelete}
+              >
+                <LogOut size={18} aria-hidden="true" />
+                {isSteamApiKeyDeleting ? 'Removendo' : 'Remover chave'}
+              </button>
+              <button className="primary-button" type="submit" disabled={isSteamApiKeyBusy}>
+                {isSteamApiKeySaving ? 'Salvando' : 'Salvar no cofre'}
               </button>
             </div>
           </div>

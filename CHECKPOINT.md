@@ -160,6 +160,8 @@ A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco
 
 Atualizacao em 2026-05-14: foi adicionado o primeiro corte seguro de configuracao local da conta Steam. O backend Tauri criou os comandos `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config`; o frontend permite salvar/remover somente SteamID64 publico e estado local da integracao. Este corte nao faz login real, nao chama Web API e nao solicita nem persiste API key, token, senha, cookie ou Steam Guard. A desconexao remove a configuracao local e preserva os jogos Steam ja importados.
 
+Atualizacao em 2026-05-14: foi adicionado o AuthVault inicial para chave Steam Web API. O backend usa o cofre do sistema operacional via `keyring` 3.6.3 e expoe `get_steam_api_key_status`, `save_steam_api_key` e `delete_steam_api_key`; o frontend mostra apenas estado configurado/nao configurado e nunca recebe a chave salva. A chave e validada como hexadecimal ASCII de 32 caracteres, erros nao ecoam o segredo e a sincronizacao por conta ainda nao chama a Web API.
+
 ## MVP recomendado
 
 1. App desktop Windows.
@@ -189,6 +191,6 @@ Atualizacao em 2026-05-14: foi adicionado o primeiro corte seguro de configuraca
 5. Testar manualmente no Tauri o fluxo completo: abertura rapida, bootstrap dos 4 mocks, adicionar jogo manual, editar, arquivar, reabrir e confirmar persistencia.
 6. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
 7. Iniciar `SteamProvider` como primeira integracao real usando padrao Service-Adapter e normalizacao para `LibraryEntry`.
-8. Evoluir o `SteamProvider` com Web API/AuthVault para biblioteca completa, playtime e metadados, mantendo fallback local por manifests e sem armazenar segredos fora do cofre seguro.
+8. Evoluir o `SteamProvider` para consumir a chave do AuthVault somente no backend e chamar a Web API para biblioteca completa, playtime e metadados, mantendo fallback local por manifests.
 9. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
 
