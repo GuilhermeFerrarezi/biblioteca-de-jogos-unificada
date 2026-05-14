@@ -80,6 +80,8 @@ Atualizacao em 2026-05-13: foi implementado o primeiro corte do `SteamProvider` 
 
 Atualizacao em 2026-05-13: as diretrizes de governanca foram reforcadas para exigir que todo novo desenvolvimento identifique antes da implementacao o agente principal em `cloude teste/agents`, agentes auxiliares, skills aplicaveis em `cloude teste/skills`, criterios de validacao e delegacoes planejadas. Subagentes tecnicos podem ser usados para execucao ou revisao, mas devem ser instruidos a seguir os agentes e skills locais, sem substituir a governanca do projeto.
 
+Atualizacao em 2026-05-14: foi criado `ULTIMOS_DESENVOLVIMENTOS_APLICATIVO.md`, um resumo de leitura rapida dos marcos recentes do aplicativo. O arquivo consolida governanca de agentes/skills, reorganizacao do frontend, melhorias de UI/acessibilidade, persistencia SQLite, jogos manuais, lancamento seguro, `LocalGamesProvider`, primeiro corte do `SteamProvider` local, validacoes recentes, commits relevantes e proximos cortes recomendados.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.
