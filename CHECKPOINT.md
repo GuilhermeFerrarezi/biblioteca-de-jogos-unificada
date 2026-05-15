@@ -94,6 +94,8 @@ Atualizacao em 2026-05-14: apos teste manual apontar divergencia entre `Cofre co
 
 Atualizacao em 2026-05-15: apos teste manual indicar falha do cofre do Windows ao validar a leitura da Steam Web API key, o AuthVault foi endurecido com fallback DPAPI local. O keyring/cofre do sistema operacional segue como armazenamento primario; quando ele aceita gravacao mas nao retorna a credencial no read-back, o backend grava um arquivo cifrado por DPAPI em `%APPDATA%\\com.bibliotecajogos.unificada\\auth-vault\\steam-web-api-key.dpapi`, vinculado ao usuario Windows e sem usar SQLite, JSON, `localStorage`, frontend ou logs para segredo. O fluxo foi revisado com os agentes locais de seguranca/auth e integracao/QA, e ajustado para evitar perda de credencial antiga quando o fallback falha e para limpar arquivos temporarios DPAPI na desconexao. O teste manual do usuario confirmou que o salvamento da Web API key passou a funcionar. Validacoes passaram: `npm run lint`, `npm run build` e `cargo test` com 42 testes.
 
+Atualizacao em 2026-05-15: a UX de erro da Steam foi padronizada para exibir uma mensagem curta por padrao e detalhes tecnicos apenas sob demanda. O backend continua emitindo `steam-sync-failed` com `ProviderErrorDto` sanitizado, e o frontend mostra esse feedback em disclosure expansivel via `StatusDisclosure` e `ProviderFeedback`, sem expor payload bruto nem segredo ao usuario final.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.

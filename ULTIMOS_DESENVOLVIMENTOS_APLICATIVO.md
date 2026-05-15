@@ -42,6 +42,7 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - O status da Steam Web API agora e baseado no segredo realmente legivel no AuthVault/keyring; marcador SQLite nao libera sincronizacao sozinho.
 - O AuthVault agora tenta validar o round-trip do keyring e, quando o cofre do Windows nao retorna a credencial apos gravacao, usa fallback local cifrado por DPAPI em `%APPDATA%\com.bibliotecajogos.unificada\auth-vault\steam-web-api-key.dpapi`.
 - Teste manual confirmado em 2026-05-15: o salvamento da Steam Web API key passou a funcionar apos o fallback DPAPI e a sincronizacao por conta pode usar a credencial lida pelo backend.
+- Erros da Steam agora aparecem primeiro como mensagem curta, com detalhes tecnicos expansiveis apenas quando o usuario abre o disclosure; isso vale tanto para a area de contas quanto para feedback de sincronizacao.
 - O app nao captura nem armazena senha Steam, Steam Guard, cookies, sessao de navegador ou URL completa de callback OpenID.
 
 ## Persistencia SQLite
