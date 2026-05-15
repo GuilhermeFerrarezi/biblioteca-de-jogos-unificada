@@ -25,5 +25,8 @@ tauri = { version = "2.11.1", features = [] }
 tauri-plugin-log = "2"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
-keyring = { version = "3.6.3", features = ["windows-native"] }
-ureq = { version = "2.12.1", features = ["json"] }
+keyring = "3.6.3"
+rand = "0.8.5"
+reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+url = "2.5.7"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

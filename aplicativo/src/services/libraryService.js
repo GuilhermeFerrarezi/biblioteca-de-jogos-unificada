@@ -4,24 +4,6 @@ import { validateManualGameInput } from '../adapters/libraryEntryAdapter'
 const hasTauriRuntime = () =>
   typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
 
-const STEAM_ACCOUNT_COMMANDS = Object.freeze({
-  getConfig: 'list_steam_account_config',
-  saveConfig: 'save_steam_account_config',
-  disconnectConfig: 'disconnect_steam_account_config',
-})
-
-const STEAM_API_KEY_COMMANDS = Object.freeze({
-  getStatus: 'get_steam_api_key_status',
-  save: 'save_steam_api_key',
-  delete: 'delete_steam_api_key',
-})
-
-const isMissingCommandError = (error) => {
-  const message = error instanceof Error ? error.message : String(error)
-
-  return /command.*not found|not found.*command|unknown.*command|unknown.*invoke/i.test(message)
-}
-
 const loadDevelopmentLibraryEntries = async () => {
   if (!import.meta.env.DEV) {
     return []
@@ -95,187 +77,62 @@ export const syncSteamAccountGames = async () => {
   return invoke('sync_steam_account_games')
 }
 
-export const getSteamAccountSettings = async () => {
+export const getSteamAccountConfig = async () => {
   if (!hasTauriRuntime()) {
-    return {
-      authState: 'disconnected',
-      isBackendAvailable: false,
-      steamId64: '',
-    }
+    return { connected: false, steamId64: null }
   }
 
-  try {
-    const settings = await invoke(STEAM_ACCOUNT_COMMANDS.getConfig)
-
-    return {
-      authState: settings?.authState === 'configured' ? 'configured' : 'disconnected',
-      isBackendAvailable: true,
-      steamId64: typeof settings?.steamId64 === 'string' ? settings.steamId64 : '',
-    }
-  } catch (error) {
-    if (isMissingCommandError(error)) {
-      return {
-        authState: 'disconnected',
-        isBackendAvailable: false,
-        steamId64: '',
-      }
-    }
-
-    throw new Error('Nao foi possivel carregar a configuracao Steam.')
-  }
+  return invoke('get_steam_account_config')
 }
 
-export const saveSteamAccountSettings = async ({ steamId64 }) => {
+export const saveSteamAccountConfig = async (steamId64) => {
+  const normalizedSteamId64 = String(steamId64 ?? '').trim()
+
+  if (!/^\d{17}$/.test(normalizedSteamId64)) {
+    throw new Error('Informe um SteamID64 valido antes de salvar a conta.')
+  }
+
   if (!hasTauriRuntime()) {
-    return {
-      authState: 'disconnected',
-      isBackendAvailable: false,
-      saved: false,
-      steamId64: '',
-    }
+    return { connected: true, steamId64: normalizedSteamId64 }
   }
 
-  try {
-    const settings = await invoke(STEAM_ACCOUNT_COMMANDS.saveConfig, { input: { steamId64 } })
-
-    return {
-      authState: settings?.authState === 'configured' ? 'configured' : 'disconnected',
-      isBackendAvailable: true,
-      saved: true,
-      steamId64: typeof settings?.steamId64 === 'string' ? settings.steamId64 : '',
-    }
-  } catch (error) {
-    if (isMissingCommandError(error)) {
-      return {
-        authState: 'disconnected',
-        isBackendAvailable: false,
-        saved: false,
-        steamId64: '',
-      }
-    }
-
-    throw new Error('Nao foi possivel salvar a configuracao Steam.')
-  }
+  return invoke('save_steam_account_config', { input: { steamId64: normalizedSteamId64 } })
 }
 
-export const disconnectSteamAccountSettings = async () => {
+export const startSteamLogin = async () => {
   if (!hasTauriRuntime()) {
-    return {
-      authState: 'disconnected',
-      disconnected: false,
-      isBackendAvailable: false,
-      steamId64: '',
-    }
+    return { pending: false, providerId: 'steam' }
   }
 
-  try {
-    const settings = await invoke(STEAM_ACCOUNT_COMMANDS.disconnectConfig)
-
-    return {
-      authState: settings?.authState === 'configured' ? 'configured' : 'disconnected',
-      disconnected: true,
-      isBackendAvailable: true,
-      steamId64: typeof settings?.steamId64 === 'string' ? settings.steamId64 : '',
-    }
-  } catch (error) {
-    if (isMissingCommandError(error)) {
-      return {
-        authState: 'disconnected',
-        disconnected: false,
-        isBackendAvailable: false,
-        steamId64: '',
-      }
-    }
-
-    throw new Error('Nao foi possivel desconectar a configuracao Steam.')
-  }
+  return invoke('start_steam_openid_login')
 }
 
 export const getSteamApiKeyStatus = async () => {
   if (!hasTauriRuntime()) {
-    return {
-      isBackendAvailable: false,
-      isConfigured: false,
-    }
+    return { configured: false, providerId: 'steam', storage: 'dev' }
   }
 
-  try {
-    const status = await invoke(STEAM_API_KEY_COMMANDS.getStatus)
-
-    return {
-      isBackendAvailable: true,
-      isConfigured: Boolean(status?.isConfigured),
-    }
-  } catch (error) {
-    if (isMissingCommandError(error)) {
-      return {
-        isBackendAvailable: false,
-        isConfigured: false,
-      }
-    }
-
-    throw new Error('Nao foi possivel consultar o cofre Steam.')
-  }
+  return invoke('get_steam_web_api_key_state')
 }
 
-export const saveSteamApiKey = async ({ apiKey }) => {
+export const saveSteamApiKey = async (apiKey) => {
+  if (!apiKey || typeof apiKey !== 'string') {
+    throw new Error('Informe uma credencial Steam Web API valida.')
+  }
+
   if (!hasTauriRuntime()) {
-    return {
-      isBackendAvailable: false,
-      isConfigured: false,
-      saved: false,
-    }
+    return null
   }
 
-  try {
-    const status = await invoke(STEAM_API_KEY_COMMANDS.save, { input: { apiKey } })
-
-    return {
-      isBackendAvailable: true,
-      isConfigured: Boolean(status?.isConfigured),
-      saved: true,
-    }
-  } catch (error) {
-    if (isMissingCommandError(error)) {
-      return {
-        isBackendAvailable: false,
-        isConfigured: false,
-        saved: false,
-      }
-    }
-
-    throw new Error('Nao foi possivel salvar a chave Steam no cofre.')
-  }
+  return invoke('save_steam_web_api_key', { input: { apiKey } })
 }
 
 export const deleteSteamApiKey = async () => {
   if (!hasTauriRuntime()) {
-    return {
-      deleted: false,
-      isBackendAvailable: false,
-      isConfigured: false,
-    }
+    return null
   }
 
-  try {
-    const status = await invoke(STEAM_API_KEY_COMMANDS.delete)
-
-    return {
-      deleted: true,
-      isBackendAvailable: true,
-      isConfigured: Boolean(status?.isConfigured),
-    }
-  } catch (error) {
-    if (isMissingCommandError(error)) {
-      return {
-        deleted: false,
-        isBackendAvailable: false,
-        isConfigured: false,
-      }
-    }
-
-    throw new Error('Nao foi possivel remover a chave Steam do cofre.')
-  }
+  return invoke('disconnect_steam_web_api_key')
 }
 
 export const launchLibraryEntry = async (entryId) => {

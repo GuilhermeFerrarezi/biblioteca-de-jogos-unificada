@@ -101,6 +101,7 @@ Para futuras integracoes com Steam, Xbox, Epic ou outras plataformas:
 - Credenciais, tokens e chaves de API nao devem ficar hardcoded.
 - A UI de contas/configuracoes deve separar claramente conexao, revogacao e estado de sincronizacao.
 - Tokens persistidos devem usar armazenamento local seguro quando disponivel no Tauri.
+- Quando o keyring/cofre do sistema operacional nao validar leitura apos gravacao, o fallback permitido no Windows e DPAPI vinculado ao usuario atual; SQLite, JSON, `localStorage` e logs continuam proibidos para segredos.
 - Endpoints nao documentados ou automacoes devem passar por revisao de risco antes de entrar no fluxo principal.
 - Toda conexao deve definir ciclo de vida de token: criacao, armazenamento seguro, renovacao, expiracao, revogacao e exclusao ao desconectar.
 - Tokens e sessoes devem ficar separados dos dados de biblioteca e nunca aparecer em logs, erros ou payloads enviados ao frontend sem necessidade.

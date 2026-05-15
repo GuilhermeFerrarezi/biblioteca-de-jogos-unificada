@@ -1,6 +1,6 @@
 ﻿# Checkpoint - Biblioteca de Jogos Unificada
 
-Data: 2026-05-13
+Data: 2026-05-15
 
 ## Objetivo do projeto
 
@@ -88,6 +88,12 @@ Atualizacao em 2026-05-14: apos revisao delegada aos agentes locais `04-backend-
 
 Atualizacao em 2026-05-14: foi implementado o primeiro corte da area `Contas e integracoes`, com execucao delegada ao agente local de frontend/UX e revisao de escopo pelo agente de seguranca/QA. O botao `Contas` da sidebar agora abre uma tela real para Steam, Xbox/Game Pass e Epic. A Steam exibe o estado de sincronizacao local ativa e permite disparar a sincronizacao Steam ja existente; Xbox e Epic aparecem como integracoes planejadas. A tela nao pede nem salva API key, token, senha, cookie ou Steam Guard, preservando a decisao de implementar `AuthVault`/cofre seguro antes da Web API. Validacoes passaram: `npm run lint` e `npm run build`.
 
+Atualizacao em 2026-05-14: foi implementado o primeiro fluxo seguro de `Entrar com Steam` usando Steam OpenID. A implementacao seguiu os agentes locais `01-platform-research-agent`, `03-security-auth-agent`, `04-backend-provider-agent`, `09-senior-frontend-development-agent` e `10-senior-integration-qa-agent`, com skills de pesquisa de plataforma, compliance, seguranca de tokens, backend, frontend e qualidade. O app abre o login oficial da Steam no navegador externo, recebe o callback em `127.0.0.1`, valida a resposta com a Steam por `check_authentication` e persiste somente o SteamID64 em `provider_account_configs`. O frontend deixou de usar `localStorage` como fonte de verdade para SteamID64 e passou a carregar/salvar a conta pelo backend. A sincronizacao por conta agora usa o SteamID64 salvo no SQLite e a Web API key do AuthVault/keyring. O fluxo nao captura senha, Steam Guard, cookies, sessao de navegador, HTML bruto ou URL completa de callback. Validacoes passaram: `npm run lint`, `npm run build`, `cargo check` e `cargo test` com 41 testes.
+
+Atualizacao em 2026-05-14: apos teste manual apontar divergencia entre `Cofre configurado` e falha de sincronizacao, o estado da Steam Web API foi reconciliado seguindo revisao dos agentes locais de seguranca, backend/provider, banco e frontend/QA. O status de Web API agora considera configurado apenas quando o AuthVault/keyring retorna uma chave legivel; o sync por conta deixou de usar fallback de segredo em SQLite. O SQLite mantem apenas metadados nao secretos, como `steam_web_api_key_configured`, e colunas legadas de teste com segredo passam a ser ignoradas. O frontend tambem deixou de marcar a sincronizacao por conta como finalizada quando o hook global captura erro, propagando a falha para o painel da conta. O sync remoto agora preenche `game_sources.account_id` para jogos Steam que ja tinham sido importados localmente. Validacoes passaram: `npm run lint`, `npm run build`, `cargo fmt -- --check` e `cargo test` com 42 testes.
+
+Atualizacao em 2026-05-15: apos teste manual indicar falha do cofre do Windows ao validar a leitura da Steam Web API key, o AuthVault foi endurecido com fallback DPAPI local. O keyring/cofre do sistema operacional segue como armazenamento primario; quando ele aceita gravacao mas nao retorna a credencial no read-back, o backend grava um arquivo cifrado por DPAPI em `%APPDATA%\\com.bibliotecajogos.unificada\\auth-vault\\steam-web-api-key.dpapi`, vinculado ao usuario Windows e sem usar SQLite, JSON, `localStorage`, frontend ou logs para segredo. O fluxo foi revisado com os agentes locais de seguranca/auth e integracao/QA, e ajustado para evitar perda de credencial antiga quando o fallback falha e para limpar arquivos temporarios DPAPI na desconexao. O teste manual do usuario confirmou que o salvamento da Web API key passou a funcionar. Validacoes passaram: `npm run lint`, `npm run build` e `cargo test` com 42 testes.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.
@@ -156,13 +162,7 @@ As diretrizes consolidadas ficam em `DIRETRIZES_DESENVOLVIMENTO.md`. Em resumo:
 
 ## Banco de dados
 
-A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco principal fica em `%APPDATA%\com.bibliotecajogos.unificada\library.sqlite3` e e composto por `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres`, `provider_account_configs` e `schema_migrations`, com indices para listagem, filtros, acoes primarias e limpeza de falsos positivos locais.
-
-Atualizacao em 2026-05-14: foi adicionado o primeiro corte seguro de configuracao local da conta Steam. O backend Tauri criou os comandos `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config`; o frontend permite salvar/remover somente SteamID64 publico e estado local da integracao. Este corte nao faz login real, nao chama Web API e nao solicita nem persiste API key, token, senha, cookie ou Steam Guard. A desconexao remove a configuracao local e preserva os jogos Steam ja importados.
-
-Atualizacao em 2026-05-14: foi adicionado o AuthVault inicial para chave Steam Web API. O backend usa o cofre do sistema operacional via `keyring` 3.6.3 e expoe `get_steam_api_key_status`, `save_steam_api_key` e `delete_steam_api_key`; o frontend mostra apenas estado configurado/nao configurado e nunca recebe a chave salva. A chave e validada como hexadecimal ASCII de 32 caracteres, erros nao ecoam o segredo e a sincronizacao por conta ainda nao chama a Web API.
-
-Atualizacao em 2026-05-14: foi implementado o primeiro corte da sincronizacao Steam por conta. O novo comando Tauri `sync_steam_account_games` le o SteamID64 salvo em `provider_account_configs`, busca a chave Steam Web API somente no AuthVault e consulta `IPlayerService/GetOwnedGames/v1` com `include_appinfo=1`, `include_played_free_games=1` e `format=json`. Jogos remotos sao persistidos como Steam com launch action `steam://rungameid/<appid>` e `install_status = not_installed` quando nao ha manifest local; jogos ja instalados por manifest permanecem `installed`, preservando diretorio de trabalho. `playtime_forever` passa a atualizar `games.playtime_total_minutes`. O frontend ganhou acao separada `Sincronizar conta` na tela de Contas. Validacoes passaram: `npm run lint`, `npm run build`, `cargo check` e `cargo test` (41 testes).
+A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco principal fica em `%APPDATA%\com.bibliotecajogos.unificada\library.sqlite3` e e composto por `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres` e `schema_migrations`, com indices para listagem, filtros, acoes primarias e limpeza de falsos positivos locais.
 
 ## MVP recomendado
 
@@ -192,7 +192,9 @@ Atualizacao em 2026-05-14: foi implementado o primeiro corte da sincronizacao St
 4. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento anterior, mas ainda e uma margem apertada.
 5. Testar manualmente no Tauri o fluxo completo: abertura rapida, bootstrap dos 4 mocks, adicionar jogo manual, editar, arquivar, reabrir e confirmar persistencia.
 6. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
-7. Validar manualmente no Tauri a sincronizacao Steam local e por conta, incluindo biblioteca privada/nao visivel e chave invalida.
-8. Evoluir metadados remotos da Steam alem de nome/playtime, mantendo fallback local por manifests.
-9. Depois, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
+7. Iniciar `SteamProvider` como primeira integracao real usando padrao Service-Adapter e normalizacao para `LibraryEntry`.
+8. Proximo passo imediato: adicionar filtro para jogos nao instalados na biblioteca.
+9. Em seguida: melhorar a visualizacao da tela de configuracoes/contas, deixando estados de Steam, Web API, sincronizacao local e providers planejados mais claros.
+10. Depois, evoluir o `SteamProvider` com Web API/configuracao de conta para biblioteca completa, playtime e metadados, mantendo a leitura local por manifests como fonte complementar de instalados.
+11. Adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e pesquisar/prototipar `XboxProvider` e `EpicProvider`.
 

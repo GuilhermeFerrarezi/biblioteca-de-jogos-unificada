@@ -29,13 +29,14 @@ O seed dos 4 mocks nao roda no caminho critico do boot. Ele e executado em backg
 
 ```text
 schema_migrations
-provider_account_configs
 
 games
   1 -- 1 library_entries
   1 -- N game_sources
   1 -- N launch_actions
   1 -- N game_genres
+
+provider_account_configs
 ```
 
 O contrato entregue ao frontend e montado como `LibraryEntryDto`: uma entrada de biblioteca (`library_entries`) com os dados principais do jogo (`games`), fontes (`game_sources`), acoes de lancamento (`launch_actions`) e generos (`game_genres`).
@@ -48,27 +49,8 @@ Controla a versao aplicada do schema.
 
 | Coluna | Tipo | Regra | Uso |
 | --- | --- | --- | --- |
-| `version` | `INTEGER` | `PRIMARY KEY` | Versao da migracao aplicada. Hoje o schema registra ate `2`. |
+| `version` | `INTEGER` | `PRIMARY KEY` | Versao da migracao aplicada. Hoje o schema registra `1`. |
 | `applied_at` | `TEXT` | `NOT NULL` | Timestamp ISO da aplicacao da migracao. |
-
-### `provider_account_configs`
-
-Guarda apenas estado de configuracao de integracoes. Nao armazena senha, cookie, token, Steam Guard ou API key.
-
-| Coluna | Tipo | Regra | Uso |
-| --- | --- | --- | --- |
-| `provider_id` | `TEXT` | `PRIMARY KEY` | Provider configurado. Neste corte, `steam`. |
-| `auth_state` | `TEXT` | `NOT NULL`, `configured` ou `disconnected` | Estado da integracao sem representar login real. |
-| `steam_id64` | `TEXT` | Opcional, 17 digitos quando informado | Identificador publico/opcional da conta Steam. |
-| `configured_at` | `TEXT` | Opcional | Primeiro timestamp ISO em que a integracao foi marcada como configurada. |
-| `disconnected_at` | `TEXT` | Opcional | Timestamp ISO da ultima desconexao. |
-| `updated_at` | `TEXT` | `NOT NULL` | Timestamp ISO da ultima alteracao. |
-
-Regras de seguranca:
-
-- `save_steam_account_config` aceita somente `steamId64` opcional.
-- Payloads com campos desconhecidos sao rejeitados pelo backend.
-- Desconectar a conta limpa `steam_id64` e muda o estado para `disconnected`, mas preserva os jogos Steam ja importados.
 
 ### `games`
 
@@ -152,6 +134,34 @@ Chave primaria composta:
 PRIMARY KEY (game_id, genre)
 ```
 
+### `provider_account_configs`
+
+Guarda configuracoes nao secretas de conta por provider. Segredos como Steam Web API key continuam fora desta tabela e devem ficar no AuthVault do backend, usando o keyring/cofre do sistema operacional como primario e um arquivo DPAPI cifrado pelo usuario Windows como fallback quando o Credential Manager nao consegue validar leitura apos gravacao.
+
+| Coluna | Tipo | Regra | Uso |
+| --- | --- | --- | --- |
+| `provider_id` | `TEXT` | `PRIMARY KEY` | Provider configurado, hoje `steam`. |
+| `account_id` | `TEXT` | Opcional | ID publico/nao secreto da conta; para Steam, o SteamID64. |
+| `steam_id64` | `TEXT` | Opcional | SteamID64 verificado via OpenID ou salvo manualmente. |
+| `steam_web_api_key_configured` | `INTEGER` | `NOT NULL DEFAULT 0` | Marcador nao secreto atualizado apos salvar/remover a chave no AuthVault. Nao prova sozinho que o segredo esta legivel. |
+| `config_json` | `TEXT` | Opcional | JSON auxiliar nao secreto, hoje com `steamId64` e origem do vinculo. |
+| `updated_at` | `TEXT` | `NOT NULL` | Timestamp ISO da ultima atualizacao. |
+
+O fluxo `Entrar com Steam` usa OpenID no navegador externo, valida a resposta com a Steam e persiste apenas o SteamID64. O app nao grava senha, Steam Guard, cookies, sessao de navegador, OpenID assertion ou URL completa de callback.
+
+Bancos locais criados durante testes anteriores podem conter uma coluna legada `steam_web_api_key_plaintext_dev`. O codigo atual nao cria nem usa essa coluna no caminho normal; a fonte de verdade da Steam Web API key e somente o AuthVault. O SQLite guarda apenas `steam_web_api_key_configured`, que e um marcador nao secreto e nunca substitui a validacao de leitura do segredo pelo backend.
+
+## AuthVault e segredos locais
+
+A Steam Web API key nao faz parte do schema SQLite. O backend Tauri usa o `AuthVault` para gravar e ler o segredo somente no processo nativo.
+
+Armazenamento atual:
+
+1. Primario: keyring/cofre do sistema operacional via `keyring`.
+2. Fallback Windows: arquivo `%APPDATA%\com.bibliotecajogos.unificada\auth-vault\steam-web-api-key.dpapi`, contendo apenas bytes cifrados por DPAPI com entropia especifica do app.
+
+O fallback existe para ambientes em que o Credential Manager aceita a gravacao, mas nao retorna a credencial no read-back imediato. Mesmo nesse caso, o valor nao e salvo em texto puro no banco, em JSON, em `localStorage` ou em payloads para o frontend.
+
 ## Indices
 
 Indices base criados por `migrate()`:
@@ -224,30 +234,11 @@ A sincronizacao e idempotente: se o AppID ja existir em `game_sources`, a entrad
 Quando um AppID Steam persistido deixa de aparecer nos manifests locais, a entrada e preservada, mas `games.installed` passa para `0` e `library_entries.install_status` passa para `not_installed`. Arquivamento continua sendo decisao explicita do usuario.
 Entradas tecnicas da Steam que nao representam jogos, como AppID `228980` (`Steamworks Common Redistributables`), sao rejeitadas na descoberta e arquivadas caso ja tenham sido importadas antes.
 
-### Configuracao de conta Steam
+### Conta Steam e Web API
 
-Os comandos Tauri `list_steam_account_config`, `save_steam_account_config` e `disconnect_steam_account_config` gerenciam somente a configuracao local da integracao Steam.
+`save_steam_account_config` grava SteamID64 em `provider_account_configs` para que o backend seja a fonte de verdade da sincronizacao por conta. `sync_steam_account_games` le esse valor do SQLite e usa a chave Steam Web API somente a partir do AuthVault, sem expor o segredo ao frontend e sem fallback de segredo no SQLite.
 
-Esta configuracao de conta nao faz login real, nao chama Web API e nao persiste API key/token/senha/cookie/Steam Guard no SQLite. O objetivo e permitir que a UI registre que a integracao Steam foi configurada ou desconectada e, opcionalmente, associe um SteamID64 valido para evolucoes futuras.
-
-### AuthVault Steam Web API
-
-A chave Steam Web API nao fica no SQLite. Ela e salva pelo backend no cofre do sistema operacional via `keyring` e gerenciada pelos comandos Tauri `get_steam_api_key_status`, `save_steam_api_key` e `delete_steam_api_key`.
-
-O frontend recebe somente o estado `isConfigured`; a chave nunca e devolvida pela API Tauri. Remover a configuracao Steam tambem tenta remover o segredo do cofre e preserva os jogos ja importados.
-
-### Sincronizacao Steam por conta
-
-O comando Tauri `sync_steam_account_games` usa o SteamID64 de `provider_account_configs` e a chave do AuthVault para consultar `IPlayerService/GetOwnedGames/v1`.
-
-Regras de persistencia:
-
-1. `game_sources.platform_id = 'steam'`.
-2. `game_sources.external_id` guarda o AppID Steam.
-3. Jogos remotos sem manifest local entram com `library_entries.install_status = 'not_installed'` e `games.installed = 0`.
-4. Jogos ja detectados por manifest local continuam `installed`.
-5. `playtime_forever` atualiza `games.playtime_total_minutes`.
-6. A acao primaria continua `steam://rungameid/<appid>`.
+O comando de login `start_steam_openid_login` apenas vincula a identidade Steam. Ele nao retorna token OAuth nem permissao para biblioteca privada; a consulta de jogos continua sujeita a chave Web API valida e visibilidade da biblioteca Steam.
 
 ## Regras para evoluir o schema
 

@@ -1,46 +1,73 @@
 import {
   ArrowLeft,
+  AlertCircle,
   CheckCircle2,
   CircleDot,
   Clock3,
   Cloud,
+  LogIn,
   Gamepad2,
   KeyRound,
-  LogOut,
+  LockKeyhole,
+  Save,
+  Trash2,
   Store,
+  UserRound,
 } from 'lucide-react'
-import { useEffect, useId, useState } from 'react'
+import { listen } from '@tauri-apps/api/event'
+import { useEffect, useMemo, useState } from 'react'
 import {
   deleteSteamApiKey,
-  disconnectSteamAccountSettings,
-  getSteamAccountSettings,
+  getSteamAccountConfig,
   getSteamApiKeyStatus,
   saveSteamApiKey,
-  saveSteamAccountSettings,
+  saveSteamAccountConfig,
+  startSteamLogin,
 } from '../services/libraryService'
 
-const STEAM_ID64_PATTERN = /^\d{17}$/
-const STEAM_API_KEY_PATTERN = /^[a-fA-F0-9]{32}$/
+const emptySteamApiKeyForm = Object.freeze({
+  apiKey: '',
+})
 
-const validateSteamId64 = (steamId64) => {
-  if (!steamId64.trim()) {
-    return 'Informe um SteamID64.'
+const emptySteamAccountForm = Object.freeze({
+  steamId64: '',
+})
+
+const normalizeSteamApiKeyStatus = (status) => {
+  if (typeof status === 'boolean') {
+    return status
   }
 
-  if (!STEAM_ID64_PATTERN.test(steamId64.trim())) {
-    return 'Use apenas 17 digitos numericos.'
+  if (!status || typeof status !== 'object') {
+    return false
+  }
+
+  return Boolean(status.configured)
+}
+
+const validateSteamApiKeyInput = (apiKey) => {
+  const trimmedApiKey = apiKey.trim()
+
+  if (!trimmedApiKey) {
+    return 'Informe a credencial Steam Web API antes de salvar.'
+  }
+
+  if (!/^[a-fA-F0-9]{32}$/.test(trimmedApiKey)) {
+    return 'A credencial Steam Web API deve ter 32 caracteres hexadecimais.'
   }
 
   return ''
 }
 
-const validateSteamApiKey = (apiKey) => {
-  if (!apiKey.trim()) {
-    return 'Informe a chave Web API.'
+const validateSteamId64Input = (steamId64) => {
+  const trimmedSteamId64 = steamId64.trim()
+
+  if (!trimmedSteamId64) {
+    return 'Informe o SteamID64 antes de sincronizar a conta.'
   }
 
-  if (!STEAM_API_KEY_PATTERN.test(apiKey.trim())) {
-    return 'Use uma chave hexadecimal de 32 caracteres.'
+  if (!/^\d{17}$/.test(trimmedSteamId64)) {
+    return 'SteamID64 deve ter 17 digitos numericos.'
   }
 
   return ''
@@ -51,12 +78,10 @@ const accountProviders = Object.freeze([
     id: 'steam',
     name: 'Steam',
     icon: CircleDot,
-    state: 'Sync local ativo',
+    state: 'Sync local e por conta',
     tone: 'ready',
-    detail: 'Manifestos instalados ja entram na biblioteca.',
-    nextStep: 'Web API e a proxima etapa.',
-    actionLabel: 'Sincronizar local',
-    actionKind: 'primary',
+    detail: 'Manifestos instalados continuam disponiveis sem credencial.',
+    nextStep: 'A conta usa SteamID64 e AuthVault configurado.',
   },
   {
     id: 'xbox',
@@ -66,8 +91,6 @@ const accountProviders = Object.freeze([
     tone: 'planned',
     detail: 'Area preparada para conta e catalogo.',
     nextStep: 'Sem credenciais nesta versao.',
-    actionLabel: 'Em breve',
-    actionKind: 'disabled',
   },
   {
     id: 'epic',
@@ -77,8 +100,6 @@ const accountProviders = Object.freeze([
     tone: 'planned',
     detail: 'Provider reservado para integracao futura.',
     nextStep: 'Sem segredo salvo agora.',
-    actionLabel: 'Em breve',
-    actionKind: 'disabled',
   },
 ])
 
@@ -90,66 +111,102 @@ function AccountsSettingsPage({
   onSyncSteamAccountGames,
   onSyncSteamGames,
 }) {
-  const steamIdInputId = useId()
-  const steamIdErrorId = useId()
-  const steamApiKeyInputId = useId()
-  const steamApiKeyErrorId = useId()
-  const [steamId64, setSteamId64] = useState('')
-  const [steamIdError, setSteamIdError] = useState('')
-  const [steamSettingsMessage, setSteamSettingsMessage] = useState('')
-  const [steamApiKey, setSteamApiKey] = useState('')
+  const [steamApiKeyForm, setSteamApiKeyForm] = useState(emptySteamApiKeyForm)
+  const [steamAccountForm, setSteamAccountForm] = useState(emptySteamAccountForm)
+  const [steamApiKeyConfigured, setSteamApiKeyConfigured] = useState(false)
+  const [steamApiKeyStatusMessage, setSteamApiKeyStatusMessage] = useState('')
   const [steamApiKeyError, setSteamApiKeyError] = useState('')
-  const [steamApiKeyMessage, setSteamApiKeyMessage] = useState('')
-  const [isSteamSettingsLoading, setIsSteamSettingsLoading] = useState(true)
-  const [isSteamSettingsSaving, setIsSteamSettingsSaving] = useState(false)
-  const [isSteamSettingsDisconnecting, setIsSteamSettingsDisconnecting] = useState(false)
-  const [isSteamSettingsBackendAvailable, setIsSteamSettingsBackendAvailable] = useState(false)
+  const [steamAccountStatusMessage, setSteamAccountStatusMessage] = useState('')
+  const [steamAccountError, setSteamAccountError] = useState('')
+  const [isSteamAccountConnected, setIsSteamAccountConnected] = useState(false)
+  const [isSteamLoginStarting, setIsSteamLoginStarting] = useState(false)
   const [isSteamApiKeyLoading, setIsSteamApiKeyLoading] = useState(true)
   const [isSteamApiKeySaving, setIsSteamApiKeySaving] = useState(false)
   const [isSteamApiKeyDeleting, setIsSteamApiKeyDeleting] = useState(false)
-  const [isSteamApiKeyBackendAvailable, setIsSteamApiKeyBackendAvailable] = useState(false)
-  const [isSteamApiKeyConfigured, setIsSteamApiKeyConfigured] = useState(false)
-  const [steamAuthState, setSteamAuthState] = useState('disconnected')
-  const trimmedSteamId64 = steamId64.trim()
-  const trimmedSteamApiKey = steamApiKey.trim()
-  const isSteamConfigured = steamAuthState === 'configured' && Boolean(trimmedSteamId64)
+
+  const steamApiKeyStatusLabel = useMemo(
+    () => {
+      if (!steamApiKeyConfigured) {
+        return 'Cofre nao configurado'
+      }
+
+      return 'Cofre configurado'
+    },
+    [steamApiKeyConfigured],
+  )
+  const isSteamApiKeyBusy = isSteamApiKeyLoading || isSteamApiKeySaving || isSteamApiKeyDeleting
+  const steamId64Error = validateSteamId64Input(steamAccountForm.steamId64)
+  const canSyncSteamAccount = steamApiKeyConfigured && isSteamAccountConnected && !steamId64Error
 
   useEffect(() => {
     let isMounted = true
 
-    const loadSteamSettings = async () => {
-      setIsSteamSettingsLoading(true)
-
+    const loadSteamAccountConfig = async () => {
       try {
-        const settings = await getSteamAccountSettings()
+        const accountConfig = await getSteamAccountConfig()
 
         if (!isMounted) {
           return
         }
 
-        setSteamId64(settings.steamId64)
-        setSteamAuthState(settings.authState)
-        setIsSteamSettingsBackendAvailable(settings.isBackendAvailable)
-        setSteamSettingsMessage(
-          settings.isBackendAvailable
-            ? 'Configuracao local Steam pronta.'
-            : 'Comando de configuracao Steam aguardando backend.',
-        )
+        if (accountConfig?.connected && /^\d{17}$/.test(accountConfig.steamId64 ?? '')) {
+          setSteamAccountForm({ steamId64: accountConfig.steamId64 })
+          setIsSteamAccountConnected(true)
+          setSteamAccountStatusMessage('Conta Steam conectada neste dispositivo.')
+        }
       } catch {
         if (isMounted) {
-          setSteamSettingsMessage('Nao foi possivel carregar a configuracao Steam.')
-        }
-      } finally {
-        if (isMounted) {
-          setIsSteamSettingsLoading(false)
+          setSteamAccountError('Nao foi possivel consultar a conta Steam conectada.')
         }
       }
     }
 
-    void loadSteamSettings()
+    void loadSteamAccountConfig()
 
     return () => {
       isMounted = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let unlisten = null
+    let isMounted = true
+
+    const subscribeToSteamLogin = async () => {
+      try {
+        unlisten = await listen('steam-openid-login-complete', (event) => {
+          if (!isMounted) {
+            return
+          }
+
+          const payload = event.payload ?? {}
+          setIsSteamLoginStarting(false)
+
+          if (payload.success && /^\d{17}$/.test(payload.steamId64 ?? '')) {
+            setSteamAccountForm({ steamId64: payload.steamId64 })
+            setIsSteamAccountConnected(true)
+            setSteamAccountError('')
+            setSteamAccountStatusMessage(payload.message || 'Conta Steam conectada neste dispositivo.')
+            return
+          }
+
+          setIsSteamAccountConnected(false)
+          setSteamAccountError(payload.message || 'Nao foi possivel concluir o login Steam.')
+        })
+      } catch {
+        if (isMounted) {
+          setSteamAccountError('Nao foi possivel acompanhar o retorno do login Steam.')
+        }
+      }
+    }
+
+    void subscribeToSteamLogin()
+
+    return () => {
+      isMounted = false
+      if (unlisten) {
+        unlisten()
+      }
     }
   }, [])
 
@@ -158,6 +215,7 @@ function AccountsSettingsPage({
 
     const loadSteamApiKeyStatus = async () => {
       setIsSteamApiKeyLoading(true)
+      setSteamApiKeyError('')
 
       try {
         const status = await getSteamApiKeyStatus()
@@ -166,18 +224,15 @@ function AccountsSettingsPage({
           return
         }
 
-        setIsSteamApiKeyBackendAvailable(status.isBackendAvailable)
-        setIsSteamApiKeyConfigured(status.isConfigured)
-        setSteamApiKeyMessage(
-          status.isBackendAvailable && status.isConfigured
-            ? 'Chave salva no cofre. Por seguranca, o valor nao e exibido.'
-            : status.isBackendAvailable
-              ? 'Cofre Steam pronto. Salve a chave Web API para sincronizar a conta.'
-            : 'Comando do AuthVault Steam aguardando backend.',
+        const isConfigured = normalizeSteamApiKeyStatus(status)
+
+        setSteamApiKeyConfigured(isConfigured)
+        setSteamApiKeyStatusMessage(
+          isConfigured ? 'Cofre configurado.' : 'Cofre nao configurado.',
         )
       } catch {
         if (isMounted) {
-          setSteamApiKeyMessage('Nao foi possivel consultar o cofre Steam.')
+          setSteamApiKeyError('Nao foi possivel consultar o status do cofre Steam Web API.')
         }
       } finally {
         if (isMounted) {
@@ -193,108 +248,113 @@ function AccountsSettingsPage({
     }
   }, [])
 
-  const handleSteamId64Change = (event) => {
-    const value = event.target.value.replace(/\D/g, '').slice(0, 17)
-
-    setSteamId64(value)
-    if (steamIdError) {
-      setSteamIdError(validateSteamId64(value))
-    }
+  const handleSteamApiKeyChange = (event) => {
+    setSteamApiKeyForm({ apiKey: event.target.value })
+    setSteamApiKeyError('')
   }
 
-  const handleSteamSettingsSubmit = async (event) => {
-    event.preventDefault()
+  const handleSteamId64Change = (event) => {
+    const steamId64 = event.target.value.replace(/\D/g, '').slice(0, 17)
 
-    const validationError = validateSteamId64(trimmedSteamId64)
+    setSteamAccountForm({ steamId64 })
+    setSteamAccountError('')
+    setIsSteamAccountConnected(false)
 
-    if (validationError) {
-      setSteamIdError(validationError)
-      setSteamSettingsMessage('Revise o SteamID64 antes de salvar.')
+    if (/^\d{17}$/.test(steamId64)) {
+      setSteamAccountStatusMessage('SteamID64 pronto para salvar neste dispositivo.')
       return
     }
 
-    setSteamIdError('')
-    setIsSteamSettingsSaving(true)
-    setSteamSettingsMessage('Salvando configuracao Steam...')
+    setSteamAccountStatusMessage('')
+  }
+
+  const handleSteamAccountSave = async () => {
+    const validationError = validateSteamId64Input(steamAccountForm.steamId64)
+
+    if (validationError) {
+      setSteamAccountError(validationError)
+      return
+    }
 
     try {
-      const result = await saveSteamAccountSettings({ steamId64: trimmedSteamId64 })
-
-      setIsSteamSettingsBackendAvailable(result.isBackendAvailable)
-      setSteamAuthState(result.authState)
-      setSteamId64(result.steamId64 || trimmedSteamId64)
-      setSteamSettingsMessage(
-        result.saved
-          ? 'SteamID64 salvo na configuracao local.'
-          : 'Backend ainda nao expoe o comando de salvar SteamID64.',
-      )
+      const accountConfig = await saveSteamAccountConfig(steamAccountForm.steamId64)
+      setSteamAccountForm({ steamId64: accountConfig.steamId64 ?? steamAccountForm.steamId64.trim() })
+      setIsSteamAccountConnected(true)
+      setSteamAccountError('')
+      setSteamAccountStatusMessage('SteamID64 salvo no banco local.')
     } catch {
-      setSteamSettingsMessage('Nao foi possivel salvar a configuracao Steam.')
-    } finally {
-      setIsSteamSettingsSaving(false)
+      setIsSteamAccountConnected(false)
+      setSteamAccountError('Nao foi possivel salvar o SteamID64 no banco local.')
     }
   }
 
-  const handleSteamSettingsDisconnect = async () => {
-    setIsSteamSettingsDisconnecting(true)
-    setSteamSettingsMessage('Removendo configuracao local Steam...')
+  const handleSteamLoginStart = async () => {
+    setIsSteamLoginStarting(true)
+    setSteamAccountError('')
+    setSteamAccountStatusMessage('Abrindo login oficial da Steam no navegador.')
 
     try {
-      const result = await disconnectSteamAccountSettings()
-
-      setIsSteamSettingsBackendAvailable(result.isBackendAvailable)
-      setSteamAuthState(result.authState)
-      setSteamId64(result.steamId64)
-      setSteamIdError('')
-      setSteamSettingsMessage(
-        result.disconnected
-          ? 'Configuracao local Steam removida. Jogos importados foram preservados.'
-          : 'Backend ainda nao expoe o comando de desconectar Steam.',
-      )
+      await startSteamLogin()
+      setSteamAccountStatusMessage('Conclua o login no navegador para conectar a conta.')
     } catch {
-      setSteamSettingsMessage('Nao foi possivel remover a configuracao Steam.')
-    } finally {
-      setIsSteamSettingsDisconnecting(false)
+      setIsSteamLoginStarting(false)
+      setSteamAccountError('Nao foi possivel iniciar o login oficial da Steam.')
     }
   }
 
-  const handleSteamApiKeyChange = (event) => {
-    const value = event.target.value.replace(/\s/g, '').slice(0, 32)
+  const handleSteamAccountSync = async () => {
+    const validationError = validateSteamId64Input(steamAccountForm.steamId64)
 
-    setSteamApiKey(value)
-    if (steamApiKeyError) {
-      setSteamApiKeyError(validateSteamApiKey(value))
+    if (validationError) {
+      setSteamAccountError(validationError)
+      return
+    }
+
+    if (!steamApiKeyConfigured) {
+      setSteamAccountError('Configure o AuthVault antes de sincronizar a conta.')
+      return
+    }
+
+    setSteamAccountError('')
+    setSteamAccountStatusMessage('Sincronizacao por conta em andamento.')
+    if (!isSteamAccountConnected) {
+      setSteamAccountError('Conecte a conta Steam antes de sincronizar pela Web API.')
+      return
+    }
+
+    try {
+      await onSyncSteamAccountGames()
+      setSteamAccountStatusMessage('Sincronizacao por conta finalizada.')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setSteamAccountError(`Nao foi possivel sincronizar a conta Steam: ${message}`)
+      setSteamAccountStatusMessage('')
     }
   }
 
   const handleSteamApiKeySubmit = async (event) => {
     event.preventDefault()
 
-    const validationError = validateSteamApiKey(trimmedSteamApiKey)
+    const validationError = validateSteamApiKeyInput(steamApiKeyForm.apiKey)
 
     if (validationError) {
       setSteamApiKeyError(validationError)
-      setSteamApiKeyMessage('Revise a chave antes de salvar no cofre.')
       return
     }
 
-    setSteamApiKeyError('')
     setIsSteamApiKeySaving(true)
-    setSteamApiKeyMessage('Salvando chave Steam no cofre seguro...')
+    setSteamApiKeyError('')
+    setSteamApiKeyStatusMessage('Salvando credencial Steam Web API no AuthVault.')
 
     try {
-      const result = await saveSteamApiKey({ apiKey: trimmedSteamApiKey })
-
-      setIsSteamApiKeyBackendAvailable(result.isBackendAvailable)
-      setIsSteamApiKeyConfigured(result.isConfigured)
-      setSteamApiKey('')
-      setSteamApiKeyMessage(
-        result.saved
-          ? 'Chave Steam salva no cofre seguro. Por seguranca, o campo foi limpo.'
-          : 'Backend ainda nao expoe o comando de salvar chave Steam.',
-      )
-    } catch {
-      setSteamApiKeyMessage('Nao foi possivel salvar a chave Steam no cofre.')
+      const status = await saveSteamApiKey(steamApiKeyForm.apiKey.trim())
+      const isConfigured = normalizeSteamApiKeyStatus(status)
+      setSteamApiKeyForm(emptySteamApiKeyForm)
+      setSteamApiKeyConfigured(isConfigured)
+      setSteamApiKeyStatusMessage(isConfigured ? 'AuthVault configurado.' : 'Cofre nao configurado.')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setSteamApiKeyError(`Nao foi possivel configurar o AuthVault: ${message}`)
     } finally {
       setIsSteamApiKeySaving(false)
     }
@@ -302,31 +362,20 @@ function AccountsSettingsPage({
 
   const handleSteamApiKeyDelete = async () => {
     setIsSteamApiKeyDeleting(true)
-    setSteamApiKeyMessage('Removendo chave Steam do cofre seguro...')
+    setSteamApiKeyError('')
+    setSteamApiKeyStatusMessage('Removendo credencial Steam Web API do AuthVault.')
 
     try {
-      const result = await deleteSteamApiKey()
-
-      setIsSteamApiKeyBackendAvailable(result.isBackendAvailable)
-      setIsSteamApiKeyConfigured(result.isConfigured)
-      setSteamApiKey('')
-      setSteamApiKeyError('')
-      setSteamApiKeyMessage(
-        result.deleted
-          ? 'Chave Steam removida do cofre seguro.'
-          : 'Backend ainda nao expoe o comando de remover chave Steam.',
-      )
+      await deleteSteamApiKey()
+      setSteamApiKeyForm(emptySteamApiKeyForm)
+      setSteamApiKeyConfigured(false)
+      setSteamApiKeyStatusMessage('AuthVault nao configurado.')
     } catch {
-      setSteamApiKeyMessage('Nao foi possivel remover a chave Steam do cofre.')
+      setSteamApiKeyError('Nao foi possivel limpar o AuthVault.')
     } finally {
       setIsSteamApiKeyDeleting(false)
     }
   }
-
-  const isSteamSettingsBusy =
-    isSteamSettingsLoading || isSteamSettingsSaving || isSteamSettingsDisconnecting
-  const isSteamApiKeyBusy = isSteamApiKeyLoading || isSteamApiKeySaving || isSteamApiKeyDeleting
-  const canSyncSteamAccount = isSteamConfigured && isSteamApiKeyConfigured && !isSteamApiKeyBusy
 
   return (
     <section className="accounts-page" aria-labelledby="accounts-title">
@@ -345,39 +394,65 @@ function AccountsSettingsPage({
         <section className="accounts-panel" aria-label="Contas conectadas">
           {accountProviders.map((provider) => (
             <ProviderAccountRow
+              canSyncSteamAccount={canSyncSteamAccount}
+              isSteamAccountSyncing={isSteamAccountSyncing}
               isSteamSyncing={isSteamSyncing}
               key={provider.id}
               provider={provider}
+              steamAccountDisabledReason={
+                !steamApiKeyConfigured
+                  ? 'Configure o AuthVault para sincronizar a conta.'
+                  : !isSteamAccountConnected
+                    ? 'Conecte a conta Steam para sincronizar.'
+                  : steamId64Error || ''
+              }
+              isSteamLoginStarting={isSteamLoginStarting}
+              isSteamAccountConnected={isSteamAccountConnected}
+              onStartSteamLogin={handleSteamLoginStart}
+              onSyncSteamAccountGames={handleSteamAccountSync}
               onSyncSteamGames={onSyncSteamGames}
             />
           ))}
+
+          <SteamAccountPanel
+            errorMessage={steamAccountError}
+            form={steamAccountForm}
+            isBusy={isSteamAccountSyncing}
+            isConfigured={!steamId64Error}
+            statusMessage={steamAccountStatusMessage}
+            onChange={handleSteamId64Change}
+            onSave={handleSteamAccountSave}
+          />
+
+          <SteamWebApiVaultPanel
+            form={steamApiKeyForm}
+            isBusy={isSteamApiKeyBusy}
+            isDeleting={isSteamApiKeyDeleting}
+            isLoading={isSteamApiKeyLoading}
+            isSaving={isSteamApiKeySaving}
+            isConfigured={steamApiKeyConfigured}
+            statusLabel={steamApiKeyStatusLabel}
+            statusMessage={steamApiKeyStatusMessage}
+            errorMessage={steamApiKeyError}
+            onChange={handleSteamApiKeyChange}
+            onDelete={handleSteamApiKeyDelete}
+            onSubmit={handleSteamApiKeySubmit}
+          />
         </section>
 
         <aside className="accounts-summary" aria-label="Estado das integracoes">
           <div>
             <span className="summary-kicker">Seguranca</span>
-            <strong>Segredos ficam no cofre</strong>
-            <p>SteamID64 e publico. A chave Web API fica no AuthVault e nao volta para a interface.</p>
+            <strong>AuthVault protege o segredo</strong>
+            <p>A credencial salva nunca volta preenchida para a interface.</p>
           </div>
           <div className="summary-row">
             <KeyRound size={18} aria-hidden="true" />
-            <span>
-              Credenciais: {isSteamApiKeyConfigured ? 'cofre Steam configurado' : 'nao configuradas'}
-            </span>
+            <span>Steam Web API: {steamApiKeyStatusLabel}</span>
           </div>
           <div className="summary-row">
             <Cloud size={18} aria-hidden="true" />
-            <span>
-              Web API: {canSyncSteamAccount ? 'pronta para sincronizar' : 'aguardando SteamID64 e chave'}
-            </span>
-          </div>
-          <div className="summary-row">
-            <CheckCircle2 size={18} aria-hidden="true" />
-            <span>
-              {isSteamSettingsBackendAvailable
-                ? `Configuracao Steam: ${isSteamConfigured ? 'local salva' : 'nao configurada'}`
-                : 'Configuracao Steam: aguardando comandos'}
-            </span>
+            <span>Sync por conta: {canSyncSteamAccount ? 'pronta' : 'pendente'}</span>
           </div>
           {feedbackMessage ? (
             <div className="account-feedback" role="status" aria-live="polite">
@@ -386,150 +461,170 @@ function AccountsSettingsPage({
           ) : null}
         </aside>
       </div>
-
-      <section className="steam-settings-panel" aria-labelledby="steam-settings-title" aria-busy={isSteamSettingsBusy}>
-        <div className="steam-settings-heading">
-          <div>
-            <span className="summary-kicker">Steam</span>
-            <h2 id="steam-settings-title">SteamID64</h2>
-            <p>Identifica a conta consultada pela sincronizacao Web API.</p>
-          </div>
-          <span className="account-status" data-tone={isSteamSettingsBackendAvailable ? 'ready' : 'planned'}>
-            {isSteamSettingsBackendAvailable ? <CheckCircle2 size={14} aria-hidden="true" /> : <Clock3 size={14} aria-hidden="true" />}
-            {isSteamSettingsBackendAvailable ? (isSteamConfigured ? 'Configuracao local' : 'Nao configurada') : 'Aguardando backend'}
-          </span>
-        </div>
-
-        <form className="steam-settings-form" onSubmit={handleSteamSettingsSubmit}>
-          <label htmlFor={steamIdInputId}>
-            <span>SteamID64</span>
-            <input
-              id={steamIdInputId}
-              inputMode="numeric"
-              maxLength={17}
-              pattern="[0-9]{17}"
-              placeholder="76561198000000000"
-              type="text"
-              value={steamId64}
-              aria-describedby={steamIdError ? steamIdErrorId : undefined}
-              aria-invalid={steamIdError ? 'true' : 'false'}
-              disabled={isSteamSettingsLoading}
-              onChange={handleSteamId64Change}
-            />
-          </label>
-
-          {steamIdError ? (
-            <p className="form-error" id={steamIdErrorId}>
-              {steamIdError}
-            </p>
-          ) : null}
-
-          <div className="steam-settings-actions">
-            <p role="status" aria-live="polite">
-              {steamSettingsMessage}
-            </p>
-            <div className="steam-settings-buttons">
-              <button
-                className="secondary-button"
-                type="button"
-                disabled={isSteamSettingsBusy || !isSteamConfigured}
-                onClick={handleSteamSettingsDisconnect}
-              >
-                <LogOut size={18} aria-hidden="true" />
-                {isSteamSettingsDisconnecting ? 'Removendo' : 'Remover configuracao'}
-              </button>
-              <button className="primary-button" type="submit" disabled={isSteamSettingsBusy}>
-                {isSteamSettingsSaving ? 'Salvando' : 'Salvar SteamID64'}
-              </button>
-            </div>
-          </div>
-        </form>
-      </section>
-
-      <section className="steam-settings-panel" aria-labelledby="steam-api-key-title" aria-busy={isSteamApiKeyBusy}>
-        <div className="steam-settings-heading">
-          <div>
-            <span className="summary-kicker">AuthVault</span>
-            <h2 id="steam-api-key-title">Steam Web API</h2>
-            <p>Usa o cofre do sistema para sincronizar a biblioteca da conta pela Web API.</p>
-          </div>
-          <span className="account-status" data-tone={isSteamApiKeyBackendAvailable ? 'ready' : 'planned'}>
-            {isSteamApiKeyBackendAvailable ? <CheckCircle2 size={14} aria-hidden="true" /> : <Clock3 size={14} aria-hidden="true" />}
-            {isSteamApiKeyBackendAvailable
-              ? isSteamApiKeyConfigured
-                ? 'Cofre configurado'
-                : 'Cofre vazio'
-              : 'Aguardando backend'}
-          </span>
-        </div>
-
-        <form className="steam-settings-form" onSubmit={handleSteamApiKeySubmit}>
-          <label htmlFor={steamApiKeyInputId}>
-            <span>Chave Web API</span>
-            <input
-              id={steamApiKeyInputId}
-              autoComplete="off"
-              inputMode="text"
-              maxLength={32}
-              placeholder={isSteamApiKeyConfigured ? 'Chave salva no cofre' : '32 caracteres hexadecimais'}
-              type="password"
-              value={steamApiKey}
-              aria-describedby={steamApiKeyError ? steamApiKeyErrorId : undefined}
-              aria-invalid={steamApiKeyError ? 'true' : 'false'}
-              disabled={isSteamApiKeyLoading}
-              onChange={handleSteamApiKeyChange}
-            />
-            {isSteamApiKeyConfigured ? (
-              <small className="field-hint">Chave salva no cofre. O valor nao e carregado na tela.</small>
-            ) : null}
-          </label>
-
-          {steamApiKeyError ? (
-            <p className="form-error" id={steamApiKeyErrorId}>
-              {steamApiKeyError}
-            </p>
-          ) : null}
-
-          <div className="steam-settings-actions">
-            <p role="status" aria-live="polite">
-              {steamApiKeyMessage}
-            </p>
-            <div className="steam-settings-buttons">
-              <button
-                className="secondary-button"
-                type="button"
-                disabled={isSteamApiKeyBusy || !isSteamApiKeyConfigured}
-                onClick={handleSteamApiKeyDelete}
-              >
-                <LogOut size={18} aria-hidden="true" />
-                {isSteamApiKeyDeleting ? 'Removendo' : 'Remover chave'}
-              </button>
-              <button className="primary-button" type="submit" disabled={isSteamApiKeyBusy}>
-                {isSteamApiKeySaving ? 'Salvando' : 'Salvar no cofre'}
-              </button>
-              <button
-                className="primary-button"
-                type="button"
-                disabled={!canSyncSteamAccount || isSteamAccountSyncing}
-                onClick={onSyncSteamAccountGames}
-              >
-                {isSteamAccountSyncing ? 'Sincronizando' : 'Sincronizar conta'}
-              </button>
-            </div>
-          </div>
-        </form>
-      </section>
     </section>
   )
 }
 
-function ProviderAccountRow({ isSteamSyncing, provider, onSyncSteamGames }) {
+function SteamWebApiVaultPanel({
+  errorMessage,
+  form,
+  isBusy,
+  isConfigured,
+  isDeleting,
+  isLoading,
+  isSaving,
+  onChange,
+  onDelete,
+  onSubmit,
+  statusLabel,
+  statusMessage,
+}) {
+  return (
+    <article className="steam-api-vault" aria-labelledby="steam-api-vault-title">
+      <div className="steam-api-vault-heading">
+        <div className="account-provider-icon" aria-hidden="true">
+          <LockKeyhole size={22} />
+        </div>
+
+        <div>
+          <div className="account-provider-heading">
+            <h2 id="steam-api-vault-title">Steam Web API</h2>
+            <span className="account-status" data-tone={isConfigured ? 'ready' : 'planned'}>
+              {isConfigured ? <CheckCircle2 size={14} aria-hidden="true" /> : <AlertCircle size={14} aria-hidden="true" />}
+              {isLoading ? 'Consultando cofre' : statusLabel}
+            </span>
+          </div>
+          <p>
+            Prepare o AuthVault para chamadas da Web API. A sincronizacao por SteamID64 sera
+            conectada em uma etapa separada.
+          </p>
+        </div>
+      </div>
+
+      <form className="steam-api-key-form" onSubmit={onSubmit} aria-busy={isBusy}>
+        <label htmlFor="steam-api-key">
+          <span>Credencial Web API</span>
+          <input
+            id="steam-api-key"
+            type="password"
+            value={form.apiKey}
+            autoComplete="off"
+            spellCheck="false"
+            inputMode="text"
+            aria-invalid={errorMessage ? 'true' : 'false'}
+            aria-describedby="steam-api-key-help steam-api-key-feedback"
+            disabled={isBusy}
+            onChange={onChange}
+          />
+        </label>
+        <p id="steam-api-key-help">
+          Cole um novo valor para salvar ou substituir. O valor ja salvo nao e exibido.
+        </p>
+
+        <div className="steam-api-key-actions">
+          <button className="primary-button" type="submit" disabled={isBusy}>
+            <Save size={16} aria-hidden="true" />
+            {isSaving ? 'Salvando' : 'Salvar'}
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={isBusy || !isConfigured}
+            onClick={onDelete}
+          >
+            <Trash2 size={16} aria-hidden="true" />
+            {isDeleting ? 'Removendo' : 'Remover'}
+          </button>
+        </div>
+
+        <div
+          id="steam-api-key-feedback"
+          className={errorMessage ? 'steam-api-key-feedback error' : 'steam-api-key-feedback'}
+          role="status"
+          aria-live="polite"
+        >
+          {errorMessage || statusMessage || 'O status do cofre sera mostrado aqui.'}
+        </div>
+      </form>
+    </article>
+  )
+}
+
+function SteamAccountPanel({ errorMessage, form, isBusy, isConfigured, onChange, onSave, statusMessage }) {
+  return (
+    <article className="steam-account-panel" aria-labelledby="steam-account-title" aria-busy={isBusy}>
+      <div className="steam-api-vault-heading">
+        <div className="account-provider-icon" aria-hidden="true">
+          <UserRound size={22} />
+        </div>
+
+        <div>
+          <div className="account-provider-heading">
+            <h2 id="steam-account-title">Conta Steam</h2>
+            <span className="account-status" data-tone={isConfigured ? 'ready' : 'planned'}>
+              {isConfigured ? <CheckCircle2 size={14} aria-hidden="true" /> : <AlertCircle size={14} aria-hidden="true" />}
+              {isConfigured ? 'SteamID64 configurado' : 'SteamID64 pendente'}
+            </span>
+          </div>
+          <p>Use o login oficial da Steam ou salve o SteamID64 manualmente no banco local.</p>
+        </div>
+      </div>
+
+      <label className="steam-account-field" htmlFor="steam-id64">
+        <span>SteamID64</span>
+        <input
+          id="steam-id64"
+          type="text"
+          value={form.steamId64}
+          autoComplete="off"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={17}
+          aria-invalid={errorMessage ? 'true' : 'false'}
+          aria-describedby="steam-id64-help steam-id64-feedback"
+          disabled={isBusy}
+          onChange={onChange}
+        />
+      </label>
+      <p id="steam-id64-help" className="steam-account-help">
+        Usado apenas para consultar a biblioteca publica/permitida pela Web API.
+      </p>
+      <div className="steam-api-key-actions">
+        <button className="secondary-button" type="button" disabled={isBusy} onClick={onSave}>
+          <Save size={16} aria-hidden="true" />
+          Salvar SteamID64
+        </button>
+      </div>
+      <div
+        id="steam-id64-feedback"
+        className={errorMessage ? 'steam-api-key-feedback error' : 'steam-api-key-feedback'}
+        role="status"
+        aria-live="polite"
+      >
+        {errorMessage || statusMessage || 'Informe o SteamID64 para liberar a sincronizacao por conta.'}
+      </div>
+    </article>
+  )
+}
+
+function ProviderAccountRow({
+  canSyncSteamAccount,
+  isSteamAccountConnected,
+  isSteamAccountSyncing,
+  isSteamLoginStarting,
+  isSteamSyncing,
+  onStartSteamLogin,
+  onSyncSteamAccountGames,
+  onSyncSteamGames,
+  provider,
+  steamAccountDisabledReason,
+}) {
   const Icon = provider.icon
   const isSteam = provider.id === 'steam'
-  const isDisabled = provider.actionKind === 'disabled' || (isSteam && isSteamSyncing)
+  const isPlanned = provider.tone === 'planned'
 
   return (
-    <article className="account-row">
+    <article className="account-row" aria-busy={isSteam ? isSteamSyncing || isSteamAccountSyncing : undefined}>
       <div className="account-provider-icon" aria-hidden="true">
         <Icon size={22} />
       </div>
@@ -546,15 +641,48 @@ function ProviderAccountRow({ isSteamSyncing, provider, onSyncSteamGames }) {
         <span>{provider.nextStep}</span>
       </div>
 
-      <button
-        className={provider.actionKind === 'primary' ? 'primary-button' : 'secondary-button'}
-        type="button"
-        aria-label={`${provider.actionLabel}: ${provider.name}`}
-        disabled={isDisabled}
-        onClick={isSteam ? onSyncSteamGames : undefined}
-      >
-        {isSteam && isSteamSyncing ? 'Sincronizando' : provider.actionLabel}
-      </button>
+      {isSteam ? (
+        <div className="account-actions">
+          <button
+            className={isSteamAccountConnected ? 'secondary-button' : 'primary-button'}
+            type="button"
+            aria-label="Entrar com Steam pelo navegador oficial"
+            disabled={isSteamSyncing || isSteamAccountSyncing || isSteamLoginStarting}
+            onClick={onStartSteamLogin}
+          >
+            <LogIn size={16} aria-hidden="true" />
+            {isSteamLoginStarting ? 'Conectando' : isSteamAccountConnected ? 'Reconectar Steam' : 'Entrar com Steam'}
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            aria-label="Sincronizar Steam local por manifestos"
+            disabled={isSteamSyncing || isSteamAccountSyncing}
+            onClick={onSyncSteamGames}
+          >
+            {isSteamSyncing ? 'Sincronizando local' : 'Sincronizar local'}
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            aria-label="Sincronizar conta Steam via Web API"
+            aria-describedby={!canSyncSteamAccount ? 'steam-account-sync-requirements' : undefined}
+            disabled={!canSyncSteamAccount || isSteamSyncing || isSteamAccountSyncing}
+            onClick={onSyncSteamAccountGames}
+          >
+            {isSteamAccountSyncing ? 'Sincronizando conta' : 'Sincronizar conta'}
+          </button>
+          {!canSyncSteamAccount ? (
+            <span id="steam-account-sync-requirements" className="account-action-hint">
+              {steamAccountDisabledReason}
+            </span>
+          ) : null}
+        </div>
+      ) : (
+        <button className="secondary-button" type="button" disabled={isPlanned}>
+          Em breve
+        </button>
+      )}
     </article>
   )
 }

@@ -315,30 +315,24 @@ export function useLibraryPageState() {
     }
 
     setIsSteamAccountSyncing(true)
-    setLaunchMessage('Sincronizando biblioteca Steam por conta...')
+    setLaunchMessage('Sincronizando biblioteca da conta Steam...')
 
     try {
       const summary = await syncSteamAccountGames()
 
       if (!summary) {
-        setLaunchMessage('Sincronizacao por conta Steam disponivel apenas no aplicativo Tauri.')
+        setLaunchMessage('Sincronizacao por conta disponivel apenas no aplicativo Tauri.')
         return
       }
 
       await refreshEntries()
-      if (summary.discovered === 0) {
-        setLaunchMessage(
-          'A Steam Web API respondeu, mas nao retornou jogos. Verifique se a biblioteca da conta esta publica/visivel para a chave usada.',
-        )
-        return
-      }
-
       setLaunchMessage(
-        `Sincronizacao da conta Steam concluida: ${summary.inserted} novos, ${summary.updated} atualizados e ${summary.discovered} jogos retornados pela Web API.`,
+        `Sincronizacao da conta concluida: ${summary.inserted} novos, ${summary.updated} atualizados, ${summary.archived ?? 0} arquivados e ${summary.unavailable ?? 0} indisponiveis em ${summary.discovered} itens encontrados.`,
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       setLaunchMessage(`Nao foi possivel sincronizar a conta Steam: ${message}`)
+      throw new Error(message)
     } finally {
       setIsSteamAccountSyncing(false)
     }
@@ -433,7 +427,7 @@ export function useLibraryPageState() {
     handleNavigationFilter,
     handleSelectEntry,
     handleSyncLocalGames,
-    handleSyncSteamAccountGames,
     handleSyncSteamGames,
+    handleSyncSteamAccountGames,
   }
 }

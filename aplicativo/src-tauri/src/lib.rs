@@ -16,9 +16,12 @@ pub fn run() {
             let connection = storage::open_database(&db_path)
                 .map_err(|error| format!("failed to open local database: {error}"))?;
             let connection = std::sync::Arc::new(std::sync::Mutex::new(connection));
+            let auth_vault_dir = app_data_dir.join("auth-vault");
+            let auth_vault = std::sync::Arc::new(security::AuthVault::system(auth_vault_dir));
 
             app.manage(AppState {
                 connection: std::sync::Arc::clone(&connection),
+                auth_vault,
             });
             bootstrap_library(app.handle().clone(), connection);
 
@@ -39,12 +42,12 @@ pub fn run() {
             commands::sync_local_games,
             commands::sync_steam_games,
             commands::sync_steam_account_games,
-            commands::list_steam_account_config,
+            commands::get_steam_account_config,
+            commands::start_steam_openid_login,
             commands::save_steam_account_config,
-            commands::disconnect_steam_account_config,
-            commands::get_steam_api_key_status,
-            commands::save_steam_api_key,
-            commands::delete_steam_api_key,
+            commands::save_steam_web_api_key,
+            commands::get_steam_web_api_key_state,
+            commands::disconnect_steam_web_api_key,
             commands::set_library_entry_archived,
             commands::launch_library_entry,
         ])
@@ -54,6 +57,7 @@ pub fn run() {
 
 struct AppState {
     connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    auth_vault: std::sync::Arc<security::AuthVault>,
 }
 
 fn bootstrap_library(
@@ -77,466 +81,9 @@ fn bootstrap_library(
     });
 }
 
-mod auth_vault {
-    use serde::{Deserialize, Serialize};
-    use std::fmt;
-
-    const KEYRING_SERVICE: &str = "com.bibliotecajogos.unificada";
-    const STEAM_API_KEY_ACCOUNT: &str = "steam-web-api-key";
-    const STEAM_PROVIDER_ID: &str = "steam";
-    const STEAM_API_KEY_KIND: &str = "steam_web_api_key";
-
-    #[derive(Clone, Debug, Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    pub struct SteamApiKeyInput {
-        api_key: String,
-    }
-
-    impl SteamApiKeyInput {
-        pub fn normalized_api_key(self) -> Result<String, AuthVaultError> {
-            normalize_steam_api_key(self.api_key)
-        }
-    }
-
-    #[derive(Debug, Serialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct SteamApiKeyStatusDto {
-        provider_id: String,
-        secret_kind: String,
-        is_configured: bool,
-    }
-
-    impl SteamApiKeyStatusDto {
-        pub fn is_configured(&self) -> bool {
-            self.is_configured
-        }
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub enum AuthVaultError {
-        InvalidSteamApiKey,
-        SecureStorageUnavailable,
-    }
-
-    impl fmt::Display for AuthVaultError {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                AuthVaultError::InvalidSteamApiKey => {
-                    write!(formatter, "Steam Web API key invalida.")
-                }
-                AuthVaultError::SecureStorageUnavailable => {
-                    write!(formatter, "Cofre seguro indisponivel para a chave Steam.")
-                }
-            }
-        }
-    }
-
-    pub trait SecretVault {
-        fn has_secret(&self, account: &str) -> Result<bool, AuthVaultError>;
-        fn get_secret(&self, account: &str) -> Result<Option<String>, AuthVaultError>;
-        fn set_secret(&self, account: &str, secret: &str) -> Result<(), AuthVaultError>;
-        fn delete_secret(&self, account: &str) -> Result<(), AuthVaultError>;
-    }
-
-    #[derive(Default)]
-    pub struct SystemSecretVault;
-
-    impl SecretVault for SystemSecretVault {
-        fn has_secret(&self, account: &str) -> Result<bool, AuthVaultError> {
-            let entry = keyring::Entry::new(KEYRING_SERVICE, account)
-                .map_err(|_| AuthVaultError::SecureStorageUnavailable)?;
-
-            match entry.get_password() {
-                Ok(_) => Ok(true),
-                Err(keyring::Error::NoEntry) => Ok(false),
-                Err(_) => Err(AuthVaultError::SecureStorageUnavailable),
-            }
-        }
-
-        fn get_secret(&self, account: &str) -> Result<Option<String>, AuthVaultError> {
-            let entry = keyring::Entry::new(KEYRING_SERVICE, account)
-                .map_err(|_| AuthVaultError::SecureStorageUnavailable)?;
-
-            match entry.get_password() {
-                Ok(secret) => Ok(Some(secret)),
-                Err(keyring::Error::NoEntry) => Ok(None),
-                Err(_) => Err(AuthVaultError::SecureStorageUnavailable),
-            }
-        }
-
-        fn set_secret(&self, account: &str, secret: &str) -> Result<(), AuthVaultError> {
-            let entry = keyring::Entry::new(KEYRING_SERVICE, account)
-                .map_err(|_| AuthVaultError::SecureStorageUnavailable)?;
-
-            entry
-                .set_password(secret)
-                .map_err(|_| AuthVaultError::SecureStorageUnavailable)
-        }
-
-        fn delete_secret(&self, account: &str) -> Result<(), AuthVaultError> {
-            let entry = keyring::Entry::new(KEYRING_SERVICE, account)
-                .map_err(|_| AuthVaultError::SecureStorageUnavailable)?;
-
-            match entry.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                Err(_) => Err(AuthVaultError::SecureStorageUnavailable),
-            }
-        }
-    }
-
-    pub fn get_steam_api_key_status<Vault: SecretVault>(
-        vault: &Vault,
-    ) -> Result<SteamApiKeyStatusDto, AuthVaultError> {
-        Ok(steam_api_key_status(
-            vault.has_secret(STEAM_API_KEY_ACCOUNT)?,
-        ))
-    }
-
-    pub fn get_steam_api_key<Vault: SecretVault>(
-        vault: &Vault,
-    ) -> Result<Option<String>, AuthVaultError> {
-        vault.get_secret(STEAM_API_KEY_ACCOUNT)
-    }
-
-    #[cfg(test)]
-    pub fn save_steam_api_key<Vault: SecretVault>(
-        vault: &Vault,
-        input: SteamApiKeyInput,
-    ) -> Result<SteamApiKeyStatusDto, AuthVaultError> {
-        let api_key = input.normalized_api_key()?;
-
-        save_normalized_steam_api_key(vault, &api_key)
-    }
-
-    pub fn save_normalized_steam_api_key<Vault: SecretVault>(
-        vault: &Vault,
-        api_key: &str,
-    ) -> Result<SteamApiKeyStatusDto, AuthVaultError> {
-        let api_key = normalize_steam_api_key(api_key.to_string())?;
-
-        vault.set_secret(STEAM_API_KEY_ACCOUNT, api_key.as_str())?;
-        if vault.get_secret(STEAM_API_KEY_ACCOUNT)? != Some(api_key) {
-            return Err(AuthVaultError::SecureStorageUnavailable);
-        }
-
-        Ok(steam_api_key_status(true))
-    }
-
-    pub fn delete_steam_api_key<Vault: SecretVault>(
-        vault: &Vault,
-    ) -> Result<SteamApiKeyStatusDto, AuthVaultError> {
-        vault.delete_secret(STEAM_API_KEY_ACCOUNT)?;
-        Ok(steam_api_key_status(false))
-    }
-
-    pub fn steam_api_key_status(is_configured: bool) -> SteamApiKeyStatusDto {
-        SteamApiKeyStatusDto {
-            provider_id: STEAM_PROVIDER_ID.to_string(),
-            secret_kind: STEAM_API_KEY_KIND.to_string(),
-            is_configured,
-        }
-    }
-
-    fn normalize_steam_api_key(value: String) -> Result<String, AuthVaultError> {
-        let api_key = value.trim();
-
-        if api_key.len() == 32 && api_key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            Ok(api_key.to_ascii_uppercase())
-        } else {
-            Err(AuthVaultError::InvalidSteamApiKey)
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use std::sync::Mutex;
-
-        #[derive(Default)]
-        struct FakeSecretVault {
-            secret: Mutex<Option<String>>,
-        }
-
-        impl FakeSecretVault {
-            fn stored_secret(&self) -> Option<String> {
-                self.secret.lock().expect("lock fake vault").clone()
-            }
-        }
-
-        impl SecretVault for FakeSecretVault {
-            fn has_secret(&self, _account: &str) -> Result<bool, AuthVaultError> {
-                Ok(self.secret.lock().expect("lock fake vault").is_some())
-            }
-
-            fn get_secret(&self, _account: &str) -> Result<Option<String>, AuthVaultError> {
-                Ok(self.secret.lock().expect("lock fake vault").clone())
-            }
-
-            fn set_secret(&self, _account: &str, secret: &str) -> Result<(), AuthVaultError> {
-                *self.secret.lock().expect("lock fake vault") = Some(secret.to_string());
-                Ok(())
-            }
-
-            fn delete_secret(&self, _account: &str) -> Result<(), AuthVaultError> {
-                *self.secret.lock().expect("lock fake vault") = None;
-                Ok(())
-            }
-        }
-
-        #[test]
-        fn steam_api_key_status_starts_unconfigured() {
-            let vault = FakeSecretVault::default();
-            let status = get_steam_api_key_status(&vault).expect("get status");
-
-            assert_eq!(status.provider_id, "steam");
-            assert_eq!(status.secret_kind, "steam_web_api_key");
-            assert!(!status.is_configured);
-        }
-
-        #[test]
-        fn save_steam_api_key_stores_normalized_secret_without_returning_it() {
-            let vault = FakeSecretVault::default();
-            let status = save_steam_api_key(
-                &vault,
-                SteamApiKeyInput {
-                    api_key: " 0123456789abcdef0123456789abcdef ".to_string(),
-                },
-            )
-            .expect("save api key");
-
-            assert!(status.is_configured);
-            assert_eq!(
-                vault.stored_secret(),
-                Some("0123456789ABCDEF0123456789ABCDEF".to_string())
-            );
-        }
-
-        #[test]
-        fn save_steam_api_key_rejects_invalid_secret() {
-            let vault = FakeSecretVault::default();
-            let result = save_steam_api_key(
-                &vault,
-                SteamApiKeyInput {
-                    api_key: "not-a-valid-key".to_string(),
-                },
-            );
-
-            assert!(matches!(result, Err(AuthVaultError::InvalidSteamApiKey)));
-            assert_eq!(vault.stored_secret(), None);
-        }
-
-        #[test]
-        fn delete_steam_api_key_clears_secret() {
-            let vault = FakeSecretVault::default();
-            save_steam_api_key(
-                &vault,
-                SteamApiKeyInput {
-                    api_key: "0123456789abcdef0123456789abcdef".to_string(),
-                },
-            )
-            .expect("save api key");
-
-            let status = delete_steam_api_key(&vault).expect("delete api key");
-
-            assert!(!status.is_configured);
-            assert_eq!(vault.stored_secret(), None);
-        }
-    }
-}
-
-mod steam_web_api {
-    use serde::Deserialize;
-    use std::fmt;
-
-    const GET_OWNED_GAMES_URL: &str =
-        "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct SteamOwnedGame {
-        pub app_id: String,
-        pub title: String,
-        pub playtime_total_minutes: i64,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub enum SteamWebApiError {
-        AccessDenied,
-        RateLimited,
-        RequestFailed,
-        InvalidResponse,
-    }
-
-    impl fmt::Display for SteamWebApiError {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                SteamWebApiError::AccessDenied => {
-                    write!(
-                        formatter,
-                        "A Steam recusou a consulta. Verifique a chave Web API, o SteamID64 e a visibilidade da biblioteca."
-                    )
-                }
-                SteamWebApiError::RateLimited => {
-                    write!(
-                        formatter,
-                        "A Steam limitou temporariamente as consultas. Aguarde alguns minutos e tente novamente."
-                    )
-                }
-                SteamWebApiError::RequestFailed => {
-                    write!(formatter, "Nao foi possivel consultar a Steam Web API.")
-                }
-                SteamWebApiError::InvalidResponse => {
-                    write!(formatter, "A Steam Web API retornou uma resposta invalida.")
-                }
-            }
-        }
-    }
-
-    pub trait SteamWebApiClient {
-        fn get_owned_games(
-            &self,
-            api_key: &str,
-            steam_id64: &str,
-        ) -> Result<SteamOwnedGamesResponse, SteamWebApiError>;
-    }
-
-    #[derive(Default)]
-    pub struct UreqSteamWebApiClient;
-
-    impl SteamWebApiClient for UreqSteamWebApiClient {
-        fn get_owned_games(
-            &self,
-            api_key: &str,
-            steam_id64: &str,
-        ) -> Result<SteamOwnedGamesResponse, SteamWebApiError> {
-            ureq::get(GET_OWNED_GAMES_URL)
-                .query("key", api_key)
-                .query("steamid", steam_id64)
-                .query("include_appinfo", "1")
-                .query("include_played_free_games", "1")
-                .query("format", "json")
-                .call()
-                .map_err(|error| match error {
-                    ureq::Error::Status(401 | 403, _) => SteamWebApiError::AccessDenied,
-                    ureq::Error::Status(429, _) => SteamWebApiError::RateLimited,
-                    _ => SteamWebApiError::RequestFailed,
-                })?
-                .into_json::<SteamOwnedGamesResponse>()
-                .map_err(|_| SteamWebApiError::InvalidResponse)
-        }
-    }
-
-    #[derive(Clone, Debug, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct SteamOwnedGamesResponse {
-        response: SteamOwnedGamesPayload,
-    }
-
-    #[derive(Clone, Debug, Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct SteamOwnedGamesPayload {
-        games: Option<Vec<SteamOwnedGamePayload>>,
-    }
-
-    #[derive(Clone, Debug, Deserialize)]
-    struct SteamOwnedGamePayload {
-        appid: u64,
-        name: Option<String>,
-        playtime_forever: Option<i64>,
-    }
-
-    pub fn fetch_owned_games<Client: SteamWebApiClient>(
-        client: &Client,
-        api_key: &str,
-        steam_id64: &str,
-    ) -> Result<Vec<SteamOwnedGame>, SteamWebApiError> {
-        let response = client.get_owned_games(api_key, steam_id64)?;
-        let games = response
-            .response
-            .games
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|game| {
-                let title = game.name?.trim().to_string();
-
-                if title.is_empty() {
-                    return None;
-                }
-
-                Some(SteamOwnedGame {
-                    app_id: game.appid.to_string(),
-                    title,
-                    playtime_total_minutes: game.playtime_forever.unwrap_or(0).max(0),
-                })
-            })
-            .collect::<Vec<_>>();
-
-        Ok(games)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        struct FakeSteamWebApiClient {
-            response: SteamOwnedGamesResponse,
-        }
-
-        impl SteamWebApiClient for FakeSteamWebApiClient {
-            fn get_owned_games(
-                &self,
-                api_key: &str,
-                steam_id64: &str,
-            ) -> Result<SteamOwnedGamesResponse, SteamWebApiError> {
-                assert_eq!(api_key, "SECRET");
-                assert_eq!(steam_id64, "76561198000000000");
-
-                Ok(SteamOwnedGamesResponse {
-                    response: SteamOwnedGamesPayload {
-                        games: self.response.response.games.clone(),
-                    },
-                })
-            }
-        }
-
-        #[test]
-        fn fetch_owned_games_normalizes_valid_response() {
-            let client = FakeSteamWebApiClient {
-                response: SteamOwnedGamesResponse {
-                    response: SteamOwnedGamesPayload {
-                        games: Some(vec![
-                            SteamOwnedGamePayload {
-                                appid: 413150,
-                                name: Some("Stardew Valley".to_string()),
-                                playtime_forever: Some(120),
-                            },
-                            SteamOwnedGamePayload {
-                                appid: 10,
-                                name: None,
-                                playtime_forever: Some(1),
-                            },
-                        ]),
-                    },
-                },
-            };
-
-            let games =
-                fetch_owned_games(&client, "SECRET", "76561198000000000").expect("fetch games");
-
-            assert_eq!(
-                games,
-                vec![SteamOwnedGame {
-                    app_id: "413150".to_string(),
-                    title: "Stardew Valley".to_string(),
-                    playtime_total_minutes: 120,
-                }]
-            );
-        }
-    }
-}
-
 mod commands {
-    use super::{auth_vault, launcher, steam_web_api, storage, AppState};
-    use tauri::State;
+    use super::{launcher, security, steam_openid, steam_web_api, storage, AppState};
+    use tauri::{AppHandle, State};
 
     #[tauri::command]
     pub fn list_library_entries(
@@ -599,59 +146,42 @@ mod commands {
     pub fn sync_steam_account_games(
         state: State<'_, AppState>,
     ) -> Result<storage::SyncSummaryDto, String> {
-        let steam_id64 = {
+        let steam_id = {
             let connection = state
                 .connection
                 .lock()
                 .map_err(|_| "failed to lock local database".to_string())?;
-            let account_config = storage::list_steam_account_config(&connection)
-                .map_err(|error| error.to_string())?;
 
-            account_config
-                .steam_id64()
+            let steam_id = storage::read_steam_account_config(&connection)
+                .map_err(|error| error.to_string())?
                 .ok_or_else(|| {
-                    "Configure um SteamID64 antes de sincronizar a conta Steam.".to_string()
-                })?
-                .to_string()
+                    "Configure o SteamID64 da conta Steam antes de sincronizar pela Web API."
+                        .to_string()
+                })?;
+            steam_id
         };
-        let vault = auth_vault::SystemSecretVault;
-        let (account_has_key_marker, plaintext_dev_key) = {
-            let connection = state
-                .connection
-                .lock()
-                .map_err(|_| "failed to lock local database".to_string())?;
-            let config = storage::list_steam_account_config(&connection)
-                .map_err(|error| error.to_string())?;
-
-            (
-                config.steam_api_key_configured(),
-                config.steam_api_key_plaintext_dev().map(str::to_string),
-            )
-        };
-        let api_key = auth_vault::get_steam_api_key(&vault)
+        let api_key = state
+            .auth_vault
+            .steam_web_api_key()
             .map_err(|error| error.to_string())?
-            .or(plaintext_dev_key)
             .ok_or_else(|| {
-                if account_has_key_marker {
-                    "A chave Steam Web API estava marcada como configurada, mas nao foi encontrada no cofre. Salve a chave novamente.".to_string()
-                } else {
-                    "Salve a chave Steam Web API no cofre antes de sincronizar a conta Steam.".to_string()
-                }
+                "Configure a Steam Web API key no cofre seguro antes de sincronizar.".to_string()
             })?;
-        let client = steam_web_api::UreqSteamWebApiClient::default();
-        let remote_games = steam_web_api::fetch_owned_games(&client, &api_key, &steam_id64)
+        let client = steam_web_api::ReqwestSteamWebApiClient::default();
+        let remote_games = steam_web_api::fetch_owned_games(&client, &api_key, &steam_id)
             .map_err(|error| error.to_string())?;
+
         let mut connection = state
             .connection
             .lock()
             .map_err(|_| "failed to lock local database".to_string())?;
 
-        storage::sync_steam_account_games(&mut connection, remote_games)
+        storage::sync_steam_account_games(&mut connection, &steam_id, &remote_games)
             .map_err(|error| error.to_string())
     }
 
     #[tauri::command]
-    pub fn list_steam_account_config(
+    pub fn get_steam_account_config(
         state: State<'_, AppState>,
     ) -> Result<storage::SteamAccountConfigDto, String> {
         let connection = state
@@ -659,7 +189,15 @@ mod commands {
             .lock()
             .map_err(|_| "failed to lock local database".to_string())?;
 
-        storage::list_steam_account_config(&connection).map_err(|error| error.to_string())
+        storage::get_steam_account_config(&connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn start_steam_openid_login(
+        app: AppHandle,
+        state: State<'_, AppState>,
+    ) -> Result<steam_openid::SteamOpenIdLoginStartDto, String> {
+        steam_openid::start_login(app, state.connection.clone()).map_err(|error| error.to_string())
     }
 
     #[tauri::command]
@@ -677,82 +215,53 @@ mod commands {
     }
 
     #[tauri::command]
-    pub fn disconnect_steam_account_config(
+    pub fn save_steam_web_api_key(
+        input: security::SteamWebApiKeyInput,
         state: State<'_, AppState>,
-    ) -> Result<storage::SteamAccountConfigDto, String> {
-        let mut connection = state
-            .connection
-            .lock()
-            .map_err(|_| "failed to lock local database".to_string())?;
-        let vault = auth_vault::SystemSecretVault;
-
-        auth_vault::delete_steam_api_key(&vault).map_err(|error| error.to_string())?;
-
-        storage::disconnect_steam_account_config(&mut connection).map_err(|error| error.to_string())
-    }
-
-    #[tauri::command]
-    pub fn get_steam_api_key_status(
-        state: State<'_, AppState>,
-    ) -> Result<auth_vault::SteamApiKeyStatusDto, String> {
-        let connection = state
-            .connection
-            .lock()
-            .map_err(|_| "failed to lock local database".to_string())?;
-        let vault = auth_vault::SystemSecretVault;
-        let account_config =
-            storage::list_steam_account_config(&connection).map_err(|error| error.to_string())?;
-        let has_secret = auth_vault::get_steam_api_key_status(&vault)
-            .map(|status| status.is_configured())
-            .unwrap_or(false);
-        let has_plaintext_dev_key = account_config.steam_api_key_plaintext_dev().is_some();
-
-        Ok(auth_vault::steam_api_key_status(
-            account_config.steam_api_key_configured() || has_secret || has_plaintext_dev_key,
-        ))
-    }
-
-    #[tauri::command]
-    pub fn save_steam_api_key(
-        input: auth_vault::SteamApiKeyInput,
-        state: State<'_, AppState>,
-    ) -> Result<auth_vault::SteamApiKeyStatusDto, String> {
-        let mut connection = state
-            .connection
-            .lock()
-            .map_err(|_| "failed to lock local database".to_string())?;
-        let vault = auth_vault::SystemSecretVault;
-        let api_key = input
-            .normalized_api_key()
+    ) -> Result<security::SteamWebApiKeyStateDto, String> {
+        let state_dto = state
+            .auth_vault
+            .save_steam_web_api_key(input)
             .map_err(|error| error.to_string())?;
-        let status = auth_vault::save_normalized_steam_api_key(&vault, api_key.as_str())
-            .unwrap_or_else(|_| auth_vault::steam_api_key_status(true));
-
-        storage::set_steam_api_key_configured(
-            &mut connection,
-            status.is_configured(),
-            Some(api_key.as_str()),
-        )
-        .map_err(|error| error.to_string())?;
-
-        Ok(status)
-    }
-
-    #[tauri::command]
-    pub fn delete_steam_api_key(
-        state: State<'_, AppState>,
-    ) -> Result<auth_vault::SteamApiKeyStatusDto, String> {
         let mut connection = state
             .connection
             .lock()
             .map_err(|_| "failed to lock local database".to_string())?;
-        let vault = auth_vault::SystemSecretVault;
-        let status = auth_vault::delete_steam_api_key(&vault).map_err(|error| error.to_string())?;
 
-        storage::set_steam_api_key_configured(&mut connection, false, None)
+        storage::set_steam_web_api_key_config(&mut connection, true)
             .map_err(|error| error.to_string())?;
 
-        Ok(status)
+        Ok(state_dto)
+    }
+
+    #[tauri::command]
+    pub fn get_steam_web_api_key_state(
+        state: State<'_, AppState>,
+    ) -> Result<security::SteamWebApiKeyStateDto, String> {
+        let vault_state = state
+            .auth_vault
+            .steam_web_api_key_state()
+            .map_err(|error| error.to_string())?;
+        Ok(vault_state)
+    }
+
+    #[tauri::command]
+    pub fn disconnect_steam_web_api_key(
+        state: State<'_, AppState>,
+    ) -> Result<security::SteamWebApiKeyStateDto, String> {
+        let state_dto = state
+            .auth_vault
+            .disconnect_steam_web_api_key()
+            .map_err(|error| error.to_string())?;
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::set_steam_web_api_key_config(&mut connection, false)
+            .map_err(|error| error.to_string())?;
+
+        Ok(state_dto)
     }
 
     #[tauri::command]
@@ -796,6 +305,613 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         launcher::launch_library_entry(&connection, &entry_id).map_err(|error| error.to_string())
+    }
+}
+
+mod security {
+    use keyring::{Entry, Error as KeyringError};
+    use serde::{Deserialize, Serialize};
+    use std::fmt;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    const STEAM_WEB_API_SERVICE: &str = "com.bibliotecajogos.unificada";
+    const STEAM_WEB_API_USER: &str = "steam-web-api-key";
+    const STEAM_WEB_API_KEY_LENGTH: usize = 32;
+    const STEAM_WEB_API_KEY_FILE: &str = "steam-web-api-key.dpapi";
+    const STEAM_WEB_API_DPAPI_ENTROPY: &[u8] = b"com.bibliotecajogos.unificada/steam-web-api-key";
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct SteamWebApiKeyInput {
+        api_key: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamWebApiKeyStateDto {
+        configured: bool,
+        provider_id: &'static str,
+        storage: &'static str,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum AuthVaultError {
+        InvalidSteamWebApiKey,
+        SecureStorageUnavailable { operation: &'static str },
+        LockUnavailable,
+    }
+
+    impl fmt::Display for AuthVaultError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let message = match self {
+                AuthVaultError::InvalidSteamWebApiKey => {
+                    "Chave Steam Web API invalida. Informe uma chave hexadecimal de 32 caracteres."
+                }
+                AuthVaultError::SecureStorageUnavailable { operation } => {
+                    return write!(
+                        formatter,
+                        "Nao foi possivel acessar o cofre seguro do sistema operacional durante {operation}."
+                    );
+                }
+                AuthVaultError::LockUnavailable => {
+                    "Nao foi possivel atualizar o estado de autenticacao local."
+                }
+            };
+
+            formatter.write_str(message)
+        }
+    }
+
+    pub struct AuthVault {
+        store: Arc<dyn SecretStore>,
+        state: Mutex<AuthVaultState>,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct AuthVaultState {
+        steam_web_api_key_configured: bool,
+    }
+
+    impl AuthVault {
+        pub fn system(vault_dir: PathBuf) -> Self {
+            Self::new(Arc::new(SystemSecretStore::new(vault_dir)))
+        }
+
+        fn new(store: Arc<dyn SecretStore>) -> Self {
+            let steam_web_api_key_configured = store.exists().unwrap_or(false);
+
+            Self {
+                store,
+                state: Mutex::new(AuthVaultState {
+                    steam_web_api_key_configured,
+                }),
+            }
+        }
+
+        pub fn save_steam_web_api_key(
+            &self,
+            input: SteamWebApiKeyInput,
+        ) -> Result<SteamWebApiKeyStateDto, AuthVaultError> {
+            let api_key = validate_steam_web_api_key(&input.api_key)?;
+            self.store.set(api_key)?;
+            if self.store.get()?.as_deref() != Some(api_key) {
+                return Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "validacao da credencial",
+                });
+            }
+            self.set_steam_web_api_key_configured(true)
+        }
+
+        pub fn steam_web_api_key_state(&self) -> Result<SteamWebApiKeyStateDto, AuthVaultError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AuthVaultError::LockUnavailable)?;
+            state.steam_web_api_key_configured = self.store.exists()?;
+
+            Ok(steam_web_api_key_state_dto(
+                state.steam_web_api_key_configured,
+                "auth_vault",
+            ))
+        }
+
+        pub fn steam_web_api_key(&self) -> Result<Option<String>, AuthVaultError> {
+            self.store.get()
+        }
+
+        pub fn disconnect_steam_web_api_key(
+            &self,
+        ) -> Result<SteamWebApiKeyStateDto, AuthVaultError> {
+            self.store.delete()?;
+            self.set_steam_web_api_key_configured(false)
+        }
+
+        fn set_steam_web_api_key_configured(
+            &self,
+            configured: bool,
+        ) -> Result<SteamWebApiKeyStateDto, AuthVaultError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AuthVaultError::LockUnavailable)?;
+            state.steam_web_api_key_configured = configured;
+
+            Ok(steam_web_api_key_state_dto(configured, "auth_vault"))
+        }
+    }
+
+    fn steam_web_api_key_state_dto(
+        configured: bool,
+        storage: &'static str,
+    ) -> SteamWebApiKeyStateDto {
+        SteamWebApiKeyStateDto {
+            configured,
+            provider_id: "steam",
+            storage,
+        }
+    }
+
+    fn validate_steam_web_api_key(input: &str) -> Result<&str, AuthVaultError> {
+        let api_key = input.trim();
+
+        if api_key.len() == STEAM_WEB_API_KEY_LENGTH
+            && api_key.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            Ok(api_key)
+        } else {
+            Err(AuthVaultError::InvalidSteamWebApiKey)
+        }
+    }
+
+    trait SecretStore: Send + Sync {
+        fn set(&self, secret: &str) -> Result<(), AuthVaultError>;
+        fn get(&self) -> Result<Option<String>, AuthVaultError>;
+        fn exists(&self) -> Result<bool, AuthVaultError>;
+        fn delete(&self) -> Result<(), AuthVaultError>;
+    }
+
+    struct SystemSecretStore {
+        fallback: DpapiFileSecretStore,
+    }
+
+    impl SystemSecretStore {
+        fn new(vault_dir: PathBuf) -> Self {
+            Self {
+                fallback: DpapiFileSecretStore::new(vault_dir.join(STEAM_WEB_API_KEY_FILE)),
+            }
+        }
+
+        fn entry(&self) -> Result<Entry, AuthVaultError> {
+            Entry::new(STEAM_WEB_API_SERVICE, STEAM_WEB_API_USER).map_err(|_| {
+                AuthVaultError::SecureStorageUnavailable {
+                    operation: "preparacao do AuthVault",
+                }
+            })
+        }
+
+        fn set_keyring_secret(&self, secret: &str) -> Result<(), AuthVaultError> {
+            self.entry()?.set_password(secret).map_err(|_| {
+                AuthVaultError::SecureStorageUnavailable {
+                    operation: "gravacao da credencial",
+                }
+            })
+        }
+
+        fn get_keyring_secret(&self) -> Result<Option<String>, AuthVaultError> {
+            match self.entry()?.get_password() {
+                Ok(secret) => Ok(Some(secret)),
+                Err(KeyringError::NoEntry) => Ok(None),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "leitura da credencial",
+                }),
+            }
+        }
+
+        fn delete_keyring_secret(&self) -> Result<(), AuthVaultError> {
+            match self.entry()?.delete_credential() {
+                Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "remocao da credencial",
+                }),
+            }
+        }
+    }
+
+    impl SecretStore for SystemSecretStore {
+        fn set(&self, secret: &str) -> Result<(), AuthVaultError> {
+            if self.set_keyring_secret(secret).is_ok()
+                && self.get_keyring_secret().ok().flatten().as_deref() == Some(secret)
+            {
+                let _ = self.fallback.delete();
+                return Ok(());
+            }
+
+            self.fallback.set(secret)?;
+            if self.fallback.get()?.as_deref() == Some(secret) {
+                match self.delete_keyring_secret() {
+                    Ok(()) => Ok(()),
+                    Err(error) if self.get_keyring_secret().ok().flatten().is_some() => Err(error),
+                    Err(_) => Ok(()),
+                }
+            } else {
+                Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "validacao da credencial",
+                })
+            }
+        }
+
+        fn get(&self) -> Result<Option<String>, AuthVaultError> {
+            if let Ok(Some(secret)) = self.get_keyring_secret() {
+                return Ok(Some(secret));
+            }
+
+            self.fallback.get()
+        }
+
+        fn exists(&self) -> Result<bool, AuthVaultError> {
+            self.get().map(|secret| secret.is_some())
+        }
+
+        fn delete(&self) -> Result<(), AuthVaultError> {
+            let keyring_result = self.delete_keyring_secret();
+            let fallback_result = self.fallback.delete();
+
+            fallback_result?;
+            match keyring_result {
+                Ok(()) => Ok(()),
+                Err(error) if self.get_keyring_secret().ok().flatten().is_some() => Err(error),
+                Err(_) => Ok(()),
+            }
+        }
+    }
+
+    struct DpapiFileSecretStore {
+        path: PathBuf,
+    }
+
+    impl DpapiFileSecretStore {
+        fn new(path: PathBuf) -> Self {
+            Self { path }
+        }
+    }
+
+    impl SecretStore for DpapiFileSecretStore {
+        fn set(&self, secret: &str) -> Result<(), AuthVaultError> {
+            let protected_secret = protect_secret(secret.as_bytes())?;
+            let parent_dir =
+                self.path
+                    .parent()
+                    .ok_or(AuthVaultError::SecureStorageUnavailable {
+                        operation: "preparacao do cofre DPAPI",
+                    })?;
+            std::fs::create_dir_all(parent_dir).map_err(|_| {
+                AuthVaultError::SecureStorageUnavailable {
+                    operation: "preparacao do cofre DPAPI",
+                }
+            })?;
+
+            let temp_path = self.path.with_extension("dpapi.tmp");
+            let _ = std::fs::remove_file(&temp_path);
+            {
+                let mut file = std::fs::File::create(&temp_path).map_err(|_| {
+                    let _ = std::fs::remove_file(&temp_path);
+                    AuthVaultError::SecureStorageUnavailable {
+                        operation: "gravacao da credencial DPAPI",
+                    }
+                })?;
+                std::io::Write::write_all(&mut file, &protected_secret).map_err(|_| {
+                    let _ = std::fs::remove_file(&temp_path);
+                    AuthVaultError::SecureStorageUnavailable {
+                        operation: "gravacao da credencial DPAPI",
+                    }
+                })?;
+                file.sync_all().map_err(|_| {
+                    let _ = std::fs::remove_file(&temp_path);
+                    AuthVaultError::SecureStorageUnavailable {
+                        operation: "gravacao da credencial DPAPI",
+                    }
+                })?;
+            }
+            std::fs::rename(&temp_path, &self.path).map_err(|_| {
+                let _ = std::fs::remove_file(&temp_path);
+                AuthVaultError::SecureStorageUnavailable {
+                    operation: "gravacao da credencial DPAPI",
+                }
+            })
+        }
+
+        fn get(&self) -> Result<Option<String>, AuthVaultError> {
+            let protected_secret = match std::fs::read(&self.path) {
+                Ok(secret) => secret,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(_) => {
+                    return Err(AuthVaultError::SecureStorageUnavailable {
+                        operation: "leitura da credencial DPAPI",
+                    });
+                }
+            };
+            let secret = unprotect_secret(&protected_secret)?;
+
+            String::from_utf8(secret).map(Some).map_err(|_| {
+                AuthVaultError::SecureStorageUnavailable {
+                    operation: "leitura da credencial DPAPI",
+                }
+            })
+        }
+
+        fn exists(&self) -> Result<bool, AuthVaultError> {
+            self.get().map(|secret| secret.is_some())
+        }
+
+        fn delete(&self) -> Result<(), AuthVaultError> {
+            let temp_path = self.path.with_extension("dpapi.tmp");
+            let _ = std::fs::remove_file(temp_path);
+
+            match std::fs::remove_file(&self.path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "remocao da credencial DPAPI",
+                }),
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn protect_secret(secret: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
+        use std::ptr;
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Cryptography::{
+            CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        };
+
+        let entropy = CRYPT_INTEGER_BLOB {
+            cbData: STEAM_WEB_API_DPAPI_ENTROPY.len() as u32,
+            pbData: STEAM_WEB_API_DPAPI_ENTROPY.as_ptr() as *mut u8,
+        };
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: secret.len() as u32,
+            pbData: secret.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB::default();
+        let success = unsafe {
+            CryptProtectData(
+                &input,
+                ptr::null(),
+                &entropy,
+                ptr::null(),
+                ptr::null(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut output,
+            )
+        };
+        if success == 0 || output.pbData.is_null() {
+            return Err(AuthVaultError::SecureStorageUnavailable {
+                operation: "criptografia da credencial DPAPI",
+            });
+        }
+
+        let protected_secret =
+            unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+        unsafe {
+            LocalFree(output.pbData.cast());
+        }
+
+        Ok(protected_secret)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn protect_secret(_secret: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
+        Err(AuthVaultError::SecureStorageUnavailable {
+            operation: "criptografia da credencial DPAPI",
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    fn unprotect_secret(protected_secret: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
+        use std::ptr;
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Cryptography::{
+            CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        };
+
+        let entropy = CRYPT_INTEGER_BLOB {
+            cbData: STEAM_WEB_API_DPAPI_ENTROPY.len() as u32,
+            pbData: STEAM_WEB_API_DPAPI_ENTROPY.as_ptr() as *mut u8,
+        };
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: protected_secret.len() as u32,
+            pbData: protected_secret.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB::default();
+        let success = unsafe {
+            CryptUnprotectData(
+                &input,
+                ptr::null_mut(),
+                &entropy,
+                ptr::null(),
+                ptr::null(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut output,
+            )
+        };
+        if success == 0 || output.pbData.is_null() {
+            return Err(AuthVaultError::SecureStorageUnavailable {
+                operation: "descriptografia da credencial DPAPI",
+            });
+        }
+
+        let secret =
+            unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+        unsafe {
+            LocalFree(output.pbData.cast());
+        }
+
+        Ok(secret)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn unprotect_secret(_protected_secret: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
+        Err(AuthVaultError::SecureStorageUnavailable {
+            operation: "descriptografia da credencial DPAPI",
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::collections::HashMap;
+
+        #[test]
+        fn validates_steam_web_api_key_format() {
+            assert!(validate_steam_web_api_key("0123456789abcdefABCDEF0123456789").is_ok());
+            assert_eq!(
+                validate_steam_web_api_key("").expect_err("reject empty"),
+                AuthVaultError::InvalidSteamWebApiKey
+            );
+            assert_eq!(
+                validate_steam_web_api_key("0123456789abcdef").expect_err("reject short"),
+                AuthVaultError::InvalidSteamWebApiKey
+            );
+            assert_eq!(
+                validate_steam_web_api_key("0123456789abcdefABCDEF01234567ZZ")
+                    .expect_err("reject non hex"),
+                AuthVaultError::InvalidSteamWebApiKey
+            );
+        }
+
+        #[test]
+        fn rejects_unknown_payload_fields() {
+            let result = serde_json::from_str::<SteamWebApiKeyInput>(
+                r#"{"apiKey":"0123456789abcdefABCDEF0123456789","unexpected":true}"#,
+            );
+
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn save_state_and_disconnect_use_secret_store_without_exposing_secret() {
+            let store = Arc::new(InMemorySecretStore::default());
+            let vault = AuthVault::new(store.clone());
+
+            assert_eq!(
+                vault.steam_web_api_key_state().expect("read empty state"),
+                steam_web_api_key_state_dto(false, "auth_vault")
+            );
+
+            let saved_state = vault
+                .save_steam_web_api_key(SteamWebApiKeyInput {
+                    api_key: "0123456789abcdefABCDEF0123456789".to_string(),
+                })
+                .expect("save api key");
+
+            assert_eq!(saved_state, steam_web_api_key_state_dto(true, "auth_vault"));
+            assert_eq!(
+                store.read_secret(),
+                Some("0123456789abcdefABCDEF0123456789".to_string())
+            );
+            assert_eq!(
+                vault.steam_web_api_key_state().expect("read saved state"),
+                steam_web_api_key_state_dto(true, "auth_vault")
+            );
+
+            let disconnected_state = vault
+                .disconnect_steam_web_api_key()
+                .expect("disconnect api key");
+
+            assert_eq!(
+                disconnected_state,
+                steam_web_api_key_state_dto(false, "auth_vault")
+            );
+            assert_eq!(store.read_secret(), None);
+        }
+
+        #[test]
+        fn failed_disconnect_keeps_local_state_configured() {
+            let store = Arc::new(InMemorySecretStore::default());
+            let vault = AuthVault::new(store.clone());
+            vault
+                .save_steam_web_api_key(SteamWebApiKeyInput {
+                    api_key: "0123456789abcdefABCDEF0123456789".to_string(),
+                })
+                .expect("save api key");
+            store.fail_deletes();
+
+            assert_eq!(
+                vault
+                    .disconnect_steam_web_api_key()
+                    .expect_err("delete should fail"),
+                AuthVaultError::SecureStorageUnavailable {
+                    operation: "remocao da credencial"
+                }
+            );
+            assert_eq!(
+                vault.steam_web_api_key_state().expect("read state"),
+                steam_web_api_key_state_dto(true, "auth_vault")
+            );
+        }
+
+        #[derive(Default)]
+        struct InMemorySecretStore {
+            secrets: Mutex<HashMap<String, String>>,
+            delete_should_fail: Mutex<bool>,
+        }
+
+        impl InMemorySecretStore {
+            fn read_secret(&self) -> Option<String> {
+                self.secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .get(STEAM_WEB_API_USER)
+                    .cloned()
+            }
+
+            fn fail_deletes(&self) {
+                *self.delete_should_fail.lock().expect("lock delete flag") = true;
+            }
+        }
+
+        impl SecretStore for InMemorySecretStore {
+            fn set(&self, secret: &str) -> Result<(), AuthVaultError> {
+                self.secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .insert(STEAM_WEB_API_USER.to_string(), secret.to_string());
+                Ok(())
+            }
+
+            fn get(&self) -> Result<Option<String>, AuthVaultError> {
+                Ok(self
+                    .secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .get(STEAM_WEB_API_USER)
+                    .cloned())
+            }
+
+            fn exists(&self) -> Result<bool, AuthVaultError> {
+                Ok(self
+                    .secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .contains_key(STEAM_WEB_API_USER))
+            }
+
+            fn delete(&self) -> Result<(), AuthVaultError> {
+                if *self.delete_should_fail.lock().expect("lock delete flag") {
+                    return Err(AuthVaultError::SecureStorageUnavailable {
+                        operation: "remocao da credencial",
+                    });
+                }
+
+                self.secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .remove(STEAM_WEB_API_USER);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -1052,8 +1168,601 @@ mod launcher {
     }
 }
 
+mod steam_web_api {
+    use serde::Deserialize;
+    use std::fmt;
+    use url::Url;
+
+    const STEAM_OWNED_GAMES_ENDPOINT: &str =
+        "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
+
+    pub trait SteamWebApiClient {
+        fn get_owned_games(&self, url: &Url) -> Result<String, SteamWebApiError>;
+    }
+
+    #[derive(Default)]
+    pub struct ReqwestSteamWebApiClient {
+        client: reqwest::blocking::Client,
+    }
+
+    impl SteamWebApiClient for ReqwestSteamWebApiClient {
+        fn get_owned_games(&self, url: &Url) -> Result<String, SteamWebApiError> {
+            let response = self
+                .client
+                .get(url.clone())
+                .send()
+                .map_err(|_| SteamWebApiError::NetworkUnavailable)?;
+            let status = response.status();
+
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err(SteamWebApiError::RateLimited);
+            }
+
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+                || status == reqwest::StatusCode::BAD_REQUEST
+            {
+                return Err(SteamWebApiError::AuthRequired);
+            }
+
+            if !status.is_success() {
+                return Err(SteamWebApiError::PlatformUnavailable);
+            }
+
+            response
+                .text()
+                .map_err(|_| SteamWebApiError::PlatformUnavailable)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SteamWebApiError {
+        AuthRequired,
+        NetworkUnavailable,
+        PlatformUnavailable,
+        RateLimited,
+        ParseFailed,
+    }
+
+    impl fmt::Display for SteamWebApiError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let message = match self {
+                SteamWebApiError::AuthRequired => {
+                    "Nao foi possivel autenticar na Steam Web API. Verifique a chave salva no cofre."
+                }
+                SteamWebApiError::NetworkUnavailable => {
+                    "Nao foi possivel conectar a Steam Web API. Verifique a conexao e tente novamente."
+                }
+                SteamWebApiError::PlatformUnavailable => {
+                    "A Steam Web API nao respondeu como esperado. Tente novamente mais tarde."
+                }
+                SteamWebApiError::RateLimited => {
+                    "A Steam Web API limitou as requisicoes. Aguarde antes de sincronizar novamente."
+                }
+                SteamWebApiError::ParseFailed => {
+                    "Nao foi possivel ler a resposta da Steam Web API."
+                }
+            };
+
+            formatter.write_str(message)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct RemoteSteamGame {
+        pub app_id: String,
+        pub title: String,
+        pub playtime_forever: Option<i64>,
+    }
+
+    pub fn fetch_owned_games(
+        client: &impl SteamWebApiClient,
+        api_key: &str,
+        steam_id: &str,
+    ) -> Result<Vec<RemoteSteamGame>, SteamWebApiError> {
+        let mut url =
+            Url::parse(STEAM_OWNED_GAMES_ENDPOINT).map_err(|_| SteamWebApiError::ParseFailed)?;
+        url.query_pairs_mut()
+            .append_pair("key", api_key)
+            .append_pair("steamid", steam_id)
+            .append_pair("include_appinfo", "1")
+            .append_pair("include_played_free_games", "1")
+            .append_pair("format", "json");
+
+        let body = client.get_owned_games(&url)?;
+        parse_owned_games_response(&body)
+    }
+
+    fn parse_owned_games_response(body: &str) -> Result<Vec<RemoteSteamGame>, SteamWebApiError> {
+        let payload: SteamOwnedGamesResponse =
+            serde_json::from_str(body).map_err(|_| SteamWebApiError::ParseFailed)?;
+
+        Ok(payload
+            .response
+            .games
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|game| {
+                let title = game.name?.trim().to_string();
+                if title.is_empty() {
+                    return None;
+                }
+
+                Some(RemoteSteamGame {
+                    app_id: game.appid.to_string(),
+                    title,
+                    playtime_forever: game.playtime_forever,
+                })
+            })
+            .collect())
+    }
+
+    #[derive(Deserialize)]
+    struct SteamOwnedGamesResponse {
+        response: SteamOwnedGamesPayload,
+    }
+
+    #[derive(Deserialize)]
+    struct SteamOwnedGamesPayload {
+        games: Option<Vec<SteamOwnedGame>>,
+    }
+
+    #[derive(Deserialize)]
+    struct SteamOwnedGame {
+        appid: u64,
+        name: Option<String>,
+        playtime_forever: Option<i64>,
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::Mutex;
+
+        #[test]
+        fn fetch_owned_games_uses_required_query_parameters() {
+            let client = FakeSteamWebApiClient::with_body(
+                r#"{"response":{"games":[{"appid":413150,"name":"Stardew Valley","playtime_forever":321}]}}"#,
+            );
+
+            let games = fetch_owned_games(
+                &client,
+                "0123456789abcdefABCDEF0123456789",
+                "76561198000000000",
+            )
+            .expect("fetch owned games");
+            let url = client.last_url();
+
+            assert_eq!(games.len(), 1);
+            assert_eq!(games[0].app_id, "413150");
+            assert_eq!(games[0].playtime_forever, Some(321));
+            assert_eq!(url.path(), "/IPlayerService/GetOwnedGames/v1/");
+            assert_eq!(
+                url.query_pairs().find(|(key, _)| key == "key").unwrap().1,
+                "0123456789abcdefABCDEF0123456789"
+            );
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "steamid")
+                    .unwrap()
+                    .1,
+                "76561198000000000"
+            );
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "include_appinfo")
+                    .unwrap()
+                    .1,
+                "1"
+            );
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "include_played_free_games")
+                    .unwrap()
+                    .1,
+                "1"
+            );
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "format")
+                    .unwrap()
+                    .1,
+                "json"
+            );
+        }
+
+        #[test]
+        fn fetch_owned_games_maps_client_errors_without_raw_payload() {
+            let client = FakeSteamWebApiClient::with_error(SteamWebApiError::RateLimited);
+
+            let error = fetch_owned_games(
+                &client,
+                "0123456789abcdefABCDEF0123456789",
+                "76561198000000000",
+            )
+            .expect_err("rate limited");
+
+            assert_eq!(error, SteamWebApiError::RateLimited);
+            assert!(!error.to_string().contains("0123456789abcdef"));
+        }
+
+        #[derive(Default)]
+        struct FakeSteamWebApiClient {
+            body: Option<String>,
+            error: Option<SteamWebApiError>,
+            last_url: Mutex<Option<Url>>,
+        }
+
+        impl FakeSteamWebApiClient {
+            fn with_body(body: &str) -> Self {
+                Self {
+                    body: Some(body.to_string()),
+                    error: None,
+                    last_url: Mutex::new(None),
+                }
+            }
+
+            fn with_error(error: SteamWebApiError) -> Self {
+                Self {
+                    body: None,
+                    error: Some(error),
+                    last_url: Mutex::new(None),
+                }
+            }
+
+            fn last_url(&self) -> Url {
+                self.last_url
+                    .lock()
+                    .expect("lock url")
+                    .clone()
+                    .expect("url captured")
+            }
+        }
+
+        impl SteamWebApiClient for FakeSteamWebApiClient {
+            fn get_owned_games(&self, url: &Url) -> Result<String, SteamWebApiError> {
+                *self.last_url.lock().expect("lock url") = Some(url.clone());
+
+                if let Some(error) = &self.error {
+                    return Err(error.clone());
+                }
+
+                Ok(self.body.clone().unwrap_or_default())
+            }
+        }
+    }
+}
+
+mod steam_openid {
+    use super::storage;
+    use rand::{rngs::OsRng, RngCore};
+    use serde::Serialize;
+    use std::fmt;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tauri::{AppHandle, Emitter};
+    use url::Url;
+
+    const STEAM_OPENID_ENDPOINT: &str = "https://steamcommunity.com/openid/login";
+    const STEAM_OPENID_EVENT: &str = "steam-openid-login-complete";
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamOpenIdLoginStartDto {
+        pending: bool,
+        provider_id: &'static str,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SteamOpenIdLoginCompleteDto {
+        success: bool,
+        provider_id: &'static str,
+        steam_id64: Option<String>,
+        message: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SteamOpenIdError {
+        CallbackUnavailable,
+        BrowserOpenFailed,
+    }
+
+    impl fmt::Display for SteamOpenIdError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let message = match self {
+                SteamOpenIdError::CallbackUnavailable => {
+                    "Nao foi possivel preparar o retorno local do login Steam."
+                }
+                SteamOpenIdError::BrowserOpenFailed => {
+                    "Nao foi possivel abrir o navegador para login Steam."
+                }
+            };
+
+            formatter.write_str(message)
+        }
+    }
+
+    pub fn start_login(
+        app: AppHandle,
+        connection: Arc<Mutex<rusqlite::Connection>>,
+    ) -> Result<SteamOpenIdLoginStartDto, SteamOpenIdError> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .map_err(|_| SteamOpenIdError::CallbackUnavailable)?;
+        let port = listener
+            .local_addr()
+            .map_err(|_| SteamOpenIdError::CallbackUnavailable)?
+            .port();
+        let state = generate_state();
+        let return_to = format!("http://127.0.0.1:{port}/steam/openid/callback?state={state}");
+        let realm = format!("http://127.0.0.1:{port}/");
+        let login_url = build_login_url(&return_to, &realm);
+
+        std::thread::spawn(move || {
+            let result = wait_for_callback(listener, &state, &return_to).and_then(|steam_id64| {
+                let mut connection = connection
+                    .lock()
+                    .map_err(|_| "Nao foi possivel salvar a conta Steam.".to_string())?;
+                storage::save_verified_steam_account_config(&mut connection, &steam_id64)
+                    .map_err(|_| "Nao foi possivel salvar a conta Steam.".to_string())?;
+                Ok(steam_id64)
+            });
+
+            let event = match result {
+                Ok(steam_id64) => SteamOpenIdLoginCompleteDto {
+                    success: true,
+                    provider_id: "steam",
+                    steam_id64: Some(steam_id64),
+                    message: "Conta Steam conectada neste dispositivo.".to_string(),
+                },
+                Err(message) => SteamOpenIdLoginCompleteDto {
+                    success: false,
+                    provider_id: "steam",
+                    steam_id64: None,
+                    message,
+                },
+            };
+
+            let _ = app.emit(STEAM_OPENID_EVENT, event);
+        });
+
+        open_browser(&login_url)?;
+
+        Ok(SteamOpenIdLoginStartDto {
+            pending: true,
+            provider_id: "steam",
+        })
+    }
+
+    fn build_login_url(return_to: &str, realm: &str) -> Url {
+        let mut url = Url::parse(STEAM_OPENID_ENDPOINT).expect("valid Steam OpenID endpoint");
+        url.query_pairs_mut()
+            .append_pair("openid.ns", "http://specs.openid.net/auth/2.0")
+            .append_pair("openid.mode", "checkid_setup")
+            .append_pair("openid.return_to", return_to)
+            .append_pair("openid.realm", realm)
+            .append_pair(
+                "openid.identity",
+                "http://specs.openid.net/auth/2.0/identifier_select",
+            )
+            .append_pair(
+                "openid.claimed_id",
+                "http://specs.openid.net/auth/2.0/identifier_select",
+            );
+
+        url
+    }
+
+    #[cfg(target_os = "windows")]
+    fn open_browser(url: &Url) -> Result<(), SteamOpenIdError> {
+        std::process::Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", url.as_str()])
+            .spawn()
+            .map_err(|_| SteamOpenIdError::BrowserOpenFailed)?;
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn open_browser(url: &Url) -> Result<(), SteamOpenIdError> {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        std::process::Command::new(opener)
+            .arg(url.as_str())
+            .spawn()
+            .map_err(|_| SteamOpenIdError::BrowserOpenFailed)?;
+        Ok(())
+    }
+
+    fn wait_for_callback(
+        listener: TcpListener,
+        expected_state: &str,
+        expected_return_to: &str,
+    ) -> Result<String, String> {
+        let (mut stream, _) = listener
+            .accept()
+            .map_err(|_| "Nao foi possivel receber o retorno do login Steam.".to_string())?;
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+
+        let mut buffer = [0_u8; 8192];
+        let size = stream
+            .read(&mut buffer)
+            .map_err(|_| "Nao foi possivel ler o retorno do login Steam.".to_string())?;
+        let request = String::from_utf8_lossy(&buffer[..size]);
+        let callback_url = parse_request_target(&request)
+            .and_then(|target| Url::parse(&format!("http://127.0.0.1{target}")).ok())
+            .ok_or_else(|| "Retorno do login Steam invalido.".to_string())?;
+
+        let result = verify_callback(&callback_url, expected_state, expected_return_to);
+        let html = if result.is_ok() {
+            "<!doctype html><title>Steam conectado</title><body>Login Steam concluido. Volte para o aplicativo.</body>"
+        } else {
+            "<!doctype html><title>Login Steam</title><body>Nao foi possivel concluir o login Steam. Volte para o aplicativo e tente novamente.</body>"
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            html.len(),
+            html
+        );
+        let _ = stream.write_all(response.as_bytes());
+
+        result
+    }
+
+    fn parse_request_target(request: &str) -> Option<&str> {
+        let line = request.lines().next()?;
+        let mut parts = line.split_whitespace();
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some("GET"), Some(target), Some(_)) => Some(target),
+            _ => None,
+        }
+    }
+
+    fn verify_callback(
+        callback_url: &Url,
+        expected_state: &str,
+        expected_return_to: &str,
+    ) -> Result<String, String> {
+        let pairs: Vec<(String, String)> = callback_url
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+
+        if query_value(&pairs, "state") != Some(expected_state) {
+            return Err("Resposta do login Steam rejeitada.".to_string());
+        }
+        if query_value(&pairs, "openid.mode") != Some("id_res") {
+            return Err("Login Steam cancelado ou incompleto.".to_string());
+        }
+        if query_value(&pairs, "openid.return_to") != Some(expected_return_to) {
+            return Err("Resposta do login Steam nao corresponde a sessao iniciada.".to_string());
+        }
+        let claimed_id = query_value(&pairs, "openid.claimed_id")
+            .ok_or_else(|| "Resposta do login Steam nao trouxe SteamID64.".to_string())?;
+        let identity = query_value(&pairs, "openid.identity").ok_or_else(|| {
+            "Resposta do login Steam nao trouxe identidade verificavel.".to_string()
+        })?;
+        if claimed_id != identity {
+            return Err("Resposta do login Steam nao pode ser verificada.".to_string());
+        }
+
+        verify_with_steam(&pairs)?;
+        steam_id64_from_claimed_id(claimed_id)
+            .ok_or_else(|| "Resposta do login Steam nao trouxe SteamID64 valido.".to_string())
+    }
+
+    fn verify_with_steam(pairs: &[(String, String)]) -> Result<(), String> {
+        let mut form: Vec<(String, String)> = pairs
+            .iter()
+            .filter(|(key, _)| key.starts_with("openid."))
+            .map(|(key, value)| {
+                let value = if key == "openid.mode" {
+                    "check_authentication".to_string()
+                } else {
+                    value.clone()
+                };
+                (key.clone(), value)
+            })
+            .collect();
+        if !form.iter().any(|(key, _)| key == "openid.mode") {
+            form.push((
+                "openid.mode".to_string(),
+                "check_authentication".to_string(),
+            ));
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|_| "Nao foi possivel verificar o login Steam.".to_string())?;
+        let body = client
+            .post(STEAM_OPENID_ENDPOINT)
+            .form(&form)
+            .send()
+            .and_then(|response| response.error_for_status())
+            .and_then(|response| response.text())
+            .map_err(|_| "Nao foi possivel verificar o login Steam.".to_string())?;
+
+        if body.lines().any(|line| line.trim() == "is_valid:true") {
+            Ok(())
+        } else {
+            Err("A resposta do Steam nao pode ser verificada.".to_string())
+        }
+    }
+
+    fn query_value<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        pairs
+            .iter()
+            .find_map(|(candidate, value)| (candidate == key).then_some(value.as_str()))
+    }
+
+    fn steam_id64_from_claimed_id(claimed_id: &str) -> Option<String> {
+        let prefix_http = "http://steamcommunity.com/openid/id/";
+        let prefix_https = "https://steamcommunity.com/openid/id/";
+        let steam_id = claimed_id
+            .strip_prefix(prefix_http)
+            .or_else(|| claimed_id.strip_prefix(prefix_https))?;
+
+        if steam_id.len() == 17 && steam_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            Some(steam_id.to_string())
+        } else {
+            None
+        }
+    }
+
+    fn generate_state() -> String {
+        let mut bytes = [0_u8; 24];
+        OsRng.fill_bytes(&mut bytes);
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn extracts_steam_id64_from_documented_claimed_id_formats() {
+            assert_eq!(
+                steam_id64_from_claimed_id("http://steamcommunity.com/openid/id/76561198000000000"),
+                Some("76561198000000000".to_string())
+            );
+            assert_eq!(
+                steam_id64_from_claimed_id(
+                    "https://steamcommunity.com/openid/id/76561198000000000"
+                ),
+                Some("76561198000000000".to_string())
+            );
+            assert_eq!(
+                steam_id64_from_claimed_id("https://example.test/id/76561198000000000"),
+                None
+            );
+        }
+
+        #[test]
+        fn login_url_targets_official_steam_openid_endpoint() {
+            let url = build_login_url(
+                "http://127.0.0.1:4000/steam/openid/callback?state=abc",
+                "http://127.0.0.1:4000/",
+            );
+
+            assert_eq!(url.as_str().split('?').next(), Some(STEAM_OPENID_ENDPOINT));
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "openid.mode")
+                    .unwrap()
+                    .1,
+                "checkid_setup"
+            );
+        }
+    }
+}
+
 mod storage {
-    use super::steam_web_api::SteamOwnedGame;
+    use super::steam_web_api;
     use chrono::{SecondsFormat, Utc};
     use rusqlite::{params, Connection, OptionalExtension};
     use serde::{Deserialize, Serialize};
@@ -1067,9 +1776,9 @@ mod storage {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&connection)?;
         ensure_archived_column(&connection)?;
-        ensure_provider_account_config_columns(&connection)?;
         ensure_active_entries_index(&connection)?;
         ensure_local_cleanup_indexes(&connection)?;
+        ensure_provider_account_configs_table(&connection)?;
         archive_rejected_local_entries(&connection)?;
         Ok(connection)
     }
@@ -1138,15 +1847,11 @@ mod storage {
 
       CREATE TABLE IF NOT EXISTS provider_account_configs (
         provider_id TEXT PRIMARY KEY,
-        auth_state TEXT NOT NULL,
+        account_id TEXT,
         steam_id64 TEXT,
-        configured_at TEXT,
-        disconnected_at TEXT,
-        steam_api_key_configured INTEGER NOT NULL DEFAULT 0,
-        steam_api_key_plaintext_dev TEXT,
-        updated_at TEXT NOT NULL,
-        CHECK (provider_id <> 'steam' OR steam_id64 IS NULL OR (length(steam_id64) = 17 AND steam_id64 NOT GLOB '*[^0-9]*')),
-        CHECK (auth_state IN ('configured', 'disconnected'))
+        steam_web_api_key_configured INTEGER NOT NULL DEFAULT 0,
+        config_json TEXT,
+        updated_at TEXT NOT NULL
       );
 
       CREATE INDEX IF NOT EXISTS idx_games_sort_title ON games(sort_title);
@@ -1160,82 +1865,8 @@ mod storage {
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?1)",
             params![now_iso()],
         )?;
-        connection.execute(
-            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?1)",
-            params![now_iso()],
-        )?;
 
         Ok(())
-    }
-
-    fn ensure_provider_account_config_columns(connection: &Connection) -> rusqlite::Result<()> {
-        if !table_exists(connection, "provider_account_configs")? {
-            return Ok(());
-        }
-
-        if !table_has_column(connection, "provider_account_configs", "auth_state")? {
-            connection.execute(
-                "ALTER TABLE provider_account_configs ADD COLUMN auth_state TEXT NOT NULL DEFAULT 'disconnected'",
-                [],
-            )?;
-        }
-
-        if !table_has_column(connection, "provider_account_configs", "configured_at")? {
-            connection.execute(
-                "ALTER TABLE provider_account_configs ADD COLUMN configured_at TEXT",
-                [],
-            )?;
-        }
-
-        if !table_has_column(connection, "provider_account_configs", "disconnected_at")? {
-            connection.execute(
-                "ALTER TABLE provider_account_configs ADD COLUMN disconnected_at TEXT",
-                [],
-            )?;
-        }
-
-        if !table_has_column(
-            connection,
-            "provider_account_configs",
-            "steam_api_key_configured",
-        )? {
-            connection.execute(
-                "ALTER TABLE provider_account_configs ADD COLUMN steam_api_key_configured INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
-
-        if !table_has_column(
-            connection,
-            "provider_account_configs",
-            "steam_api_key_plaintext_dev",
-        )? {
-            connection.execute(
-                "ALTER TABLE provider_account_configs ADD COLUMN steam_api_key_plaintext_dev TEXT",
-                [],
-            )?;
-        }
-
-        connection.execute(
-            r#"
-            UPDATE provider_account_configs
-            SET auth_state = 'configured',
-                configured_at = COALESCE(configured_at, updated_at)
-            WHERE provider_id = 'steam'
-              AND steam_id64 IS NOT NULL
-              AND trim(steam_id64) <> ''
-              AND auth_state = 'disconnected'
-            "#,
-            [],
-        )?;
-
-        Ok(())
-    }
-
-    #[derive(Debug, Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    pub struct SteamAccountConfigInput {
-        steam_id64: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -1270,31 +1901,140 @@ mod storage {
         unavailable: usize,
     }
 
-    #[derive(Debug, Serialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct SteamAccountConfigDto {
-        provider_id: String,
-        auth_state: String,
-        steam_id64: Option<String>,
-        steam_api_key_configured: bool,
-        steam_api_key_plaintext_dev: Option<String>,
-        configured_at: Option<String>,
-        disconnected_at: Option<String>,
-        updated_at: Option<String>,
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct SteamAccountConfigInput {
+        steam_id64: String,
     }
 
-    impl SteamAccountConfigDto {
-        pub fn steam_id64(&self) -> Option<&str> {
-            self.steam_id64.as_deref()
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamAccountConfigDto {
+        provider_id: &'static str,
+        connected: bool,
+        steam_id64: Option<String>,
+    }
+
+    pub fn get_steam_account_config(
+        connection: &Connection,
+    ) -> rusqlite::Result<SteamAccountConfigDto> {
+        let steam_id64 = read_steam_account_config(connection)?;
+
+        Ok(steam_account_config_dto(steam_id64))
+    }
+
+    pub fn save_steam_account_config(
+        connection: &mut Connection,
+        input: SteamAccountConfigInput,
+    ) -> rusqlite::Result<SteamAccountConfigDto> {
+        let steam_id64 =
+            normalize_steam_id64(&input.steam_id64).ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+        save_verified_steam_account_config(connection, &steam_id64)?;
+
+        Ok(steam_account_config_dto(Some(steam_id64)))
+    }
+
+    pub fn save_verified_steam_account_config(
+        connection: &mut Connection,
+        steam_id64: &str,
+    ) -> rusqlite::Result<()> {
+        let steam_id64 =
+            normalize_steam_id64(steam_id64).ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+        let config_json = serde_json::json!({
+            "steamId64": steam_id64,
+            "linkedBy": "steam_openid",
+        })
+        .to_string();
+
+        connection.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id,
+              account_id,
+              steam_id64,
+              config_json,
+              updated_at
+            )
+            VALUES ('steam', ?1, ?1, ?2, ?3)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              account_id = excluded.account_id,
+              steam_id64 = excluded.steam_id64,
+              config_json = excluded.config_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![steam_id64, config_json, now_iso()],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn set_steam_web_api_key_config(
+        connection: &mut Connection,
+        configured: bool,
+    ) -> rusqlite::Result<()> {
+        connection.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id,
+              steam_web_api_key_configured,
+              updated_at
+            )
+            VALUES ('steam', ?1, ?2)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              steam_web_api_key_configured = excluded.steam_web_api_key_configured,
+              updated_at = excluded.updated_at
+            "#,
+            params![configured, now_iso()],
+        )?;
+
+        Ok(())
+    }
+
+    fn steam_account_config_dto(steam_id64: Option<String>) -> SteamAccountConfigDto {
+        SteamAccountConfigDto {
+            provider_id: "steam",
+            connected: steam_id64.is_some(),
+            steam_id64,
+        }
+    }
+
+    pub fn read_steam_account_config(connection: &Connection) -> rusqlite::Result<Option<String>> {
+        let columns = table_columns(connection, "provider_account_configs")?;
+        if columns.is_empty() {
+            return Ok(None);
         }
 
-        pub fn steam_api_key_configured(&self) -> bool {
-            self.steam_api_key_configured
+        for column in [
+            "steam_id64",
+            "steamid64",
+            "steam_id",
+            "steamid",
+            "account_id",
+        ] {
+            if !columns.iter().any(|existing| existing == column) {
+                continue;
+            }
+
+            if let Some(value) = read_provider_account_config_value(connection, &columns, column)? {
+                if let Some(steam_id) = normalize_steam_id64(&value) {
+                    return Ok(Some(steam_id));
+                }
+            }
         }
 
-        pub fn steam_api_key_plaintext_dev(&self) -> Option<&str> {
-            self.steam_api_key_plaintext_dev.as_deref()
+        for column in ["config_json", "config"] {
+            if !columns.iter().any(|existing| existing == column) {
+                continue;
+            }
+
+            if let Some(value) = read_provider_account_config_value(connection, &columns, column)? {
+                if let Some(steam_id) = steam_id64_from_config_json(&value) {
+                    return Ok(Some(steam_id));
+                }
+            }
         }
+
+        Ok(None)
     }
 
     #[derive(Debug, Serialize)]
@@ -1388,6 +2128,7 @@ mod storage {
                 installed: row.get::<_, i64>(10)? == 1,
                 playtime_total_minutes: row.get(11)?,
                 accent_color: row.get(12)?,
+                source_account_id: None,
             })
         })?;
 
@@ -1436,96 +2177,12 @@ mod storage {
                 installed: row.get::<_, i64>(10)? == 1,
                 playtime_total_minutes: row.get(11)?,
                 accent_color: row.get(12)?,
+                source_account_id: None,
             })
         })?;
 
         rows.map(|row| row.and_then(|entry| hydrate_entry(connection, entry)))
             .collect()
-    }
-
-    pub fn list_steam_account_config(
-        connection: &Connection,
-    ) -> rusqlite::Result<SteamAccountConfigDto> {
-        find_steam_account_config(connection)
-            .map(|config| config.unwrap_or_else(default_steam_config))
-    }
-
-    pub fn save_steam_account_config(
-        connection: &mut Connection,
-        input: SteamAccountConfigInput,
-    ) -> rusqlite::Result<SteamAccountConfigDto> {
-        let steam_id64 = normalize_steam_id64(input.steam_id64)?;
-        let now = now_iso();
-        let transaction = connection.transaction()?;
-
-        transaction.execute(
-            r#"
-            INSERT INTO provider_account_configs (
-              provider_id, auth_state, steam_id64, configured_at, disconnected_at, updated_at
-            ) VALUES ('steam', 'configured', ?1, ?2, NULL, ?2)
-            ON CONFLICT(provider_id) DO UPDATE SET
-              auth_state = 'configured',
-              steam_id64 = excluded.steam_id64,
-              configured_at = COALESCE(provider_account_configs.configured_at, excluded.configured_at),
-              disconnected_at = NULL,
-              updated_at = excluded.updated_at
-            "#,
-            params![steam_id64, now],
-        )?;
-        transaction.commit()?;
-
-        list_steam_account_config(connection)
-    }
-
-    pub fn disconnect_steam_account_config(
-        connection: &mut Connection,
-    ) -> rusqlite::Result<SteamAccountConfigDto> {
-        let now = now_iso();
-        let transaction = connection.transaction()?;
-
-        transaction.execute(
-            r#"
-            INSERT INTO provider_account_configs (
-              provider_id, auth_state, steam_id64, configured_at, disconnected_at, updated_at
-            ) VALUES ('steam', 'disconnected', NULL, NULL, ?1, ?1)
-            ON CONFLICT(provider_id) DO UPDATE SET
-              auth_state = 'disconnected',
-              steam_id64 = NULL,
-              steam_api_key_configured = 0,
-              steam_api_key_plaintext_dev = NULL,
-              disconnected_at = excluded.disconnected_at,
-              updated_at = excluded.updated_at
-            "#,
-            params![now],
-        )?;
-        transaction.commit()?;
-
-        list_steam_account_config(connection)
-    }
-
-    pub fn set_steam_api_key_configured(
-        connection: &mut Connection,
-        is_configured: bool,
-        plaintext_dev_key: Option<&str>,
-    ) -> rusqlite::Result<SteamAccountConfigDto> {
-        let now = now_iso();
-        let transaction = connection.transaction()?;
-
-        transaction.execute(
-            r#"
-            INSERT INTO provider_account_configs (
-              provider_id, auth_state, steam_id64, configured_at, disconnected_at, steam_api_key_configured, steam_api_key_plaintext_dev, updated_at
-            ) VALUES ('steam', 'disconnected', NULL, NULL, NULL, ?1, ?2, ?3)
-            ON CONFLICT(provider_id) DO UPDATE SET
-              steam_api_key_configured = excluded.steam_api_key_configured,
-              steam_api_key_plaintext_dev = excluded.steam_api_key_plaintext_dev,
-              updated_at = excluded.updated_at
-            "#,
-            params![is_configured as i64, plaintext_dev_key, now],
-        )?;
-        transaction.commit()?;
-
-        list_steam_account_config(connection)
     }
 
     pub fn add_manual_game(
@@ -1693,6 +2350,7 @@ mod storage {
         installed: bool,
         playtime_total_minutes: i64,
         accent_color: Option<String>,
+        source_account_id: Option<String>,
     }
 
     fn find_entry(connection: &Connection, entry_id: &str) -> rusqlite::Result<Option<EntryRow>> {
@@ -1733,6 +2391,7 @@ mod storage {
                         installed: row.get::<_, i64>(10)? == 1,
                         playtime_total_minutes: row.get(11)?,
                         accent_color: row.get(12)?,
+                        source_account_id: None,
                     })
                 },
             )
@@ -1939,6 +2598,104 @@ mod storage {
         Ok(())
     }
 
+    fn ensure_provider_account_configs_table(connection: &Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS provider_account_configs (
+              provider_id TEXT PRIMARY KEY,
+              account_id TEXT,
+              steam_id64 TEXT,
+              steam_web_api_key_configured INTEGER NOT NULL DEFAULT 0,
+              config_json TEXT,
+              updated_at TEXT NOT NULL
+            )
+            "#,
+            [],
+        )?;
+
+        let columns = table_columns(connection, "provider_account_configs")?;
+        if !columns.iter().any(|column| column == "steam_id64") {
+            connection.execute(
+                "ALTER TABLE provider_account_configs ADD COLUMN steam_id64 TEXT",
+                [],
+            )?;
+        }
+        if !columns.iter().any(|column| column == "config_json") {
+            connection.execute(
+                "ALTER TABLE provider_account_configs ADD COLUMN config_json TEXT",
+                [],
+            )?;
+        }
+        if !columns
+            .iter()
+            .any(|column| column == "steam_web_api_key_configured")
+        {
+            connection.execute(
+                "ALTER TABLE provider_account_configs ADD COLUMN steam_web_api_key_configured INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn read_provider_account_config_value(
+        connection: &Connection,
+        columns: &[String],
+        value_column: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        let filter_column = if columns.iter().any(|column| column == "provider_id") {
+            Some("provider_id")
+        } else if columns.iter().any(|column| column == "platform_id") {
+            Some("platform_id")
+        } else {
+            None
+        };
+        let order_clause = if columns.iter().any(|column| column == "updated_at") {
+            " ORDER BY updated_at DESC"
+        } else {
+            ""
+        };
+        let query = if let Some(filter_column) = filter_column {
+            format!(
+                "SELECT {value_column} FROM provider_account_configs WHERE {filter_column} = 'steam' AND {value_column} IS NOT NULL{order_clause} LIMIT 1"
+            )
+        } else {
+            format!(
+                "SELECT {value_column} FROM provider_account_configs WHERE {value_column} IS NOT NULL{order_clause} LIMIT 1"
+            )
+        };
+
+        connection
+            .query_row(&query, [], |row| row.get::<_, String>(0))
+            .optional()
+    }
+
+    fn normalize_steam_id64(value: &str) -> Option<String> {
+        let value = value.trim();
+
+        if value.len() == 17 && value.bytes().all(|byte| byte.is_ascii_digit()) {
+            Some(value.to_string())
+        } else {
+            None
+        }
+    }
+
+    fn steam_id64_from_config_json(value: &str) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_str(value).ok()?;
+
+        [
+            "steamId64",
+            "steam_id64",
+            "steamid64",
+            "steamId",
+            "steam_id",
+            "steamid",
+        ]
+        .into_iter()
+        .find_map(|key| value.get(key).and_then(|value| value.as_str()))
+        .and_then(normalize_steam_id64)
+    }
+
     fn table_has_column(
         connection: &Connection,
         table_name: &str,
@@ -1956,86 +2713,13 @@ mod storage {
         Ok(false)
     }
 
-    fn table_exists(connection: &Connection, table_name: &str) -> rusqlite::Result<bool> {
-        connection
-            .query_row(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                params![table_name],
-                |_| Ok(()),
-            )
-            .optional()
-            .map(|value| value.is_some())
-    }
+    fn table_columns(connection: &Connection, table_name: &str) -> rusqlite::Result<Vec<String>> {
+        let mut statement = connection.prepare(&format!("PRAGMA table_info({table_name})"))?;
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect();
 
-    fn find_steam_account_config(
-        connection: &Connection,
-    ) -> rusqlite::Result<Option<SteamAccountConfigDto>> {
-        connection
-            .query_row(
-                r#"
-                SELECT provider_id, auth_state, steam_id64, steam_api_key_configured, steam_api_key_plaintext_dev, configured_at, disconnected_at, updated_at
-                FROM provider_account_configs
-                WHERE provider_id = 'steam'
-                "#,
-                [],
-                |row| {
-                    Ok(SteamAccountConfigDto {
-                        provider_id: row.get(0)?,
-                        auth_state: row.get(1)?,
-                        steam_id64: row.get(2)?,
-                        steam_api_key_configured: row.get::<_, i64>(3)? == 1,
-                        steam_api_key_plaintext_dev: row.get(4)?,
-                        configured_at: row.get(5)?,
-                        disconnected_at: row.get(6)?,
-                        updated_at: row.get(7)?,
-                    })
-                },
-            )
-            .optional()
-    }
-
-    fn default_steam_config() -> SteamAccountConfigDto {
-        SteamAccountConfigDto {
-            provider_id: "steam".to_string(),
-            auth_state: "disconnected".to_string(),
-            steam_id64: None,
-            steam_api_key_configured: false,
-            steam_api_key_plaintext_dev: None,
-            configured_at: None,
-            disconnected_at: None,
-            updated_at: None,
-        }
-    }
-
-    fn normalize_steam_id64(value: Option<String>) -> rusqlite::Result<Option<String>> {
-        value
-            .map(|steam_id64| {
-                let steam_id64 = steam_id64.trim();
-
-                if steam_id64.is_empty() {
-                    return Ok(None);
-                }
-
-                if is_valid_steam_id64(steam_id64) {
-                    Ok(Some(steam_id64.to_string()))
-                } else {
-                    Err(rusqlite::Error::InvalidParameterName(
-                        "SteamID64 deve conter 17 digitos validos.".to_string(),
-                    ))
-                }
-            })
-            .unwrap_or(Ok(None))
-    }
-
-    fn is_valid_steam_id64(value: &str) -> bool {
-        const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
-
-        value.len() == 17
-            && value.bytes().all(|byte| byte.is_ascii_digit())
-            && value
-                .parse::<u64>()
-                .map(|id| id >= STEAM_ID64_BASE)
-                .unwrap_or(false)
+        columns
     }
 
     struct SeedLibraryEntry {
@@ -2237,8 +2921,18 @@ mod storage {
         app_id: String,
         title: String,
         install_path: Option<String>,
-        is_installed: bool,
-        playtime_total_minutes: Option<i64>,
+        source_id: String,
+        game_id: String,
+        entry_id: String,
+        launch_id: String,
+        accent_color: &'static str,
+    }
+
+    struct RemoteSteamGameCandidate {
+        app_id: String,
+        title: String,
+        playtime_total_minutes: i64,
+        has_playtime: bool,
         source_id: String,
         game_id: String,
         entry_id: String,
@@ -2258,15 +2952,39 @@ mod storage {
 
     pub fn sync_steam_account_games(
         connection: &mut Connection,
-        remote_games: Vec<SteamOwnedGame>,
+        steam_id: &str,
+        remote_games: &[steam_web_api::RemoteSteamGame],
     ) -> rusqlite::Result<SyncSummaryDto> {
         let candidates = remote_games
-            .into_iter()
+            .iter()
             .filter(|game| !is_rejected_steam_app(&game.app_id))
-            .map(steam_account_game_candidate)
+            .map(remote_steam_game_candidate)
             .collect::<Vec<_>>();
+        let existing_entries = list_steam_entries_by_source(connection)?;
+        let mut summary = SyncSummaryDto {
+            discovered: candidates.len(),
+            inserted: 0,
+            updated: 0,
+            archived: 0,
+            unavailable: 0,
+        };
 
-        sync_steam_candidates(connection, candidates, false)
+        let transaction = connection.transaction()?;
+        summary.archived = archive_rejected_steam_entries(&transaction)?;
+
+        for candidate in candidates {
+            if let Some(existing_row) = existing_entries.get(&candidate.app_id) {
+                if update_remote_steam_entry(&transaction, steam_id, existing_row, &candidate)? {
+                    summary.updated += 1;
+                }
+            } else {
+                insert_remote_steam_entry(&transaction, steam_id, &candidate)?;
+                summary.inserted += 1;
+            }
+        }
+
+        transaction.commit()?;
+        Ok(summary)
     }
 
     fn sync_steam_games_from_roots(
@@ -2274,14 +2992,6 @@ mod storage {
         roots: &[PathBuf],
     ) -> rusqlite::Result<SyncSummaryDto> {
         let candidates = discover_steam_game_candidates(roots);
-        sync_steam_candidates(connection, candidates, true)
-    }
-
-    fn sync_steam_candidates(
-        connection: &mut Connection,
-        candidates: Vec<SteamGameCandidate>,
-        reconcile_missing_as_unavailable: bool,
-    ) -> rusqlite::Result<SyncSummaryDto> {
         let existing_entries = list_steam_entries_by_source(connection)?;
         let mut summary = SyncSummaryDto {
             discovered: candidates.len(),
@@ -2310,8 +3020,7 @@ mod storage {
         }
 
         for (app_id, existing_row) in &existing_entries {
-            if reconcile_missing_as_unavailable
-                && !existing_row.is_archived
+            if !existing_row.is_archived
                 && !is_rejected_steam_app(app_id)
                 && !discovered_app_ids.contains(app_id)
                 && mark_steam_entry_unavailable(&transaction, existing_row)?
@@ -2322,23 +3031,6 @@ mod storage {
 
         transaction.commit()?;
         Ok(summary)
-    }
-
-    fn steam_account_game_candidate(game: SteamOwnedGame) -> SteamGameCandidate {
-        let slug = create_slug(&game.title);
-
-        SteamGameCandidate {
-            source_id: format!("source-steam-{}", game.app_id),
-            game_id: format!("game-steam-{slug}-{}", game.app_id),
-            entry_id: format!("entry-steam-{slug}-{}", game.app_id),
-            launch_id: format!("launch-steam-{}", game.app_id),
-            app_id: game.app_id,
-            title: game.title.clone(),
-            install_path: None,
-            is_installed: false,
-            playtime_total_minutes: Some(game.playtime_total_minutes),
-            accent_color: deterministic_accent_color(&game.title),
-        }
     }
 
     fn sync_local_games_from_roots(
@@ -2594,10 +3286,27 @@ mod storage {
             app_id,
             title,
             install_path,
-            is_installed: true,
-            playtime_total_minutes: None,
             accent_color,
         })
+    }
+
+    fn remote_steam_game_candidate(
+        game: &steam_web_api::RemoteSteamGame,
+    ) -> RemoteSteamGameCandidate {
+        let slug = create_slug(&game.title);
+        let accent_color = deterministic_accent_color(&game.title);
+
+        RemoteSteamGameCandidate {
+            source_id: format!("source-steam-{}", game.app_id),
+            game_id: format!("game-steam-{slug}-{}", game.app_id),
+            entry_id: format!("entry-steam-{slug}-{}", game.app_id),
+            launch_id: format!("launch-steam-{}", game.app_id),
+            app_id: game.app_id.clone(),
+            title: game.title.clone(),
+            playtime_total_minutes: game.playtime_forever.unwrap_or_default(),
+            has_playtime: game.playtime_forever.is_some(),
+            accent_color,
+        }
     }
 
     fn is_rejected_steam_app(app_id: &str) -> bool {
@@ -2931,7 +3640,8 @@ mod storage {
               games.sort_title,
               games.installed,
               games.playtime_total_minutes,
-              games.accent_color
+              games.accent_color,
+              game_sources.account_id
             FROM library_entries
             JOIN games ON games.id = library_entries.game_id
             JOIN game_sources ON game_sources.game_id = library_entries.game_id
@@ -2958,6 +3668,7 @@ mod storage {
                         installed: row.get::<_, i64>(11)? == 1,
                         playtime_total_minutes: row.get(12)?,
                         accent_color: row.get(13)?,
+                        source_account_id: row.get(14)?,
                     },
                 ))
             })?
@@ -2985,7 +3696,8 @@ mod storage {
               games.sort_title,
               games.installed,
               games.playtime_total_minutes,
-              games.accent_color
+              games.accent_color,
+              game_sources.account_id
             FROM library_entries
             JOIN games ON games.id = library_entries.game_id
             JOIN game_sources ON game_sources.game_id = library_entries.game_id
@@ -3012,6 +3724,7 @@ mod storage {
                         installed: row.get::<_, i64>(11)? == 1,
                         playtime_total_minutes: row.get(12)?,
                         accent_color: row.get(13)?,
+                        source_account_id: row.get(14)?,
                     },
                 ))
             })?
@@ -3025,24 +3738,16 @@ mod storage {
         candidate: &SteamGameCandidate,
     ) -> rusqlite::Result<()> {
         let now = now_iso();
-        let install_status = if candidate.is_installed {
-            "installed"
-        } else {
-            "not_installed"
-        };
-        let playtime_total_minutes = candidate.playtime_total_minutes.unwrap_or(0);
         transaction.execute(
             r#"
             INSERT INTO games (
               id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+            ) VALUES (?1, ?2, ?3, 1, 0, ?4, ?5, ?5)
             "#,
             params![
                 candidate.game_id,
                 candidate.title,
                 candidate.title,
-                candidate.is_installed as i64,
-                playtime_total_minutes,
                 candidate.accent_color,
                 now,
             ],
@@ -3051,9 +3756,9 @@ mod storage {
             r#"
             INSERT INTO library_entries (
               id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
-            ) VALUES (?1, ?2, 'steam', ?3, 'Nunca', 0, ?4, ?4)
+            ) VALUES (?1, ?2, 'steam', 'installed', 'Nunca', 0, ?3, ?3)
             "#,
-            params![candidate.entry_id, candidate.game_id, install_status, now],
+            params![candidate.entry_id, candidate.game_id, now],
         )?;
         transaction.execute(
             r#"
@@ -3084,6 +3789,64 @@ mod storage {
         Ok(())
     }
 
+    fn insert_remote_steam_entry(
+        transaction: &rusqlite::Transaction<'_>,
+        steam_id: &str,
+        candidate: &RemoteSteamGameCandidate,
+    ) -> rusqlite::Result<()> {
+        let now = now_iso();
+        transaction.execute(
+            r#"
+            INSERT INTO games (
+              id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?6)
+            "#,
+            params![
+                candidate.game_id,
+                candidate.title,
+                candidate.title,
+                candidate.playtime_total_minutes,
+                candidate.accent_color,
+                now,
+            ],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO library_entries (
+              id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
+            ) VALUES (?1, ?2, 'steam', 'not_installed', 'Nunca', 0, ?3, ?3)
+            "#,
+            params![candidate.entry_id, candidate.game_id, now],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO game_sources (id, game_id, platform_id, external_id, account_id)
+            VALUES (?1, ?2, 'steam', ?3, ?4)
+            "#,
+            params![
+                candidate.source_id,
+                candidate.game_id,
+                candidate.app_id,
+                steam_id
+            ],
+        )?;
+        let launch_target = format!("steam://rungameid/{}", candidate.app_id);
+        transaction.execute(
+            r#"
+            INSERT INTO launch_actions (
+              id, game_id, platform_id, kind, label, target, arguments_json, working_directory, is_primary
+            ) VALUES (?1, ?2, 'steam', 'uri', ?3, ?3, '[]', NULL, 1)
+            "#,
+            params![candidate.launch_id, candidate.game_id, launch_target],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Steam', 0)",
+            params![candidate.game_id],
+        )?;
+
+        Ok(())
+    }
+
     fn update_steam_entry(
         transaction: &rusqlite::Transaction<'_>,
         existing_row: &EntryRow,
@@ -3091,34 +3854,19 @@ mod storage {
     ) -> rusqlite::Result<bool> {
         let launch_target = format!("steam://rungameid/{}", candidate.app_id);
         let current_action = find_steam_primary_action(transaction, &existing_row.game_id)?;
-        let next_working_directory = candidate.install_path.clone().or_else(|| {
-            current_action
-                .as_ref()
-                .and_then(|action| action.working_directory.clone())
-        });
-        let next_installed = existing_row.installed || candidate.is_installed;
-        let next_install_status = if next_installed {
-            "installed"
-        } else {
-            "not_installed"
-        };
-        let next_playtime_total_minutes = candidate
-            .playtime_total_minutes
-            .unwrap_or(existing_row.playtime_total_minutes);
         let needs_action_update = current_action
             .as_ref()
             .map(|action| {
                 action.kind != "uri"
                     || action.label != launch_target
                     || action.target != launch_target
-                    || action.working_directory != next_working_directory
+                    || action.working_directory != candidate.install_path
             })
             .unwrap_or(true);
         let needs_entry_update = existing_row.title != candidate.title
             || existing_row.sort_title != candidate.title
-            || existing_row.installed != next_installed
-            || existing_row.install_status != next_install_status
-            || existing_row.playtime_total_minutes != next_playtime_total_minutes
+            || !existing_row.installed
+            || existing_row.install_status != "installed"
             || existing_row.accent_color.as_deref() != Some(candidate.accent_color);
 
         if !needs_entry_update && !needs_action_update {
@@ -3133,8 +3881,94 @@ mod storage {
                 UPDATE games
                 SET title = ?2,
                     sort_title = ?3,
-                    installed = ?4,
-                    playtime_total_minutes = ?5,
+                    installed = 1,
+                    accent_color = ?4,
+                    updated_at = ?5
+                WHERE id = ?1
+                "#,
+                params![
+                    existing_row.game_id,
+                    candidate.title,
+                    candidate.title,
+                    candidate.accent_color,
+                    updated_at,
+                ],
+            )?;
+            transaction.execute(
+                r#"
+                UPDATE library_entries
+                SET install_status = 'installed',
+                    updated_at = ?2
+                WHERE id = ?1
+                "#,
+                params![existing_row.entry_id, updated_at],
+            )?;
+        }
+
+        if needs_action_update {
+            upsert_steam_primary_action(
+                transaction,
+                &existing_row.game_id,
+                &candidate.launch_id,
+                &launch_target,
+                candidate.install_path.as_deref(),
+            )?;
+        }
+
+        transaction.execute(
+            "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Steam', 0)",
+            params![existing_row.game_id],
+        )?;
+
+        Ok(true)
+    }
+
+    fn update_remote_steam_entry(
+        transaction: &rusqlite::Transaction<'_>,
+        steam_id: &str,
+        existing_row: &EntryRow,
+        candidate: &RemoteSteamGameCandidate,
+    ) -> rusqlite::Result<bool> {
+        let launch_target = format!("steam://rungameid/{}", candidate.app_id);
+        let current_action = find_steam_primary_action(transaction, &existing_row.game_id)?;
+        let preserved_working_directory = current_action
+            .as_ref()
+            .and_then(|action| action.working_directory.as_deref())
+            .filter(|_| existing_row.installed);
+        let needs_action_update = current_action
+            .as_ref()
+            .map(|action| {
+                action.kind != "uri"
+                    || action.label != launch_target
+                    || action.target != launch_target
+            })
+            .unwrap_or(true);
+        let new_install_status = if existing_row.installed {
+            "installed"
+        } else {
+            "not_installed"
+        };
+        let needs_entry_update = existing_row.title != candidate.title
+            || existing_row.sort_title != candidate.title
+            || existing_row.install_status != new_install_status
+            || existing_row.accent_color.as_deref() != Some(candidate.accent_color)
+            || (candidate.has_playtime
+                && existing_row.playtime_total_minutes != candidate.playtime_total_minutes);
+        let needs_account_update = existing_row.source_account_id.as_deref() != Some(steam_id);
+
+        if !needs_entry_update && !needs_action_update && !needs_account_update {
+            return Ok(false);
+        }
+
+        let updated_at = now_iso();
+
+        if needs_entry_update {
+            transaction.execute(
+                r#"
+                UPDATE games
+                SET title = ?2,
+                    sort_title = ?3,
+                    playtime_total_minutes = CASE WHEN ?4 THEN ?5 ELSE playtime_total_minutes END,
                     accent_color = ?6,
                     updated_at = ?7
                 WHERE id = ?1
@@ -3143,8 +3977,8 @@ mod storage {
                     existing_row.game_id,
                     candidate.title,
                     candidate.title,
-                    next_installed as i64,
-                    next_playtime_total_minutes,
+                    candidate.has_playtime,
+                    candidate.playtime_total_minutes,
                     candidate.accent_color,
                     updated_at,
                 ],
@@ -3156,7 +3990,7 @@ mod storage {
                     updated_at = ?3
                 WHERE id = ?1
                 "#,
-                params![existing_row.entry_id, next_install_status, updated_at],
+                params![existing_row.entry_id, new_install_status, updated_at],
             )?;
         }
 
@@ -3166,7 +4000,19 @@ mod storage {
                 &existing_row.game_id,
                 &candidate.launch_id,
                 &launch_target,
-                next_working_directory.as_deref(),
+                preserved_working_directory,
+            )?;
+        }
+
+        if needs_account_update {
+            transaction.execute(
+                r#"
+                UPDATE game_sources
+                SET account_id = ?2
+                WHERE game_id = ?1
+                  AND platform_id = 'steam'
+                "#,
+                params![existing_row.game_id, steam_id],
             )?;
         }
 
@@ -3564,17 +4410,6 @@ mod storage {
                 .map(|value| value.is_some())
         }
 
-        fn table_exists(connection: &Connection, table_name: &str) -> rusqlite::Result<bool> {
-            connection
-                .query_row(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                    params![table_name],
-                    |_| Ok(()),
-                )
-                .optional()
-                .map(|value| value.is_some())
-        }
-
         #[test]
         fn migration_creates_schema_version() {
             let connection = Connection::open_in_memory().expect("open in-memory database");
@@ -3582,14 +4417,12 @@ mod storage {
             migrate(&connection).expect("apply migration");
 
             let version: i64 = connection
-                .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                .query_row("SELECT version FROM schema_migrations", [], |row| {
                     row.get(0)
                 })
                 .expect("read schema version");
 
-            assert_eq!(version, 2);
-            assert!(table_exists(&connection, "provider_account_configs")
-                .expect("check account config table"));
+            assert_eq!(version, 1);
         }
 
         #[test]
@@ -3634,154 +4467,6 @@ mod storage {
             let entries = list_library_entries(&connection).expect("list empty entries");
 
             assert!(entries.is_empty());
-
-            let _ = std::fs::remove_file(path);
-        }
-
-        #[test]
-        fn open_database_starts_with_disconnected_steam_account_config() {
-            let path = std::env::temp_dir().join(format!(
-                "biblioteca-jogos-steam-config-empty-{}.sqlite3",
-                timestamp_millis()
-            ));
-
-            let connection = open_database(&path).expect("open empty database");
-            let config = list_steam_account_config(&connection).expect("list default steam config");
-
-            assert_eq!(config.provider_id, "steam");
-            assert_eq!(config.auth_state, "disconnected");
-            assert_eq!(config.steam_id64, None);
-            assert_eq!(config.configured_at, None);
-
-            let _ = std::fs::remove_file(path);
-        }
-
-        #[test]
-        fn open_database_upgrades_legacy_provider_account_config_schema() {
-            let path = std::env::temp_dir().join(format!(
-                "biblioteca-jogos-legacy-provider-config-{}.sqlite3",
-                timestamp_millis()
-            ));
-            {
-                let connection = Connection::open(&path).expect("open legacy database");
-                connection
-                    .execute_batch(
-                        r#"
-                        CREATE TABLE provider_account_configs (
-                          provider_id TEXT PRIMARY KEY,
-                          account_id TEXT,
-                          steam_id64 TEXT,
-                          config_json TEXT,
-                          updated_at TEXT NOT NULL
-                        );
-                        INSERT INTO provider_account_configs (
-                          provider_id, account_id, steam_id64, config_json, updated_at
-                        ) VALUES (
-                          'steam', NULL, '76561198000000000', '{}', '2026-05-14T00:00:00Z'
-                        );
-                        "#,
-                    )
-                    .expect("create legacy provider config table");
-            }
-
-            let connection = open_database(&path).expect("upgrade legacy provider config database");
-            let config = list_steam_account_config(&connection).expect("list upgraded config");
-
-            assert_eq!(config.auth_state, "configured");
-            assert_eq!(config.steam_id64, Some("76561198000000000".to_string()));
-            assert!(config.configured_at.is_some());
-            assert!(
-                table_has_column(&connection, "provider_account_configs", "auth_state")
-                    .expect("check auth_state column")
-            );
-            assert!(
-                table_has_column(&connection, "provider_account_configs", "configured_at")
-                    .expect("check configured_at column")
-            );
-            assert!(
-                table_has_column(&connection, "provider_account_configs", "disconnected_at")
-                    .expect("check disconnected_at column")
-            );
-
-            let _ = std::fs::remove_file(path);
-        }
-
-        #[test]
-        fn save_steam_account_config_accepts_valid_steam_id64() {
-            let mut connection = Connection::open_in_memory().expect("open in-memory database");
-            migrate(&connection).expect("apply migration");
-
-            let config = save_steam_account_config(
-                &mut connection,
-                SteamAccountConfigInput {
-                    steam_id64: Some("76561198000000000".to_string()),
-                },
-            )
-            .expect("save steam config");
-
-            assert_eq!(config.provider_id, "steam");
-            assert_eq!(config.auth_state, "configured");
-            assert_eq!(config.steam_id64, Some("76561198000000000".to_string()));
-            assert!(config.configured_at.is_some());
-            assert!(config.disconnected_at.is_none());
-            assert!(config.updated_at.is_some());
-        }
-
-        #[test]
-        fn save_steam_account_config_rejects_invalid_steam_id64() {
-            let mut connection = Connection::open_in_memory().expect("open in-memory database");
-            migrate(&connection).expect("apply migration");
-
-            let result = save_steam_account_config(
-                &mut connection,
-                SteamAccountConfigInput {
-                    steam_id64: Some("not-a-steam-id".to_string()),
-                },
-            );
-            let config =
-                list_steam_account_config(&connection).expect("list steam config after rejection");
-
-            assert!(result.is_err());
-            assert_eq!(config.auth_state, "disconnected");
-            assert_eq!(config.steam_id64, None);
-        }
-
-        #[test]
-        fn disconnect_steam_account_config_preserves_steam_library_entries() {
-            let path = std::env::temp_dir().join(format!(
-                "biblioteca-jogos-steam-config-disconnect-{}.sqlite3",
-                timestamp_millis()
-            ));
-            let mut connection = open_seeded_database(&path);
-
-            save_steam_account_config(
-                &mut connection,
-                SteamAccountConfigInput {
-                    steam_id64: Some("76561198000000000".to_string()),
-                },
-            )
-            .expect("save steam config");
-            let before = list_library_entries(&connection).expect("list entries before disconnect");
-            let config = disconnect_steam_account_config(&mut connection)
-                .expect("disconnect steam account config");
-            let after = list_library_entries(&connection).expect("list entries after disconnect");
-
-            assert_eq!(config.auth_state, "disconnected");
-            assert_eq!(config.steam_id64, None);
-            assert!(config.disconnected_at.is_some());
-            assert_eq!(
-                before
-                    .iter()
-                    .filter(|entry| entry.primary_platform_id == "steam")
-                    .count(),
-                after
-                    .iter()
-                    .filter(|entry| entry.primary_platform_id == "steam")
-                    .count()
-            );
-            assert!(after
-                .iter()
-                .any(|entry| entry.primary_platform_id == "steam"));
 
             let _ = std::fs::remove_file(path);
         }
@@ -3930,102 +4615,6 @@ mod storage {
         }
 
         #[test]
-        fn sync_steam_account_games_imports_remote_library_as_not_installed() {
-            let path = std::env::temp_dir().join(format!(
-                "biblioteca-jogos-steam-account-db-{}.sqlite3",
-                timestamp_millis()
-            ));
-            let mut connection = open_database(&path).expect("open empty database");
-            let summary = sync_steam_account_games(
-                &mut connection,
-                vec![SteamOwnedGame {
-                    app_id: "413150".to_string(),
-                    title: "Stardew Valley".to_string(),
-                    playtime_total_minutes: 480,
-                }],
-            )
-            .expect("sync steam account games");
-            let entries = list_library_entries(&connection).expect("list steam account entries");
-
-            assert_eq!(summary.discovered, 1);
-            assert_eq!(summary.inserted, 1);
-            assert_eq!(summary.updated, 0);
-            assert_eq!(summary.unavailable, 0);
-            assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].primary_platform_id, "steam");
-            assert_eq!(entries[0].install_status, "not_installed");
-            assert!(!entries[0].game.installed);
-            assert_eq!(entries[0].game.playtime.total_minutes, 480);
-            assert_eq!(
-                entries[0].game.launch_actions[0].target,
-                "steam://rungameid/413150"
-            );
-
-            let _ = std::fs::remove_file(path);
-        }
-
-        #[test]
-        fn sync_steam_account_games_preserves_local_install_state_and_updates_playtime() {
-            let steam_root = std::env::temp_dir().join(format!(
-                "biblioteca-jogos-steam-account-local-root-{}",
-                timestamp_millis()
-            ));
-            let steamapps = steam_root.join("steamapps");
-            let common = steamapps.join("common").join("Portal 2");
-            let manifest = steamapps.join("appmanifest_620.acf");
-
-            std::fs::create_dir_all(&common).expect("create steam library");
-            std::fs::write(
-                &manifest,
-                r#""AppState"
-{
-  "appid" "620"
-  "name" "Portal 2"
-  "installdir" "Portal 2"
-}
-"#,
-            )
-            .expect("write steam manifest");
-
-            let path = std::env::temp_dir().join(format!(
-                "biblioteca-jogos-steam-account-local-db-{}.sqlite3",
-                timestamp_millis()
-            ));
-            let mut connection = open_database(&path).expect("open empty database");
-
-            sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
-                .expect("sync local steam games");
-            let summary = sync_steam_account_games(
-                &mut connection,
-                vec![SteamOwnedGame {
-                    app_id: "620".to_string(),
-                    title: "Portal 2".to_string(),
-                    playtime_total_minutes: 240,
-                }],
-            )
-            .expect("sync account steam games");
-            let entries = list_library_entries(&connection).expect("list merged steam entries");
-
-            assert_eq!(summary.discovered, 1);
-            assert_eq!(summary.inserted, 0);
-            assert_eq!(summary.updated, 1);
-            assert_eq!(summary.unavailable, 0);
-            assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].install_status, "installed");
-            assert!(entries[0].game.installed);
-            assert_eq!(entries[0].game.playtime.total_minutes, 240);
-            assert_eq!(
-                entries[0].game.launch_actions[0]
-                    .working_directory
-                    .as_deref(),
-                Some(common.to_string_lossy().as_ref())
-            );
-
-            let _ = std::fs::remove_dir_all(steam_root);
-            let _ = std::fs::remove_file(path);
-        }
-
-        #[test]
         fn sync_steam_games_ignores_and_archives_common_redistributables() {
             let steam_root = std::env::temp_dir().join(format!(
                 "biblioteca-jogos-steam-redist-root-{}",
@@ -4061,8 +4650,6 @@ mod storage {
                 game_id: "game-steam-common-redistributables-228980".to_string(),
                 entry_id: "entry-steam-common-redistributables-228980".to_string(),
                 launch_id: "launch-steam-228980".to_string(),
-                is_installed: true,
-                playtime_total_minutes: None,
                 accent_color: "#64748b",
             };
 
@@ -4152,6 +4739,191 @@ mod storage {
             let _ = std::fs::remove_dir_all(steam_root);
             let _ = std::fs::remove_dir_all(extra_library);
             let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn read_steam_account_config_accepts_direct_column_and_json() {
+            let connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            ensure_provider_account_configs_table(&connection).expect("ensure account config");
+
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO provider_account_configs (
+                      provider_id, account_id, steam_id64, config_json, updated_at
+                    ) VALUES ('steam', NULL, '76561198000000000', NULL, ?1)
+                    "#,
+                    params![now_iso()],
+                )
+                .expect("insert direct steam id");
+
+            assert_eq!(
+                read_steam_account_config(&connection).expect("read direct steam id"),
+                Some("76561198000000000".to_string())
+            );
+
+            connection
+                .execute("DELETE FROM provider_account_configs", [])
+                .expect("clear config");
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO provider_account_configs (
+                      provider_id, account_id, steam_id64, config_json, updated_at
+                    ) VALUES ('steam', NULL, NULL, '{"steamId64":"76561198000000001"}', ?1)
+                    "#,
+                    params![now_iso()],
+                )
+                .expect("insert json steam id");
+
+            assert_eq!(
+                read_steam_account_config(&connection).expect("read json steam id"),
+                Some("76561198000000001".to_string())
+            );
+        }
+
+        #[test]
+        fn steam_web_api_key_config_tracks_metadata_without_losing_account() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            ensure_provider_account_configs_table(&connection).expect("ensure account config");
+            save_verified_steam_account_config(&mut connection, "76561198000000000")
+                .expect("save steam account");
+
+            let columns =
+                table_columns(&connection, "provider_account_configs").expect("read columns");
+            assert!(!columns
+                .iter()
+                .any(|column| column == "steam_web_api_key_plaintext_dev"));
+
+            set_steam_web_api_key_config(&mut connection, true).expect("save key metadata");
+
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT steam_web_api_key_configured FROM provider_account_configs WHERE provider_id = 'steam'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("read key metadata"),
+                1
+            );
+            assert_eq!(
+                read_steam_account_config(&connection).expect("read steam account"),
+                Some("76561198000000000".to_string())
+            );
+
+            set_steam_web_api_key_config(&mut connection, false).expect("clear key metadata");
+
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT steam_web_api_key_configured FROM provider_account_configs WHERE provider_id = 'steam'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("read cleared metadata"),
+                0
+            );
+            assert_eq!(
+                read_steam_account_config(&connection).expect("account remains"),
+                Some("76561198000000000".to_string())
+            );
+        }
+
+        #[test]
+        fn sync_steam_account_games_imports_remote_games_as_not_installed() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let remote_games = vec![steam_web_api::RemoteSteamGame {
+                app_id: "413150".to_string(),
+                title: "Stardew Valley".to_string(),
+                playtime_forever: Some(321),
+            }];
+
+            let summary =
+                sync_steam_account_games(&mut connection, "76561198000000000", &remote_games)
+                    .expect("sync remote steam account");
+            let entries = list_library_entries(&connection).expect("list entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].primary_platform_id, "steam");
+            assert_eq!(entries[0].install_status, "not_installed");
+            assert_eq!(entries[0].game.sources[0].external_id, "413150");
+            assert_eq!(
+                entries[0].game.sources[0].account_id,
+                Some("76561198000000000".to_string())
+            );
+            assert!(!entries[0].game.installed);
+            assert_eq!(entries[0].game.playtime.total_minutes, 321);
+            assert_eq!(
+                entries[0].game.launch_actions[0].target,
+                "steam://rungameid/413150"
+            );
+            assert_eq!(entries[0].game.launch_actions[0].working_directory, None);
+        }
+
+        #[test]
+        fn sync_steam_account_games_preserves_locally_installed_steam_entry() {
+            let steam_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-remote-preserve-{}",
+                timestamp_millis()
+            ));
+            let steamapps = steam_root.join("steamapps");
+            let common = steamapps.join("common").join("Portal 2");
+            let manifest = steamapps.join("appmanifest_620.acf");
+
+            std::fs::create_dir_all(&common).expect("create steam library");
+            std::fs::write(
+                &manifest,
+                r#""AppState"
+                {
+                  "appid" "620"
+                  "name" "Portal 2"
+                  "installdir" "Portal 2"
+                }
+                "#,
+            )
+            .expect("write steam manifest");
+
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
+                .expect("sync local steam manifest");
+
+            let remote_games = vec![steam_web_api::RemoteSteamGame {
+                app_id: "620".to_string(),
+                title: "Portal 2".to_string(),
+                playtime_forever: Some(45),
+            }];
+            let summary =
+                sync_steam_account_games(&mut connection, "76561198000000000", &remote_games)
+                    .expect("sync remote steam account");
+            let entries = list_library_entries(&connection).expect("list entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.updated, 1);
+            assert_eq!(entries.len(), 1);
+            assert!(entries[0].game.installed);
+            assert_eq!(entries[0].install_status, "installed");
+            assert_eq!(
+                entries[0].game.sources[0].account_id,
+                Some("76561198000000000".to_string())
+            );
+            assert_eq!(entries[0].game.playtime.total_minutes, 45);
+            assert_eq!(
+                entries[0].game.launch_actions[0].target,
+                "steam://rungameid/620"
+            );
+            assert_eq!(
+                entries[0].game.launch_actions[0].working_directory,
+                Some(common.to_string_lossy().to_string())
+            );
+
+            let _ = std::fs::remove_dir_all(steam_root);
         }
 
         #[test]
