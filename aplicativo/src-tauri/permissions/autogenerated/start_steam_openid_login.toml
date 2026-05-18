@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-steam-openid-login"
+description = "Enables the start_steam_openid_login command without any pre-configured scope."
+commands.allow = ["start_steam_openid_login"]
+
+[[permission]]
+identifier = "deny-start-steam-openid-login"
+description = "Denies the start_steam_openid_login command without any pre-configured scope."
+commands.deny = ["start_steam_openid_login"]

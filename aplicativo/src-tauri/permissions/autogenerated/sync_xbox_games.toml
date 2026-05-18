@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sync-xbox-games"
+description = "Enables the sync_xbox_games command without any pre-configured scope."
+commands.allow = ["sync_xbox_games"]
+
+[[permission]]
+identifier = "deny-sync-xbox-games"
+description = "Denies the sync_xbox_games command without any pre-configured scope."
+commands.deny = ["sync_xbox_games"]

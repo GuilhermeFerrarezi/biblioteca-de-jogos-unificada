@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-steam-web-api-key-state"
+description = "Enables the get_steam_web_api_key_state command without any pre-configured scope."
+commands.allow = ["get_steam_web_api_key_state"]
+
+[[permission]]
+identifier = "deny-get-steam-web-api-key-state"
+description = "Denies the get_steam_web_api_key_state command without any pre-configured scope."
+commands.deny = ["get_steam_web_api_key_state"]

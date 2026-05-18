@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-launch-library-entry"
+description = "Enables the launch_library_entry command without any pre-configured scope."
+commands.allow = ["launch_library_entry"]
+
+[[permission]]
+identifier = "deny-launch-library-entry"
+description = "Denies the launch_library_entry command without any pre-configured scope."
+commands.deny = ["launch_library_entry"]
