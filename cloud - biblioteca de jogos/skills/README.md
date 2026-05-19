@@ -1,6 +1,6 @@
-# Skills
+﻿# Skills
 
-Guia curto de habilidades reutilizaveis para usar com os agentes deste pacote.
+Short guide to reusable skills for use with the agents in this pack.
 
 ## How to use
 
@@ -10,11 +10,11 @@ Guia curto de habilidades reutilizaveis para usar com os agentes deste pacote.
 
 ## Example pairing
 
-- Planning work: `project-scoping-and-coordination` + `qa-compliance-review`
+- Planning work: `project-scoping-and-coordination` + `senior-integration-quality`
 - Integration research: `platform-viability-matrix` + `platform-integration-research`
 - UI work: `desktop-app-product-design` + `senior-frontend-implementation`
 - Storage work: `sqlite-local-persistence-design` + `senior-backend-implementation`
-- Release review: `senior-integration-quality` + `qa-compliance-review`
+- Release review: `senior-integration-quality` + `api-compliance-review`
 
 ## Order suggested
 

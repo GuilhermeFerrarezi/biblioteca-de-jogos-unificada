@@ -13,7 +13,7 @@ Estas diretrizes orientam a evolucao tecnica da Biblioteca de Jogos Unificada pa
 - Integrar plataformas por camadas, evitando chamadas diretas de API dentro de componentes visuais.
 - Preferir evolucao incremental, mas manter a organizacao atual de `components`, `pages`, `services`, `adapters`, `hooks`, `constants` e `styles` como base para novos desenvolvimentos.
 - Preservar verificacoes antes de cada marco: `npm run lint`, `npm run build` e `cargo test` com `CARGO_TARGET_DIR` local.
-- Antes de iniciar integracoes, migrations, seguranca, UX complexa ou metadados, consultar os agentes e skills em `cloude teste`.
+- Antes de iniciar integracoes, migrations, seguranca, UX complexa ou metadados, consultar os agentes e skills em `cloud - biblioteca de jogos`.
 - Em todo desenvolvimento, identificar explicitamente o agente local e as skills aplicaveis antes de implementar, revisar ou delegar trabalho.
 
 ## Organizacao Recomendada
@@ -108,11 +108,11 @@ Para futuras integracoes com Steam, Xbox, Epic ou outras plataformas:
 
 ## Governanca de Agentes e Skills
 
-Os arquivos em `cloude teste/agents` e `cloude teste/skills` fazem parte das diretrizes do projeto. Eles devem ser usados como checklist operacional, especialmente em tarefas com risco maior.
+Os arquivos em `cloud - biblioteca de jogos/agents` e `cloud - biblioteca de jogos/skills` fazem parte das diretrizes do projeto. Eles devem ser usados como checklist operacional, especialmente em tarefas com risco maior.
 
 Regras:
 
-- Nenhuma tarefa de desenvolvimento relevante deve comecar sem declarar qual agente de `cloude teste/agents` conduz o corte e quais skills de `cloude teste/skills` serao usadas.
+- Nenhuma tarefa de desenvolvimento relevante deve comecar sem declarar qual agente de `cloud - biblioteca de jogos/agents` conduz o corte e quais skills de `cloud - biblioteca de jogos/skills` serao usadas.
 - Se houver delegacao para subagente, a instrucao deve citar o agente local escolhido e as skills relacionadas, pedindo que o subagente use esses arquivos como checklist. Subagentes genericos, como exploradores, so podem ser usados como mecanismo de execucao/revisao, nao como substitutos dos agentes definidos no projeto.
 - Quando a tarefa envolver mais de uma area, usar um agente principal e agentes auxiliares. Exemplo: provider Steam usa `04-backend-provider-agent.md` como principal, com apoio de `03-security-auth-agent.md`, `11-senior-database-agent.md`, `09-senior-frontend-development-agent.md` e `10-senior-integration-qa-agent.md` conforme o escopo.
 - Antes de editar codigo, registrar na conversa ou no plano de trabalho: agente principal, agentes auxiliares, skills aplicadas, arquivos provaveis e criterios de validacao.
@@ -128,8 +128,8 @@ Regras:
 
 Para cada novo corte:
 
-1. Ler ou reler o agente mais adequado em `cloude teste/agents`.
-2. Listar as skills obrigatorias e transversais em `cloude teste/skills`.
+1. Ler ou reler o agente mais adequado em `cloud - biblioteca de jogos/agents`.
+2. Listar as skills obrigatorias e transversais em `cloud - biblioteca de jogos/skills`.
 3. Definir o agente principal, agentes auxiliares e criterios de aceite.
 4. Delegar desenvolvimento, revisao ou pesquisa apenas para subagentes instruidos com esse agente/skills quando a tarefa puder ser paralelizada com seguranca.
 5. Implementar seguindo os checklists desses arquivos.

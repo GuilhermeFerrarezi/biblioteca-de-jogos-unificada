@@ -7,8 +7,8 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 ## Governanca de desenvolvimento
 
 - As diretrizes agora exigem identificar o agente principal, agentes auxiliares e skills aplicaveis antes de qualquer novo desenvolvimento.
-- Subagentes tecnicos podem ser usados para pesquisa, implementacao ou revisao, mas devem ser instruidos a seguir os agentes e skills definidos em `cloude teste/agents` e `cloude teste/skills`.
-- O fluxo obrigatorio esta documentado em `DIRETRIZES_DESENVOLVIMENTO.md` e `cloude teste/README_PROJETO.md`.
+- Subagentes tecnicos podem ser usados para pesquisa, implementacao ou revisao, mas devem ser instruidos a seguir os agentes e skills definidos em `cloud - biblioteca de jogos/agents` e `cloud - biblioteca de jogos/skills`.
+- O fluxo obrigatorio esta documentado em `DIRETRIZES_DESENVOLVIMENTO.md` e `cloud - biblioteca de jogos/README_PROJETO.md`.
 
 ## Frontend reorganizado
 

@@ -15,7 +15,7 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 - Espaco livre suficiente em disco para compilar Rust e empacotar o Tauri.
 - Se o projeto ficar dentro do OneDrive, a pasta precisa estar disponivel offline.
 
-Se for abrir o projeto em outra maquina a partir do Git, clone o repositorio e preserve a estrutura raiz com `CHECKPOINT.md`, `DIRETRIZES_DESENVOLVIMENTO.md`, `ESTRUTURA_BANCO_DADOS.md`, `RETOMADA_NOVO_COMPUTADOR.md`, `ULTIMOS_DESENVOLVIMENTOS_APLICATIVO.md`, `aplicativo/` e `cloude teste/`.
+Se for abrir o projeto em outra maquina a partir do Git, clone o repositorio e preserve a estrutura raiz com `CHECKPOINT.md`, `DIRETRIZES_DESENVOLVIMENTO.md`, `ESTRUTURA_BANCO_DADOS.md`, `RETOMADA_NOVO_COMPUTADOR.md`, `ULTIMOS_DESENVOLVIMENTOS_APLICATIVO.md`, `aplicativo/` e `cloud - biblioteca de jogos/`.
 
 Se o checkout vier de uma copia manual, garanta que a pasta `.git` acompanhe o projeto. Sem isso, o historico e os comandos Git nao vao existir.
 
@@ -24,7 +24,7 @@ Se o checkout vier de uma copia manual, garanta que a pasta `.git` acompanhe o p
 1. Leia `CHECKPOINT.md` na raiz do projeto.
 2. Leia `DIRETRIZES_DESENVOLVIMENTO.md`.
 3. Leia `ESTRUTURA_BANCO_DADOS.md`.
-4. Leia `cloude teste/README_PROJETO.md` se for trabalhar com planejamento, providers, seguranca, UX, metadados, banco ou QA.
+4. Leia `cloud - biblioteca de jogos/README_PROJETO.md` se for trabalhar com planejamento, providers, seguranca, UX, metadados, banco ou QA.
 5. Leia `aplicativo/README.md`.
 6. Leia este arquivo ate o fim antes de instalar ou alterar qualquer coisa.
 7. Confira o commit mais recente para entender exatamente o ultimo corte salvo.
@@ -86,19 +86,19 @@ aplicativo/
     Cargo.toml
     src/lib.rs
     target/              # gerado pelo Rust, nao editar
-cloude teste/
+cloud - biblioteca de jogos/
   README_PROJETO.md
   agents/
   skills/
 ```
 
-Os agentes e skills em `cloude teste` sao parte da governanca atual do projeto. Use-os como checklist antes de alterar integracoes de plataforma, contratos de provider, seguranca Tauri/Auth, metadados, UX de biblioteca, performance ou schema SQLite.
+Os agentes e skills em `cloud - biblioteca de jogos` sao parte da governanca atual do projeto. Use-os como checklist antes de alterar integracoes de plataforma, contratos de provider, seguranca Tauri/Auth, metadados, UX de biblioteca, performance ou schema SQLite.
 
 Antes de qualquer desenvolvimento, identifique explicitamente:
 
-- agente principal em `cloude teste/agents`;
+- agente principal em `cloud - biblioteca de jogos/agents`;
 - agentes auxiliares quando o corte tocar mais de uma area;
-- skills obrigatorias em `cloude teste/skills`;
+- skills obrigatorias em `cloud - biblioteca de jogos/skills`;
 - criterios de validacao;
 - quais subagentes, se houver, receberao delegacao seguindo esses agentes/skills.
 
@@ -291,4 +291,4 @@ Sempre que houver marco importante, atualize:
 - `ESTRUTURA_BANCO_DADOS.md`: schema SQLite, indices, relacoes ou regras de migracao quando o backend persistente mudar.
 - `aplicativo/README.md`: comandos, stack e estado especifico do app.
 - `RETOMADA_NOVO_COMPUTADOR.md`: requisitos ou passos de ambiente que mudarem.
-- `cloude teste/README_PROJETO.md`, `cloude teste/agents` e `cloude teste/skills`: responsabilidades, checklists e criterios operacionais quando a forma de trabalho mudar.
+- `cloud - biblioteca de jogos/README_PROJETO.md`, `cloud - biblioteca de jogos/agents` e `cloud - biblioteca de jogos/skills`: responsabilidades, checklists e criterios operacionais quando a forma de trabalho mudar.
