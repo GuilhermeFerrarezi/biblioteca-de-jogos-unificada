@@ -1,6 +1,23 @@
-﻿# Retomada em Novo Computador
+# Retomada em Novo Computador
 
 Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra maquina sem depender de memoria da sessao anterior.
+
+## O que precisa estar disponivel antes de comecar
+
+- Windows 10 ou 11.
+- Git instalado.
+- Node.js LTS com `npm`.
+- Rust instalado via `rustup`.
+- Visual Studio Build Tools 2022 com workload C++.
+- MSVC toolchain.
+- Windows SDK.
+- Microsoft Edge WebView2 Runtime.
+- Espaco livre suficiente em disco para compilar Rust e empacotar o Tauri.
+- Se o projeto ficar dentro do OneDrive, a pasta precisa estar disponivel offline.
+
+Se for abrir o projeto em outra maquina a partir do Git, clone o repositorio e preserve a estrutura raiz com `CHECKPOINT.md`, `DIRETRIZES_DESENVOLVIMENTO.md`, `ESTRUTURA_BANCO_DADOS.md`, `RETOMADA_NOVO_COMPUTADOR.md`, `ULTIMOS_DESENVOLVIMENTOS_APLICATIVO.md`, `aplicativo/` e `cloude teste/`.
+
+Se o checkout vier de uma copia manual, garanta que a pasta `.git` acompanhe o projeto. Sem isso, o historico e os comandos Git nao vao existir.
 
 ## Leitura inicial
 
@@ -10,6 +27,15 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 4. Leia `cloude teste/README_PROJETO.md` se for trabalhar com planejamento, providers, seguranca, UX, metadados, banco ou QA.
 5. Leia `aplicativo/README.md`.
 6. Leia este arquivo ate o fim antes de instalar ou alterar qualquer coisa.
+7. Confira o commit mais recente para entender exatamente o ultimo corte salvo.
+
+Referencia atual de retorno:
+
+```powershell
+git rev-parse --short HEAD
+```
+
+No estado atual deste guia, o ultimo corte salvo e `78b9374` (`docs: checkpoint current xbox and merge state`).
 
 ## Estado atual do aplicativo
 
@@ -23,12 +49,18 @@ Este guia serve para continuar o projeto Biblioteca de Jogos Unificada em outra 
 - Edicao de jogos manuais tambem ja existe, reutilizando o mesmo modal de cadastro.
 - O botao `Jogar` abre a URI quando a acao e do tipo `uri`, como `steam://rungameid/...`.
 - Executaveis locais de jogos manuais e locais persistidos ja sao iniciados por comando Tauri seguro, sem shell, com validacao de caminho absoluto local, arquivo existente e extensao `.exe`.
-- O backend Tauri ja possui persistencia SQLite, migration e compatibilidade de schema no boot, seed idempotente dos 4 mocks em background, comando `list_library_entries` para a listagem unificada, `set_library_entry_archived` para arquivamento, `update_manual_game` para edicao de jogos manuais e `launch_library_entry` para lancamento local seguro. O `LocalGamesProvider` inicial ja existe como comando `sync_local_games`, com importacao incremental e acionamento manual pela interface. A sincronizacao local nao roda mais no boot para preservar tempo de abertura. O scanner local evita bibliotecas Steam por padrao, ignora instaladores/runtimes/servicos como EpicOnlineServices, encontra executaveis em subpastas comuns como `Binaries\Win64` e arquiva falsos positivos locais antigos no boot ou na sincronizacao. O primeiro corte do `SteamProvider` local ja existe como comando `sync_steam_games`, lendo `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos Steam instalados sem credenciais.
-- Ultima revisao confirmada em 2026-05-15: `npm run lint`, `npm run build` e `cargo test` passaram. A suite Rust esta com 42 testes.
+- O backend Tauri ja possui persistencia SQLite, migration e compatibilidade de schema no boot, seed idempotente dos 4 mocks em background, comando `list_library_entries` para a listagem unificada, `set_library_entry_archived` para arquivamento, `update_manual_game` para edicao de jogos manuais e `launch_library_entry` para lancamento local seguro.
+- O `LocalGamesProvider` inicial ja existe como comando `sync_local_games`, com importacao incremental e acionamento manual pela interface.
+- A sincronizacao local nao roda mais no boot para preservar tempo de abertura.
+- O scanner local evita bibliotecas Steam por padrao, ignora instaladores/runtimes/servicos como EpicOnlineServices, encontra executaveis em subpastas comuns como `Binaries\Win64` e arquiva falsos positivos locais antigos no boot ou na sincronizacao.
+- O primeiro corte do `SteamProvider` local ja existe como comando `sync_steam_games`, lendo `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos Steam instalados sem credenciais.
+- O provider Xbox local experimental ja existe no Windows. Ele usa o inventario local para trazer jogos instalados, abre o jogo via `explorer.exe` + `shell:AppsFolder` quando instalado e abre a Microsoft Store quando nao esta instalado.
+- A heuristica do Xbox foi endurecida para excluir apps comuns do Windows/Store como Skype, Filmes e TV, Noticias, IntelliGo Neptune, Calculadora e outros utilitarios, enquanto jogos desktop populares como `osu!` entram como `local`, nao como `xbox`.
+- Ultima revisao confirmada em 2026-05-18: `npm run lint`, `npm run build` e `cargo test` passaram. A suite Rust esta com 76 testes.
 - A area de contas ja possui Steam OpenID, SteamID64 persistido no SQLite, Steam Web API key salva pelo AuthVault e sincronizacao por conta via Web API. A credencial usa keyring/cofre do sistema operacional como primario e fallback DPAPI cifrado em `%APPDATA%\com.bibliotecajogos.unificada\auth-vault\steam-web-api-key.dpapi` quando o Credential Manager nao valida leitura apos gravacao.
 - A tela de contas da Steam usa disclosure inline: a linha principal mostra resumo e seta, e o painel expandido concentra login, sincronizacao local, sincronizacao por conta, SteamID64 e Steam Web API key. O foco volta para a seta ao fechar.
-- O proximo corte da Steam Web API ja foi consolidado no backend com `ProviderErrorDto`, parse tolerante de payload e persistencia de metadados de sync nao sensiveis em `provider_account_configs.config_json`. O frontend atual nao precisou mudar.
-- A UX de erro da Steam agora mostra mensagem curta por padrao e detalhes tecnicos expansiveis quando a operacao falha. O backend emite `steam-sync-failed` com erro sanitizado para alimentar o disclosure no frontend.
+- O proximo corte da Steam Web API ja foi consolidado no backend com `ProviderErrorDto`, parse tolerante de payload e persistencia de metadados de sync nao sensiveis em `provider_account_configs.config_json`.
+- A UX de erro da Steam mostra mensagem curta por padrao e detalhes tecnicos expansiveis quando a operacao falha.
 
 ## Estrutura importante
 
@@ -76,6 +108,7 @@ Subagentes tecnicos podem ser usados para paralelizar pesquisa, implementacao ou
 
 Instale ou confirme:
 
+- Git.
 - Node.js LTS.
 - npm.
 - Rust via rustup.
@@ -87,6 +120,7 @@ Instale ou confirme:
 Comandos de verificacao:
 
 ```powershell
+git --version
 node --version
 npm --version
 rustc --version
@@ -101,7 +135,14 @@ Se `rustc` ou `cargo` nao forem encontrados apos instalar o rustup, feche e abra
 
 ## Preparacao do projeto
 
-Na raiz do projeto:
+Se for abrir o projeto a partir de outro checkout, entre na raiz e confirme o estado Git:
+
+```powershell
+git status --short
+git log --oneline -n 3
+```
+
+Depois entre no frontend e instale as dependencias:
 
 ```powershell
 cd .\aplicativo
@@ -126,6 +167,14 @@ Rode como app desktop Tauri:
 
 ```powershell
 npm run tauri:dev
+```
+
+Se quiser validar o backend isoladamente antes de subir a interface:
+
+```powershell
+cd .\src-tauri
+$env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\BibliotecaJogosUnificada\cargo-target"
+cargo test
 ```
 
 ## Configuracao contra erro do OneDrive no Cargo
@@ -199,12 +248,13 @@ npm run tauri:dev
   npm run tauri:dev
   ```
   Dentro dessa raiz, crie `steamapps\appmanifest_<appid>.acf`. O comando tambem le bibliotecas extras declaradas em `steamapps\libraryfolders.vdf`.
+- Para testar a descoberta Xbox local, abra `Contas` e acione `Sincronizar local`. Se algum app comum do Windows/Store entrar como jogo, a heuristica deve ser ajustada antes de seguir adiante.
 
 ## Ponto exato para continuar
 
-A persistencia local inicial, a listagem unificada pelo backend, o arquivamento, a edicao de jogos manuais, o bootstrap assincrono da biblioteca, o lancamento local seguro, o `LocalGamesProvider` inicial, o `SteamProvider` local, Steam OpenID, AuthVault para Web API e a selecao multipla de filtros por categoria na biblioteca principal ja foram implementados. A sincronizacao local e Steam continuam manuais.
+A persistencia local inicial, a listagem unificada pelo backend, o arquivamento, a edicao de jogos manuais, o bootstrap assincrono da biblioteca, o lancamento local seguro, o `LocalGamesProvider` inicial, o `SteamProvider` local, Steam OpenID, AuthVault para Web API, a selecao multipla de filtros por categoria na biblioteca principal e o merge visual Steam + Xbox ja foram implementados. A sincronizacao local e Steam continuam manuais.
 
-O proximo corte imediato deve melhorar a visualizacao da tela de configuracoes/contas, deixando estados de Steam, Web API, sincronizacao local e providers planejados mais claros.
+O proximo corte imediato deve continuar refinando o Xbox/Game Pass local para reduzir falsos positivos e manter jogos de desktop como `osu!` em `local`, sem reintroduzir apps comuns da Microsoft Store como `xbox`.
 
 As proximas mudancas devem seguir `DIRETRIZES_DESENVOLVIMENTO.md`: frontend em JavaScript/JSX, backend Tauri em Rust, SQLite como persistencia principal, padrao Service-Adapter para providers e normalizacao para `LibraryEntry`. A reorganizacao inicial do frontend ja foi feita com `components`, `services`, `adapters`, `hooks`, `pages`, `constants` e `styles`.
 
@@ -216,9 +266,10 @@ Ordem sugerida:
 4. Fechar e reabrir o app para confirmar persistencia SQLite dos jogos manuais e do arquivamento.
 5. Validar o fluxo manual de sincronizacao local no Tauri, preferencialmente com `BIBLIOTECA_JOGOS_LOCAL_ROOTS` apontando para uma pasta de teste.
 6. Validar o fluxo manual de sincronizacao Steam no Tauri, preferencialmente com `BIBLIOTECA_JOGOS_STEAM_ROOTS` apontando para uma pasta de teste.
-7. Melhorar a visualizacao da tela de configuracoes/contas.
-8. Evoluir a Steam com Web API para metadados/playtime adicionais.
-9. Depois, adicionar consulta filtrada/paginacao no backend para suportar bibliotecas maiores.
+7. Continuar o refinamento do provider Xbox local para filtrar melhor apps comuns e manter jogos de desktop em `local`.
+8. Melhorar a visualizacao da tela de configuracoes/contas apenas se aparecer nova necessidade de produto.
+9. Evoluir a Steam com Web API para metadados/playtime adicionais.
+10. Depois, adicionar consulta filtrada/paginacao no backend para suportar bibliotecas maiores.
 
 ## Criterios minimos antes de seguir para providers
 
@@ -228,6 +279,8 @@ Ordem sugerida:
 - `npm run tauri:dev` abre o app desktop.
 - Cadastro manual persiste apos fechar e abrir o app.
 - A UI continua funcionando com busca, filtros, selecao e detalhes.
+- O provider Xbox local nao importa apps comuns do Windows/Store como jogos.
+- Jogos de desktop como `osu!` aparecem como `local`, nao como `xbox`.
 
 ## Documentacao a manter atualizada
 
@@ -239,5 +292,3 @@ Sempre que houver marco importante, atualize:
 - `aplicativo/README.md`: comandos, stack e estado especifico do app.
 - `RETOMADA_NOVO_COMPUTADOR.md`: requisitos ou passos de ambiente que mudarem.
 - `cloude teste/README_PROJETO.md`, `cloude teste/agents` e `cloude teste/skills`: responsabilidades, checklists e criterios operacionais quando a forma de trabalho mudar.
-
-
