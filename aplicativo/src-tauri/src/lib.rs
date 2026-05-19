@@ -9,6 +9,7 @@ mod xbox_provider;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -48,8 +49,10 @@ pub fn run() {
             commands::sync_xbox_games,
             commands::sync_steam_account_games,
             commands::get_steam_account_config,
+            commands::get_steam_library_roots,
             commands::start_steam_openid_login,
             commands::save_steam_account_config,
+            commands::save_steam_library_roots,
             commands::get_library_settings,
             commands::save_library_settings,
             commands::save_steam_web_api_key,
@@ -141,10 +144,10 @@ fn bootstrap_library(
 }
 
 mod commands {
-    use crate::ProviderErrorDto;
     use super::{
         launcher, security, steam_openid, steam_web_api, storage, xbox_provider, AppState,
     };
+    use crate::ProviderErrorDto;
     use tauri::{AppHandle, Emitter, State};
 
     #[tauri::command]
@@ -285,6 +288,31 @@ mod commands {
     }
 
     #[tauri::command]
+    pub fn get_steam_library_roots(
+        state: State<'_, AppState>,
+    ) -> Result<storage::SteamLibraryRootsDto, String> {
+        let connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::get_steam_library_roots(&connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn save_steam_library_roots(
+        input: storage::SteamLibraryRootsInput,
+        state: State<'_, AppState>,
+    ) -> Result<storage::SteamLibraryRootsDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::save_steam_library_roots(&mut connection, input).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
     pub fn get_library_settings(
         state: State<'_, AppState>,
     ) -> Result<storage::LibrarySettingsDto, String> {
@@ -373,24 +401,25 @@ mod commands {
             )
         })?;
 
-        let api_key = api_key.map_err(|error| {
-            ProviderErrorDto::steam(
-                "steam_web_api_key_unavailable",
-                "Nao foi possivel acessar a Steam Web API key no cofre seguro.",
-                true,
-                "preflight",
-                Some(error.to_string()),
-            )
-        })?
-        .ok_or_else(|| {
-            ProviderErrorDto::steam(
-                "steam_web_api_key_missing",
-                "Configure a Steam Web API key no cofre seguro antes de sincronizar.",
-                true,
-                "preflight",
-                Some("credencial ausente no AuthVault".to_string()),
-            )
-        })?;
+        let api_key = api_key
+            .map_err(|error| {
+                ProviderErrorDto::steam(
+                    "steam_web_api_key_unavailable",
+                    "Nao foi possivel acessar a Steam Web API key no cofre seguro.",
+                    true,
+                    "preflight",
+                    Some(error.to_string()),
+                )
+            })?
+            .ok_or_else(|| {
+                ProviderErrorDto::steam(
+                    "steam_web_api_key_missing",
+                    "Configure a Steam Web API key no cofre seguro antes de sincronizar.",
+                    true,
+                    "preflight",
+                    Some("credencial ausente no AuthVault".to_string()),
+                )
+            })?;
 
         Ok((steam_id, api_key))
     }
@@ -531,11 +560,9 @@ mod commands {
 
         #[test]
         fn resolve_steam_sync_credentials_rejects_missing_api_key() {
-            let error = resolve_steam_sync_credentials(
-                Some("76561198000000000".to_string()),
-                Ok(None),
-            )
-            .expect_err("missing api key");
+            let error =
+                resolve_steam_sync_credentials(Some("76561198000000000".to_string()), Ok(None))
+                    .expect_err("missing api key");
 
             assert_eq!(error.code, "steam_web_api_key_missing");
             assert_eq!(error.phase, "preflight");
@@ -559,7 +586,11 @@ mod commands {
             assert_eq!(error.phase, "preflight");
             assert!(error.recoverable);
             assert_eq!(error.provider_id, "steam");
-            assert!(!error.details_sanitized.as_deref().expect("details").is_empty());
+            assert!(!error
+                .details_sanitized
+                .as_deref()
+                .expect("details")
+                .is_empty());
         }
     }
 }
@@ -1492,8 +1523,7 @@ mod launcher {
 
         #[test]
         fn validates_launch_uri_accepts_steam_uri() {
-            let uri = validate_launch_uri("steam://rungameid/1030300")
-                .expect("accept steam uri");
+            let uri = validate_launch_uri("steam://rungameid/1030300").expect("accept steam uri");
 
             assert_eq!(uri.scheme(), "steam");
             assert_eq!(uri.as_str(), "steam://rungameid/1030300");
@@ -1643,13 +1673,11 @@ mod steam_web_api {
                 ))));
             }
 
-            response
-                .text()
-                .map_err(|_| {
-                    SteamWebApiError::platform_unavailable(Some(
-                        "nao foi possivel ler o corpo da resposta".to_string(),
-                    ))
-                })
+            response.text().map_err(|_| {
+                SteamWebApiError::platform_unavailable(Some(
+                    "nao foi possivel ler o corpo da resposta".to_string(),
+                ))
+            })
         }
     }
 
@@ -1774,9 +1802,8 @@ mod steam_web_api {
         api_key: &str,
         steam_id: &str,
     ) -> Result<Vec<RemoteSteamGame>, SteamWebApiError> {
-        let mut url = Url::parse(STEAM_OWNED_GAMES_ENDPOINT).map_err(|_| {
-            SteamWebApiError::parse_failed(Some("endpoint invalido".to_string()))
-        })?;
+        let mut url = Url::parse(STEAM_OWNED_GAMES_ENDPOINT)
+            .map_err(|_| SteamWebApiError::parse_failed(Some("endpoint invalido".to_string())))?;
         url.query_pairs_mut()
             .append_pair("key", api_key)
             .append_pair("steamid", steam_id)
@@ -1845,9 +1872,11 @@ mod steam_web_api {
     }
 
     fn parse_u64_value(value: &serde_json::Value) -> Option<u64> {
-        value
-            .as_u64()
-            .or_else(|| value.as_str().and_then(|raw| raw.trim().parse::<u64>().ok()))
+        value.as_u64().or_else(|| {
+            value
+                .as_str()
+                .and_then(|raw| raw.trim().parse::<u64>().ok())
+        })
     }
 
     fn parse_i64_value(value: &serde_json::Value) -> Option<i64> {
@@ -1858,7 +1887,11 @@ mod steam_web_api {
                     .as_u64()
                     .and_then(|raw| (raw <= i64::MAX as u64).then(|| raw as i64))
             })
-            .or_else(|| value.as_str().and_then(|raw| raw.trim().parse::<i64>().ok()))
+            .or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|raw| raw.trim().parse::<i64>().ok())
+            })
     }
 
     #[cfg(test)]
@@ -2089,17 +2122,15 @@ mod steam_openid {
         let login_url = build_login_url(&return_to, &realm);
 
         std::thread::spawn(move || {
-            let result =
-                wait_for_callback(listener, &state, &return_to, Duration::from_secs(300)).and_then(
-                    |steam_id64| {
-                        let mut connection = connection
-                            .lock()
-                            .map_err(|_| "Nao foi possivel salvar a conta Steam.".to_string())?;
-                        storage::save_verified_steam_account_config(&mut connection, &steam_id64)
-                            .map_err(|_| "Nao foi possivel salvar a conta Steam.".to_string())?;
-                        Ok(steam_id64)
-                    },
-                );
+            let result = wait_for_callback(listener, &state, &return_to, Duration::from_secs(300))
+                .and_then(|steam_id64| {
+                    let mut connection = connection
+                        .lock()
+                        .map_err(|_| "Nao foi possivel salvar a conta Steam.".to_string())?;
+                    storage::save_verified_steam_account_config(&mut connection, &steam_id64)
+                        .map_err(|_| "Nao foi possivel salvar a conta Steam.".to_string())?;
+                    Ok(steam_id64)
+                });
 
             let event = match result {
                 Ok(steam_id64) => SteamOpenIdLoginCompleteDto {
@@ -2189,9 +2220,9 @@ mod steam_openid {
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
 
                     let mut buffer = [0_u8; 8192];
-                    let size = stream
-                        .read(&mut buffer)
-                        .map_err(|_| "Nao foi possivel ler o retorno do login Steam.".to_string())?;
+                    let size = stream.read(&mut buffer).map_err(|_| {
+                        "Nao foi possivel ler o retorno do login Steam.".to_string()
+                    })?;
                     let request = String::from_utf8_lossy(&buffer[..size]);
                     let callback_url = parse_request_target(&request)
                         .and_then(|target| Url::parse(&format!("http://127.0.0.1{target}")).ok())
@@ -2215,7 +2246,7 @@ mod steam_openid {
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
                         return Err(
-                            "Tempo expirado aguardando o retorno do login Steam.".to_string(),
+                            "Tempo expirado aguardando o retorno do login Steam.".to_string()
                         );
                     }
 
@@ -2368,8 +2399,8 @@ mod steam_openid {
             assert_eq!(
                 url.query_pairs()
                     .find(|(key, _)| key == "openid.mode")
-                .unwrap()
-                .1,
+                    .unwrap()
+                    .1,
                 "checkid_setup"
             );
         }
@@ -2520,9 +2551,9 @@ mod storage {
         updated_at: String,
     }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncSummaryDto {
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SyncSummaryDto {
         pub(crate) discovered: usize,
         pub(crate) inserted: usize,
         pub(crate) updated: usize,
@@ -2542,6 +2573,19 @@ pub struct SyncSummaryDto {
         provider_id: &'static str,
         connected: bool,
         steam_id64: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct SteamLibraryRootsInput {
+        roots: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamLibraryRootsDto {
+        provider_id: &'static str,
+        roots: Vec<String>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -2575,13 +2619,60 @@ pub struct SyncSummaryDto {
         Ok(steam_account_config_dto(Some(steam_id64)))
     }
 
-    pub fn get_library_settings(connection: &Connection) -> rusqlite::Result<LibrarySettingsDto> {
-        let preferred_store_id =
-            read_library_setting_value(connection, "preferredStoreId")?.unwrap_or_else(|| "steam".to_string());
+    pub fn get_steam_library_roots(
+        connection: &Connection,
+    ) -> rusqlite::Result<SteamLibraryRootsDto> {
+        Ok(steam_library_roots_dto(read_steam_library_roots(
+            connection,
+        )?))
+    }
 
-        Ok(LibrarySettingsDto {
-            preferred_store_id,
-        })
+    pub fn save_steam_library_roots(
+        connection: &mut Connection,
+        input: SteamLibraryRootsInput,
+    ) -> rusqlite::Result<SteamLibraryRootsDto> {
+        let roots = normalize_steam_library_roots(&input.roots)?;
+        let transaction = connection.transaction()?;
+        let existing_config_json = read_provider_config_json(&transaction, "steam")?;
+        let mut config = existing_config_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let roots_json = roots
+            .iter()
+            .map(|root| serde_json::Value::String(root.clone()))
+            .collect::<Vec<_>>();
+
+        config.insert(
+            "additionalLibraryRoots".to_string(),
+            serde_json::Value::Array(roots_json),
+        );
+
+        transaction.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id,
+              config_json,
+              updated_at
+            )
+            VALUES ('steam', ?1, ?2)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              config_json = excluded.config_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![serde_json::Value::Object(config).to_string(), now_iso()],
+        )?;
+        transaction.commit()?;
+
+        Ok(steam_library_roots_dto(roots))
+    }
+
+    pub fn get_library_settings(connection: &Connection) -> rusqlite::Result<LibrarySettingsDto> {
+        let preferred_store_id = read_library_setting_value(connection, "preferredStoreId")?
+            .unwrap_or_else(|| "steam".to_string());
+
+        Ok(LibrarySettingsDto { preferred_store_id })
     }
 
     pub fn save_library_settings(
@@ -2629,9 +2720,7 @@ pub struct SyncSummaryDto {
         )?;
         transaction.commit()?;
 
-        Ok(LibrarySettingsDto {
-            preferred_store_id,
-        })
+        Ok(LibrarySettingsDto { preferred_store_id })
     }
 
     pub fn save_verified_steam_account_config(
@@ -2684,7 +2773,11 @@ pub struct SyncSummaryDto {
               config_json = excluded.config_json,
               updated_at = excluded.updated_at
             "#,
-            params![steam_id64, serde_json::Value::Object(config).to_string(), now_iso()],
+            params![
+                steam_id64,
+                serde_json::Value::Object(config).to_string(),
+                now_iso()
+            ],
         )?;
         transaction.commit()?;
 
@@ -2721,6 +2814,13 @@ pub struct SyncSummaryDto {
         }
     }
 
+    fn steam_library_roots_dto(roots: Vec<String>) -> SteamLibraryRootsDto {
+        SteamLibraryRootsDto {
+            provider_id: "steam",
+            roots,
+        }
+    }
+
     fn normalize_preferred_store_id(value: &str) -> String {
         match value.trim().to_lowercase().as_str() {
             "xbox" => "xbox".to_string(),
@@ -2737,18 +2837,7 @@ pub struct SyncSummaryDto {
             return Ok(None);
         }
 
-        let config_json = connection
-            .query_row(
-                r#"
-                SELECT config_json
-                FROM provider_account_configs
-                WHERE provider_id = 'library'
-                "#,
-                [],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
+        let config_json = read_provider_config_json(connection, "library")?;
 
         let value = config_json
             .as_deref()
@@ -2758,6 +2847,93 @@ pub struct SyncSummaryDto {
             .and_then(|value| value.as_str().map(|value| value.to_string()));
 
         Ok(value)
+    }
+
+    fn read_provider_config_json(
+        connection: &Connection,
+        provider_id: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        connection
+            .query_row(
+                r#"
+                SELECT config_json
+                FROM provider_account_configs
+                WHERE provider_id = ?1
+                "#,
+                params![provider_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+    }
+
+    fn read_steam_library_roots(connection: &Connection) -> rusqlite::Result<Vec<String>> {
+        let columns = table_columns(connection, "provider_account_configs")?;
+        if columns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        Ok(read_provider_config_json(connection, "steam")?
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .and_then(|object| object.get("additionalLibraryRoots").cloned())
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect::<Vec<_>>())
+    }
+
+    fn normalize_steam_library_roots(values: &[String]) -> rusqlite::Result<Vec<String>> {
+        let mut roots = Vec::new();
+
+        for value in values {
+            let trimmed = value.trim().trim_matches('"');
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let root = normalize_steam_library_root(value)
+                .ok_or_else(|| rusqlite::Error::InvalidPath(PathBuf::from(trimmed)))?;
+            let normalized = root.to_string_lossy().to_string();
+            let normalized_key = normalize_path_string(&root);
+
+            if !roots.iter().any(|existing: &String| {
+                normalize_path_string(Path::new(existing)) == normalized_key
+            }) {
+                roots.push(normalized);
+            }
+        }
+
+        Ok(roots)
+    }
+
+    fn normalize_steam_library_root(value: &str) -> Option<PathBuf> {
+        let trimmed = value.trim().trim_matches('"');
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let path = PathBuf::from(trimmed);
+        let library_root = if is_steamapps_path(&path) {
+            path.parent().map(Path::to_path_buf)?
+        } else {
+            path
+        };
+        let steamapps_dir = library_root.join("steamapps");
+
+        if steamapps_dir.is_dir() {
+            return Some(library_root.canonicalize().unwrap_or(library_root));
+        }
+
+        None
+    }
+
+    fn is_steamapps_path(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("steamapps"))
     }
 
     pub fn read_steam_account_config(connection: &Connection) -> rusqlite::Result<Option<String>> {
@@ -3708,7 +3884,7 @@ pub struct SyncSummaryDto {
     }
 
     pub fn sync_steam_games(connection: &mut Connection) -> rusqlite::Result<SyncSummaryDto> {
-        let roots = collect_steam_roots();
+        let roots = collect_steam_roots(connection);
         sync_steam_games_from_roots(connection, &roots)
     }
 
@@ -3950,37 +4126,55 @@ pub struct SyncSummaryDto {
         roots.into_iter().filter(|root| root.exists()).collect()
     }
 
-    fn collect_steam_roots() -> Vec<PathBuf> {
+    fn collect_steam_roots(connection: &Connection) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+
         if let Some(raw_roots) = std::env::var_os("BIBLIOTECA_JOGOS_STEAM_ROOTS") {
-            let roots = raw_roots
+            for root in raw_roots
                 .to_string_lossy()
                 .split(';')
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
                 .filter(|root| root.exists())
-                .collect::<Vec<_>>();
-
-            if !roots.is_empty() {
-                return roots;
+            {
+                push_unique_path(&mut roots, root);
             }
         }
 
-        let mut roots = Vec::new();
+        if let Ok(saved_roots) = read_steam_library_roots(connection) {
+            for root in saved_roots {
+                let root = PathBuf::from(root);
+                if root.exists() {
+                    push_unique_path(&mut roots, root);
+                }
+            }
+        }
 
         if let Some(program_files_x86) = std::env::var_os("PROGRAMFILES(X86)") {
-            roots.push(PathBuf::from(program_files_x86).join("Steam"));
+            push_unique_path(&mut roots, PathBuf::from(program_files_x86).join("Steam"));
         }
 
         if let Some(program_files) = std::env::var_os("PROGRAMFILES") {
-            roots.push(PathBuf::from(program_files).join("Steam"));
+            push_unique_path(&mut roots, PathBuf::from(program_files).join("Steam"));
         }
 
         if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-            roots.push(PathBuf::from(local_app_data).join("Steam"));
+            push_unique_path(&mut roots, PathBuf::from(local_app_data).join("Steam"));
         }
 
         roots.into_iter().filter(|root| root.exists()).collect()
+    }
+
+    fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+        let key = normalize_path_string(&path);
+
+        if !paths
+            .iter()
+            .any(|existing| normalize_path_string(existing) == key)
+        {
+            paths.push(path);
+        }
     }
 
     fn discover_local_game_candidates(roots: &[PathBuf]) -> Vec<LocalGameCandidate> {
@@ -4053,7 +4247,11 @@ pub struct SyncSummaryDto {
 
     fn steamapps_directories(steam_root: &Path) -> Vec<PathBuf> {
         let mut directories = Vec::new();
-        let default_steamapps = steam_root.join("steamapps");
+        let default_steamapps = if is_steamapps_path(steam_root) {
+            steam_root.to_path_buf()
+        } else {
+            steam_root.join("steamapps")
+        };
 
         if default_steamapps.is_dir() {
             directories.push(default_steamapps.clone());
@@ -5655,6 +5853,107 @@ pub struct SyncSummaryDto {
             assert_eq!(entries[0].game.sources[0].external_id, "1145360");
 
             let _ = std::fs::remove_dir_all(steam_root);
+            let _ = std::fs::remove_dir_all(extra_library);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn collect_steam_roots_includes_saved_additional_library_roots() {
+            let extra_library = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-saved-extra-{}",
+                timestamp_millis()
+            ));
+            let extra_steamapps = extra_library.join("steamapps");
+            let extra_common = extra_steamapps.join("common").join("Hollow Knight");
+
+            std::fs::create_dir_all(&extra_common).expect("create saved steamapps");
+            std::fs::write(
+                extra_steamapps.join("appmanifest_367520.acf"),
+                r#""AppState"
+{
+  "appid" "367520"
+  "name" "Hollow Knight"
+  "installdir" "Hollow Knight"
+}
+"#,
+            )
+            .expect("write saved manifest");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steam-saved-extra-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            save_steam_library_roots(
+                &mut connection,
+                SteamLibraryRootsInput {
+                    roots: vec![extra_library.to_string_lossy().to_string()],
+                },
+            )
+            .expect("save additional steam root");
+            let collected_roots = collect_steam_roots(&connection);
+
+            let expected_root = normalize_path_string(
+                &extra_library
+                    .canonicalize()
+                    .unwrap_or(extra_library.clone()),
+            );
+            assert!(collected_roots
+                .iter()
+                .any(|root| normalize_path_string(root) == expected_root));
+
+            let summary =
+                sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&extra_library))
+                    .expect("sync saved steam roots");
+            let entries = list_library_entries(&connection).expect("list steam entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].game.title, "Hollow Knight");
+            assert_eq!(entries[0].game.sources[0].external_id, "367520");
+
+            let _ = std::fs::remove_dir_all(extra_library);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn save_steam_library_roots_accepts_steamapps_path_and_preserves_account_config() {
+            let extra_library = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steamapps-input-{}",
+                timestamp_millis()
+            ));
+            let extra_steamapps = extra_library.join("steamapps");
+
+            std::fs::create_dir_all(&extra_steamapps).expect("create steamapps");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-steamapps-input-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            save_verified_steam_account_config(&mut connection, "76561198000000000")
+                .expect("save steam account");
+            let dto = save_steam_library_roots(
+                &mut connection,
+                SteamLibraryRootsInput {
+                    roots: vec![extra_steamapps.to_string_lossy().to_string()],
+                },
+            )
+            .expect("save steamapps path");
+
+            assert_eq!(dto.roots.len(), 1);
+            assert_eq!(
+                read_steam_account_config(&connection).expect("read steam account"),
+                Some("76561198000000000".to_string())
+            );
+            assert_eq!(
+                read_steam_library_roots(&connection).expect("read steam roots"),
+                dto.roots
+            );
+
             let _ = std::fs::remove_dir_all(extra_library);
             let _ = std::fs::remove_file(path);
         }

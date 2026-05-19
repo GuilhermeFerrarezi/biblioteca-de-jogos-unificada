@@ -1,34 +1,30 @@
 ---
 name: tauri-desktop-security-hardening
-description: Use ao revisar comandos Tauri, permissoes, IPC, filesystem, execucao local, logs e fronteira frontend-backend.
+description: Use when hardening Tauri IPC, file access and local execution boundaries.
 ---
 
 # Tauri Desktop Security Hardening
 
+## Use when
+
+- A change touches Tauri commands or IPC.
+- File paths, local execution or window behavior are involved.
+- The app needs a tighter desktop security posture.
+
 ## Checklist
 
-- Comandos Tauri expostos sao estritamente necessarios.
-- Entrada do frontend e validada no backend.
-- Operacoes de filesystem usam caminhos canonicalizados quando aplicavel.
-- Execucao de processo nao usa shell.
-- Logs nao contem tokens, cookies, chaves ou caminhos sensiveis desnecessarios.
-- `tauri.conf.json` nao concede permissoes amplas sem necessidade.
-- Falhas retornam mensagens seguras para a UI.
+- Keep allowlists narrow.
+- Avoid shell execution.
+- Validate paths, arguments and work directories.
+- Protect secrets and sensitive payloads.
 
-## Regras
-
-- Nunca confiar em validacao apenas no frontend.
-- Bloquear automacoes que burlem protecoes de plataforma.
-- Separar comando de leitura, escrita, sync e lancamento.
-
-## Saida esperada
+## Output
 
 ```text
-Comando/recurso:
-Entradas:
-Validacoes:
-Permissoes:
-Riscos:
-Mitigacoes:
-Testes:
+Risk surface:
+Allowlist changes:
+Path validation:
+Execution rules:
+Logging rules:
+Open risks:
 ```

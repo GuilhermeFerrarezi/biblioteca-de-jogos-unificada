@@ -80,13 +80,14 @@ function LibraryPage() {
               <GameDetailsPanel
                 launchFeedback={library.launchFeedback}
                 launchMessage={library.launchMessage}
-                preferredStoreId={library.preferredStoreId}
+                selectedLaunchPlatformId={library.selectedLaunchPlatformId}
                 selectedEntry={library.selectedEntry}
                 showLibraryLoading={library.showLibraryLoading}
                 onArchiveEntry={library.handleArchiveSelectedEntry}
                 onEditEntry={library.handleEditSelectedEntry}
                 onInstallAction={library.handleInstallAction}
                 onLaunchEntry={library.handleLaunchSelectedEntry}
+                onLaunchPlatformChange={library.handleLaunchPlatformChange}
               />
             </div>
           </>

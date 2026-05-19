@@ -53,6 +53,7 @@ export function useLibraryPageState() {
   const [isXboxSyncing, setIsXboxSyncing] = useState(false)
   const [isSteamAccountSyncing, setIsSteamAccountSyncing] = useState(false)
   const [preferredStoreId, setPreferredStoreId] = useState('steam')
+  const [selectedLaunchPlatformByEntryId, setSelectedLaunchPlatformByEntryId] = useState({})
   const [isLibrarySettingsLoading, setIsLibrarySettingsLoading] = useState(true)
   const [isLibrarySettingsSaving, setIsLibrarySettingsSaving] = useState(false)
   const [isManualModalOpen, setIsManualModalOpen] = useState(false)
@@ -65,8 +66,10 @@ export function useLibraryPageState() {
   const groupedEntries = useMemo(() => groupLibraryEntries(entries), [entries])
   const { filteredEntries, installedCount, totalHours } = useLibraryFiltering(groupedEntries, searchTerm, quickFilters)
   const selectedEntry = getVisibleSelectedEntry(filteredEntries, selectedEntryId)
+  const selectedLaunchPlatformId =
+    selectedLaunchPlatformByEntryId[selectedEntry?.id] ?? preferredStoreId
   const { primaryLaunchAction: selectedLaunchAction, hint: selectedLaunchActionHint } =
-    getLaunchActionState(selectedEntry, preferredStoreId)
+    getLaunchActionState(selectedEntry, selectedLaunchPlatformId)
 
   useEffect(() => {
     let isMounted = true
@@ -333,9 +336,9 @@ export function useLibraryPageState() {
       return
     }
 
-    const targetEntryId = entryId || getPreferredLaunchEntryId(selectedEntry, preferredStoreId)
+    const targetEntryId = entryId || getPreferredLaunchEntryId(selectedEntry, selectedLaunchPlatformId)
     const targetEntry = entries.find((entry) => entry.id === targetEntryId) ?? selectedEntry.memberEntries?.find((entry) => entry.id === targetEntryId) ?? selectedEntry
-    const targetLaunchState = getLaunchActionState(targetEntry, preferredStoreId)
+    const targetLaunchState = getLaunchActionState(targetEntry, selectedLaunchPlatformId)
     const primaryAction = targetLaunchState.primaryLaunchAction
 
     if (!primaryAction || primaryAction.kind === 'manual' || !primaryAction.target) {
@@ -507,26 +510,35 @@ export function useLibraryPageState() {
   }
 
   const handleSyncSteamAccountGames = async () => {
-    if (isSteamAccountSyncing) {
+    if (isSteamAccountSyncing || isSteamSyncing) {
       return
     }
 
     setIsSteamAccountSyncing(true)
-    setLaunchMessage('Sincronizando biblioteca da conta Steam...')
+    setIsSteamSyncing(true)
+    setLaunchMessage('Sincronizando biblioteca da conta Steam e instalados locais...')
     setLaunchFeedback(null)
 
     try {
-      const summary = await syncSteamAccountGames()
+      const accountSummary = await syncSteamAccountGames()
 
-      if (!summary) {
+      if (!accountSummary) {
         setLaunchMessage('Sincronizacao por conta disponivel apenas no aplicativo Tauri.')
+        setLaunchFeedback(null)
+        return
+      }
+
+      const localSummary = await syncSteamGames()
+
+      if (!localSummary) {
+        setLaunchMessage('Sincronizacao local da Steam disponivel apenas no aplicativo Tauri.')
         setLaunchFeedback(null)
         return
       }
 
       await refreshEntries()
       setLaunchMessage(
-        `Sincronizacao da conta concluida: ${summary.inserted} novos, ${summary.updated} atualizados, ${summary.archived ?? 0} arquivados e ${summary.unavailable ?? 0} indisponiveis em ${summary.discovered} itens encontrados.`,
+        `Sincronizacao Steam concluida: conta com ${accountSummary.inserted} novos, ${accountSummary.updated} atualizados e ${accountSummary.unavailable ?? 0} indisponiveis em ${accountSummary.discovered} itens; instalados locais com ${localSummary.inserted} novos, ${localSummary.updated} atualizados, ${localSummary.archived ?? 0} arquivados e ${localSummary.unavailable ?? 0} indisponiveis em ${localSummary.discovered} manifestos.`,
       )
       setLaunchFeedback(null)
     } catch (error) {
@@ -540,6 +552,7 @@ export function useLibraryPageState() {
       throw feedback
     } finally {
       setIsSteamAccountSyncing(false)
+      setIsSteamSyncing(false)
     }
   }
 
@@ -638,6 +651,21 @@ export function useLibraryPageState() {
     setLaunchFeedback(null)
   }, [])
 
+  const handleLaunchPlatformChange = useCallback((nextPlatformId) => {
+    const normalizedPlatformId = String(nextPlatformId ?? '').trim().toLowerCase()
+
+    if (!selectedEntry?.id || !['steam', 'xbox'].includes(normalizedPlatformId)) {
+      return
+    }
+
+    setSelectedLaunchPlatformByEntryId((currentSelections) => ({
+      ...currentSelections,
+      [selectedEntry.id]: normalizedPlatformId,
+    }))
+    setLaunchMessage(normalizedPlatformId === 'xbox' ? 'Biblioteca selecionada: Xbox.' : 'Biblioteca selecionada: Steam.')
+    setLaunchFeedback(null)
+  }, [selectedEntry?.id])
+
   const handlePreferredStoreChange = useCallback(async (nextPreferredStoreId) => {
     const normalizedPreferredStoreId = String(nextPreferredStoreId ?? '').trim().toLowerCase() === 'xbox' ? 'xbox' : 'steam'
 
@@ -671,6 +699,7 @@ export function useLibraryPageState() {
     groupedEntries,
     filteredEntries,
     preferredStoreId,
+    selectedLaunchPlatformId,
     isLibrarySettingsLoading,
     isLibrarySettingsSaving,
     installedCount,
@@ -704,6 +733,7 @@ export function useLibraryPageState() {
     handleEditSelectedEntry,
     handleInstallAction,
     handleLaunchSelectedEntry,
+    handleLaunchPlatformChange,
     handleClearLibraryFilters,
     handlePreferredStoreChange,
     handleManualGameSubmit,

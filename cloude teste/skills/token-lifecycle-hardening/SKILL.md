@@ -1,35 +1,30 @@
 ---
 name: token-lifecycle-hardening
-description: Use para desenhar ciclo de vida de tokens, renovacao, expiracao, revogacao, armazenamento seguro e limpeza de sessao.
+description: Use when defining the lifecycle of account tokens or API keys.
 ---
 
 # Token Lifecycle Hardening
 
-## Ciclo minimo
+## Use when
 
-- obter token por fluxo oficial;
-- armazenar no cofre do SO quando possivel;
-- renovar antes de expirar;
-- detectar expiracao e pedir reconexao;
-- revogar/desconectar;
-- apagar dados sensiveis locais conforme escolha do usuario.
+- A token must be created, stored, refreshed or revoked.
+- Secret handling needs a full lifecycle policy.
+- The app must clean up credentials safely.
 
-## Regras
+## Checklist
 
-- Token nunca deve aparecer em log, erro, screenshot ou frontend sem necessidade.
-- Separar token de dados de biblioteca.
-- Preferir escopos minimos.
-- Tratar cookies de webview como segredo.
+- Define creation and storage rules.
+- Specify refresh and expiration behavior.
+- Define revoke and delete behavior.
+- Keep tokens out of logs and UI payloads.
 
-## Saida esperada
+## Output
 
 ```text
-Plataforma:
-Fluxo:
-Escopos:
-Armazenamento:
-Renovacao:
-Revogacao:
-Logs:
-Riscos:
+Token type:
+Creation:
+Storage:
+Refresh:
+Revocation:
+Deletion:
 ```

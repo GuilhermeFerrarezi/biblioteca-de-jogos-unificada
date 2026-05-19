@@ -28,9 +28,15 @@
 }
 
 .sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  min-height: 100vh;
+  max-height: 100vh;
   display: flex;
   flex-direction: column;
   gap: 28px;
+  overflow-y: auto;
   padding: 24px;
   background: var(--color-panel-strong);
   color: var(--color-text);
@@ -303,6 +309,10 @@ button:disabled {
 }
 
 .filter-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   padding: 0 12px;
   background: #172229;
   color: #b5c5c1;
@@ -411,7 +421,10 @@ button:disabled {
 }
 
 .details-panel {
-  overflow: hidden;
+  position: sticky;
+  top: 28px;
+  max-height: calc(100vh - 56px);
+  overflow: auto;
 }
 
 .detail-cover {
@@ -1008,6 +1021,14 @@ button:disabled {
   background: #0d1519;
 }
 
+.steam-library-roots-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-top: 1px solid #22323b;
+  background: #0d1519;
+}
+
 .steam-api-vault-heading {
   min-width: 0;
   display: grid;
@@ -1029,18 +1050,31 @@ button:disabled {
   min-width: 0;
 }
 
+.steam-library-roots-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
 .steam-api-key-form label {
   display: grid;
   gap: 8px;
 }
 
-.steam-api-key-form label span {
+.steam-library-roots-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.steam-api-key-form label span,
+.steam-library-roots-form label span {
   color: #b5c5c1;
   font-size: 13px;
   font-weight: 700;
 }
 
-.steam-api-key-form input {
+.steam-api-key-form input,
+.steam-library-roots-form textarea {
   width: 100%;
   min-height: 42px;
   padding: 0 12px;
@@ -1052,17 +1086,27 @@ button:disabled {
   font: inherit;
 }
 
-.steam-api-key-form input:focus {
+.steam-library-roots-form textarea {
+  min-height: 108px;
+  padding: 11px 12px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.steam-api-key-form input:focus,
+.steam-library-roots-form textarea:focus {
   border-color: #14b8a6;
   box-shadow: 0 0 0 3px rgb(20 184 166 / 16%);
 }
 
-.steam-api-key-form input[aria-invalid='true'] {
+.steam-api-key-form input[aria-invalid='true'],
+.steam-library-roots-form textarea[aria-invalid='true'] {
   border-color: #ef4444;
   box-shadow: 0 0 0 3px rgb(239 68 68 / 16%);
 }
 
-.steam-api-key-form p {
+.steam-api-key-form p,
+.steam-library-roots-form p {
   margin: 0;
   color: var(--color-muted);
   font-size: 13px;
@@ -1354,6 +1398,13 @@ button:disabled {
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
+  }
+
+  .sidebar,
+  .details-panel {
+    position: static;
+    max-height: none;
+    overflow: visible;
   }
 
   .library-layout {

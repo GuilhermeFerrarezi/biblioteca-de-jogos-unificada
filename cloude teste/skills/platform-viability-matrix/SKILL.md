@@ -1,38 +1,33 @@
 ---
 name: platform-viability-matrix
-description: Use para avaliar viabilidade tecnica, legal e operacional de integrar Steam, Xbox, Epic ou outras plataformas.
+description: Use when comparing platform integration options and deciding what is feasible.
 ---
 
 # Platform Viability Matrix
 
-## Criterios
+## Use when
 
-- API oficial disponivel.
-- Autenticacao exigida.
-- Dados acessiveis: biblioteca, instalacao, tempo, conquistas, capas.
-- Limites de uso e latencia esperada.
-- Restrições de termos de uso.
-- Alternativas locais: manifests, registros, launcher instalado.
-- Estabilidade e risco de quebra.
+- A platform decision has compliance or feasibility risk.
+- Multiple integration paths are possible.
+- The project needs a direct recommendation.
 
-## Classificacao
+## Checklist
 
-- `mvp`: viavel para primeira implementacao real.
-- `experimental`: possivel, mas exige isolamento e aviso na UI.
-- `local-only`: viavel apenas por leitura local/launcher.
-- `blocked`: nao implementar ate nova decisao.
+- Check official support first.
+- Separate viable, experimental and blocked options.
+- Capture auth, permissions and data scope.
+- Recommend the next action clearly.
 
-## Saida esperada
+## Output
 
 ```text
-Plataforma:
-Metodo recomendado:
-Classificacao:
-Dados disponiveis:
-Autenticacao:
-Riscos legais:
-Riscos tecnicos:
-Performance esperada:
-Fallback:
-Proxima acao:
+Platform:
+Use case:
+Viability:
+Compliance risk:
+Auth/scopes:
+Available data:
+Blocked data:
+Alternative:
+Recommendation:
 ```

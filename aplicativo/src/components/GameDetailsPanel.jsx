@@ -8,19 +8,20 @@ import StatusDisclosure from './StatusDisclosure'
 function GameDetailsPanel({
   launchFeedback,
   launchMessage,
-  preferredStoreId,
+  selectedLaunchPlatformId,
   selectedEntry,
   showLibraryLoading,
   onArchiveEntry,
   onEditEntry,
   onInstallAction,
   onLaunchEntry,
+  onLaunchPlatformChange,
 }) {
   const [isLaunchChooserOpen, setIsLaunchChooserOpen] = useState(false)
-  const launchChoices = getLaunchChoices(selectedEntry, preferredStoreId)
+  const launchChoices = getLaunchChoices(selectedEntry, selectedLaunchPlatformId)
   const { primaryLaunchAction, canLaunch: canLaunchSelectedEntry, hint: launchActionHint } = getLaunchActionState(
     selectedEntry,
-    preferredStoreId,
+    selectedLaunchPlatformId,
   )
   const hasMultipleLaunchChoices = launchChoices.length > 1
   const isXboxStoreAction =
@@ -47,7 +48,7 @@ function GameDetailsPanel({
             {hasMultipleLaunchChoices ? (
               <div className="timeline-note">
                 <Store size={16} aria-hidden="true" />
-                {preferredStoreId === 'xbox' ? 'Loja principal ativa: Xbox.' : 'Loja principal ativa: Steam.'}
+                {selectedLaunchPlatformId === 'xbox' ? 'Biblioteca selecionada: Xbox.' : 'Biblioteca selecionada: Steam.'}
               </div>
             ) : null}
             <div className="detail-actions">
@@ -132,14 +133,15 @@ function GameDetailsPanel({
                     key={choice.entryId}
                     className="launch-choice-button"
                     type="button"
-                    role="menuitem"
+                    role="menuitemradio"
+                    aria-checked={choice.platformId === selectedLaunchPlatformId}
                     onClick={() => {
                       setIsLaunchChooserOpen(false)
-                      onLaunchEntry(choice.entryId)
+                      onLaunchPlatformChange(choice.platformId)
                     }}
                   >
                     <strong>{choice.platformLabel}</strong>
-                    <span>{choice.actionLabel}</span>
+                    <span>{choice.platformId === selectedLaunchPlatformId ? 'Selecionado' : choice.actionLabel}</span>
                   </button>
                 ))}
               </div>

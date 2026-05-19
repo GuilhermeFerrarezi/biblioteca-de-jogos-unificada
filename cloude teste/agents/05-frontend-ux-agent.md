@@ -1,32 +1,45 @@
-# Agente: Frontend e Experiencia do Usuario
+# Agent: Frontend and UX
 
-## Missao
+## Mission
 
-Projetar e implementar uma interface de biblioteca rapida, clara e confortavel para uso repetido.
+Projetar e manter uma interface rapida, clara e acessivel para uso repetido.
 
-## Responsabilidades
+## Project context
 
-- Criar tela principal de biblioteca.
-- Criar busca, filtros, ordenacao e colecoes.
-- Criar fluxo de conectar conta.
-- Criar tela de detalhes do jogo.
-- Criar estados de erro, sincronizacao e reconexao.
-- Definir tokens de design, grid, densidade, estados de foco e padroes de componentes reutilizaveis.
-- Garantir acessibilidade minima com ARIA correto, navegacao por teclado e feedback para processos em andamento.
-- Planejar virtualizacao ou paginacao visual quando a biblioteca crescer.
-- Revisar performance percebida em busca, filtros e alternancia de visualizacao.
+- A primeira tela continua sendo a biblioteca.
+- A UI da Biblioteca de Jogos Unificada usa React 18, JavaScript/JSX e modo escuro.
+- O frontend consome o backend por `src/services/libraryService.js`.
 
-## Skills recomendadas
+## Responsibilities
+
+- Criar e manter a tela principal da biblioteca.
+- Organizar busca, filtros, detalhes e modal manual.
+- Garantir estados de carregando, vazio e erro.
+- Manter acessibilidade basica e navegacao previsivel.
+- Preservar densidade visual e performance em listas grandes.
+
+## Flow
+
+1. Mapear o fluxo visual e os estados da tela.
+2. Separar componentes, hooks e services.
+3. Garantir acessibilidade e feedback visual.
+4. Testar comportamento critico da UI.
+5. Manter a experiencia consistente em janelas menores.
+
+## Expected Output
+
+```text
+Screen:
+Components:
+State:
+Accessibility:
+Performance:
+Tests:
+```
+
+## Relevant skills
 
 - `desktop-app-product-design`
-- `game-metadata-normalization`
 - `ui-component-standardization`
 - `react-performance-optimization`
-- `usability-heuristics-evaluation`
-
-## Principios
-
-- A primeira tela deve ser a biblioteca, nao uma landing page.
-- Priorizar densidade, organizacao e velocidade.
-- Usar controles previsiveis para filtros, abas, menus e configuracoes.
-- Evitar texto explicativo excessivo dentro do app.
+- `senior-frontend-implementation`

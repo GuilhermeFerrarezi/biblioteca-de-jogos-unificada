@@ -3,7 +3,8 @@ use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Deserializer};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug)]
@@ -60,6 +61,8 @@ struct XboxGameCandidate {
     title: String,
     package_family_name: String,
     install_location: Option<String>,
+    launch_target: Option<String>,
+    store_id: Option<String>,
     source_id: String,
     game_id: String,
     entry_id: String,
@@ -97,6 +100,9 @@ struct XboxDiscoveryRecord {
     package_name: Option<String>,
     package_full_name: Option<String>,
     install_location: Option<String>,
+    launch_target: Option<String>,
+    store_id: Option<String>,
+    has_microsoft_game_config: bool,
     is_framework: bool,
     non_removable: bool,
     #[serde(default, deserialize_with = "deserialize_optional_signature_kind")]
@@ -177,6 +183,13 @@ fn sync_xbox_games_from_candidates(
     }
 
     for (app_id, existing_row) in &existing_entries {
+        if !existing_row.is_archived && is_rejected_persisted_xbox_entry(app_id, existing_row) {
+            if archive_xbox_entry(&transaction, existing_row)? {
+                summary.archived += 1;
+            }
+            continue;
+        }
+
         if !existing_row.is_archived
             && !discovered_app_ids.contains(app_id)
             && mark_xbox_entry_unavailable(&transaction, existing_row)?
@@ -187,6 +200,39 @@ fn sync_xbox_games_from_candidates(
 
     transaction.commit()?;
     Ok(summary)
+}
+
+fn is_rejected_persisted_xbox_entry(app_id: &str, existing_row: &EntryRow) -> bool {
+    let package_family_name = app_id.split('!').next().unwrap_or(app_id);
+
+    is_known_non_game_xbox_record(&existing_row.title, None, package_family_name)
+        || normalize_name(&existing_row.title).is_empty()
+}
+
+fn archive_xbox_entry(
+    transaction: &rusqlite::Transaction<'_>,
+    existing_row: &EntryRow,
+) -> rusqlite::Result<bool> {
+    if existing_row.is_archived {
+        return Ok(false);
+    }
+
+    transaction.execute(
+        r#"
+        UPDATE library_entries
+        SET is_archived = 1,
+            install_status = 'not_installed',
+            updated_at = ?2
+        WHERE id = ?1
+        "#,
+        params![existing_row.entry_id, now_iso()],
+    )?;
+    transaction.execute(
+        "UPDATE games SET installed = 0, updated_at = ?2 WHERE id = ?1",
+        params![existing_row.game_id, now_iso()],
+    )?;
+
+    Ok(true)
 }
 
 fn discover_xbox_game_candidates_from_records(
@@ -212,22 +258,54 @@ fn discover_xbox_game_candidates_from_records(
         let slug = create_slug(&title);
         let hash = stable_hash_hex(&app_id);
         let accent_color = deterministic_accent_color(&title);
-        let package_key = app_id.clone();
+        let package_key = format!("title:{}", normalize_name(&title));
 
-        candidates.entry(package_key).or_insert_with(|| XboxGameCandidate {
+        let candidate = XboxGameCandidate {
             app_id,
             title: title.clone(),
             package_family_name: record.package_family_name.clone(),
             install_location: record.install_location.clone(),
+            launch_target: record.launch_target.clone(),
+            store_id: record.store_id.clone(),
             source_id: format!("source-xbox-{slug}-{hash}"),
             game_id: format!("game-xbox-{slug}-{hash}"),
             entry_id: format!("entry-xbox-{slug}-{hash}"),
             launch_id: format!("launch-xbox-{hash}"),
             accent_color,
-        });
+        };
+
+        candidates
+            .entry(package_key)
+            .and_modify(|existing| {
+                if should_replace_xbox_candidate(existing, &candidate) {
+                    *existing = candidate.clone();
+                }
+            })
+            .or_insert(candidate);
     }
 
     candidates.into_values().collect()
+}
+
+fn should_replace_xbox_candidate(
+    existing: &XboxGameCandidate,
+    candidate: &XboxGameCandidate,
+) -> bool {
+    let existing_has_registered_aumid = is_registered_xbox_app_id(&existing.app_id);
+    let candidate_has_registered_aumid = is_registered_xbox_app_id(&candidate.app_id);
+
+    if candidate_has_registered_aumid != existing_has_registered_aumid {
+        return candidate_has_registered_aumid;
+    }
+
+    candidate.launch_target.is_some() && existing.launch_target.is_none()
+}
+
+fn is_registered_xbox_app_id(app_id: &str) -> bool {
+    app_id
+        .split('!')
+        .next()
+        .is_some_and(|family| family.contains('_'))
 }
 
 #[cfg(target_os = "windows")]
@@ -265,6 +343,8 @@ try {
                 PackageFamilyName = if ($package -and $package.PackageFamilyName) { $package.PackageFamilyName } else { $family }
                 PackageFullName = if ($package) { $package.PackageFullName } else { $null }
                 InstallLocation = if ($package) { $package.InstallLocation } else { $null }
+                StoreId = $null
+                HasMicrosoftGameConfig = [bool]($package -and $package.InstallLocation -and (Test-Path (Join-Path $package.InstallLocation 'MicrosoftGame.config')))
                 IsFramework = [bool]($package -and $package.IsFramework)
                 NonRemovable = [bool]($package -and $package.NonRemovable)
                 SignatureKind = if ($package -and $package.SignatureKind) { "$($package.SignatureKind)" } else { $null }
@@ -279,12 +359,205 @@ try {
 }
 "#;
     let output = run_powershell(script)?;
-    parse_discovery_output(&output)
+    let mut records = parse_discovery_output(&output)?;
+    records.extend(collect_xbox_games_folder_records());
+    Ok(records)
 }
 
 #[cfg(not(target_os = "windows"))]
 fn collect_xbox_discovery_records() -> Result<Vec<XboxDiscoveryRecord>, XboxProviderError> {
     Err(XboxProviderError::unsupported_platform())
+}
+
+#[cfg(target_os = "windows")]
+fn collect_xbox_games_folder_records() -> Vec<XboxDiscoveryRecord> {
+    let mut records = Vec::new();
+
+    for root in filesystem_roots() {
+        let xbox_games_root = root.join("XboxGames");
+        let Ok(entries) = fs::read_dir(&xbox_games_root) else {
+            continue;
+        };
+
+        for entry in entries.flatten().take(512) {
+            let game_dir = entry.path();
+            if !game_dir.is_dir() {
+                continue;
+            }
+
+            if let Some(record) = xbox_record_from_game_directory(&game_dir) {
+                records.push(record);
+            }
+        }
+    }
+
+    records
+}
+
+#[cfg(target_os = "windows")]
+fn filesystem_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    for letter in b'A'..=b'Z' {
+        let root = format!("{}:\\", letter as char);
+        let path = PathBuf::from(root);
+        if path.exists() {
+            roots.push(path);
+        }
+    }
+
+    roots
+}
+
+#[cfg(target_os = "windows")]
+fn xbox_record_from_game_directory(game_dir: &Path) -> Option<XboxDiscoveryRecord> {
+    let config_path = find_microsoft_game_config(game_dir)?;
+    let contents = fs::read_to_string(&config_path).ok()?;
+
+    if is_rejected_xbox_game_config(&contents, game_dir) {
+        return None;
+    }
+
+    let identity_name = xml_tag_attribute(&contents, "Identity", "Name")
+        .or_else(|| game_dir.file_name()?.to_str().map(str::to_string))?;
+    let title = xml_tag_attribute(&contents, "ShellVisuals", "DefaultDisplayName")
+        .filter(|value| !value.starts_with("ms-resource:"))
+        .or_else(|| xml_tag_attribute(&contents, "Executable", "OverrideDisplayName"))
+        .filter(|value| !value.starts_with("ms-resource:"))
+        .or_else(|| game_dir.file_name()?.to_str().map(str::to_string))?;
+    let executable_name = xml_tag_attribute(&contents, "Executable", "Name")?;
+    let executable_id = xml_tag_attribute(&contents, "Executable", "Id")
+        .or_else(|| {
+            Path::new(&executable_name)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "App".to_string());
+    Some(XboxDiscoveryRecord {
+        app_id: format!("{identity_name}!{executable_id}"),
+        title,
+        package_family_name: identity_name.clone(),
+        package_name: Some(identity_name.clone()),
+        package_full_name: Some(identity_name),
+        install_location: Some(game_dir.to_string_lossy().to_string()),
+        launch_target: resolve_xbox_game_executable(&config_path, &executable_name)
+            .map(|path| path.to_string_lossy().to_string()),
+        store_id: xml_tag_text(&contents, "StoreId"),
+        has_microsoft_game_config: true,
+        is_framework: false,
+        non_removable: false,
+        signature_kind: Some("XboxGames".to_string()),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_xbox_game_executable(config_path: &Path, executable_name: &str) -> Option<PathBuf> {
+    let config_dir = config_path.parent()?;
+    for candidate in [
+        config_dir.join(executable_name),
+        config_dir
+            .parent()
+            .map(|parent| parent.join(executable_name))
+            .unwrap_or_else(|| config_dir.join(executable_name)),
+    ] {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn find_microsoft_game_config(game_dir: &Path) -> Option<PathBuf> {
+    for candidate in [
+        game_dir.join("MicrosoftGame.config"),
+        game_dir.join("MicrosoftGame.Config"),
+        game_dir.join("Content").join("MicrosoftGame.config"),
+        game_dir.join("Content").join("MicrosoftGame.Config"),
+    ] {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn is_rejected_xbox_game_config(contents: &str, game_dir: &Path) -> bool {
+    let haystack = normalize_name(&format!(
+        "{} {} {}",
+        game_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default(),
+        xml_tag_attribute(contents, "ShellVisuals", "DefaultDisplayName").unwrap_or_default(),
+        xml_tag_attribute(contents, "Identity", "Name").unwrap_or_default()
+    ));
+
+    contents.contains("<TargetDeviceFamilyForDLC")
+        || contents.contains("<AllowedProducts")
+        || ["dlc", "stub", "tracker", "gamesave", "betaearlyaccess"]
+            .iter()
+            .any(|keyword| haystack.contains(keyword))
+}
+
+fn xml_tag_attribute(contents: &str, tag_name: &str, attribute_name: &str) -> Option<String> {
+    let tag_index = find_xml_tag_index(contents, tag_name)?;
+    let tag = contents[tag_index..].split('>').next()?;
+    let attribute_start = format!("{attribute_name}=\"");
+    let value_start = tag.find(&attribute_start)? + attribute_start.len();
+    let value = tag[value_start..].split('"').next()?.trim();
+
+    if value.is_empty() {
+        None
+    } else {
+        Some(xml_unescape(value))
+    }
+}
+
+fn find_xml_tag_index(contents: &str, tag_name: &str) -> Option<usize> {
+    let tag_start = format!("<{tag_name}");
+    let mut search_from = 0;
+
+    while let Some(relative_index) = contents[search_from..].find(&tag_start) {
+        let index = search_from + relative_index;
+        let next_character = contents[index + tag_start.len()..].chars().next();
+
+        if next_character.is_some_and(|character| {
+            character.is_ascii_whitespace() || character == '>' || character == '/'
+        }) {
+            return Some(index);
+        }
+
+        search_from = index + tag_start.len();
+    }
+
+    None
+}
+
+fn xml_tag_text(contents: &str, tag_name: &str) -> Option<String> {
+    let start_tag = format!("<{tag_name}>");
+    let end_tag = format!("</{tag_name}>");
+    let start = contents.find(&start_tag)? + start_tag.len();
+    let value = contents[start..].split(&end_tag).next()?.trim();
+
+    if value.is_empty() {
+        None
+    } else {
+        Some(xml_unescape(value))
+    }
+}
+
+fn xml_unescape(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
 }
 
 fn run_powershell(script: &str) -> Result<String, XboxProviderError> {
@@ -327,7 +600,11 @@ fn run_powershell(script: &str) -> Result<String, XboxProviderError> {
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 last_error = Some(if stderr.is_empty() {
-                    format!("{} returned exit code {:?}", executable.display(), output.status.code())
+                    format!(
+                        "{} returned exit code {:?}",
+                        executable.display(),
+                        output.status.code()
+                    )
                 } else {
                     stderr
                 });
@@ -368,7 +645,9 @@ fn parse_discovery_output(raw: &str) -> Result<Vec<XboxDiscoveryRecord>, XboxPro
     Ok(output)
 }
 
-fn parse_discovery_value(value: serde_json::Value) -> Result<Vec<XboxDiscoveryRecord>, XboxProviderError> {
+fn parse_discovery_value(
+    value: serde_json::Value,
+) -> Result<Vec<XboxDiscoveryRecord>, XboxProviderError> {
     let mut output = Vec::new();
 
     match value {
@@ -418,6 +697,10 @@ fn should_keep_xbox_record(record: &XboxDiscoveryRecord) -> bool {
         return false;
     }
 
+    if !record.has_microsoft_game_config {
+        return false;
+    }
+
     if record
         .signature_kind
         .as_deref()
@@ -433,10 +716,6 @@ fn should_keep_xbox_record(record: &XboxDiscoveryRecord) -> bool {
         &record.package_family_name,
     );
     if title.trim().is_empty() {
-        return false;
-    }
-
-    if is_known_non_game_xbox_record(&title, record.package_name.as_deref(), &record.package_family_name) {
         return false;
     }
 
@@ -492,9 +771,7 @@ fn is_known_non_game_xbox_record(
     package_family_name: &str,
 ) -> bool {
     let normalized_title = normalize_name(title);
-    let normalized_package_name = package_name
-        .map(normalize_name)
-        .unwrap_or_default();
+    let normalized_package_name = package_name.map(normalize_name).unwrap_or_default();
     let normalized_family = normalize_name(package_family_name);
 
     const TITLE_DENYLIST: &[&str] = &[
@@ -518,7 +795,6 @@ fn is_known_non_game_xbox_record(
         "intel rapid storage technology application",
         "maps",
         "media player",
-        "minecraft launcher",
         "microsoft teams",
         "music",
         "news",
@@ -560,6 +836,21 @@ fn is_known_non_game_xbox_record(
         "mixed reality portal",
         "hello",
         "click to do",
+        "acao com um clique",
+        "aÃ§Ã£o com um clique",
+        "assistencia rapida",
+        "assistÃªncia rÃ¡pida",
+        "introducao",
+        "introduÃ§Ã£o",
+        "microsoft 365 copilot",
+        "microsoft clipchamp",
+        "microsoft noticias",
+        "microsoft notÃ­cias",
+        "microsoft to do",
+        "pagina inicial de desenvolvimento",
+        "pÃ¡gina inicial de desenvolvimento",
+        "power automate",
+        "solitaire & casual games",
         "windows terminal",
     ];
 
@@ -579,6 +870,16 @@ fn is_known_non_game_xbox_record(
         "microsoftwindowsalarms",
         "microsoftwindowsterminal",
         "microsoftwindowscommunicationsapps",
+        "microsoftwindows.client.cbs",
+        "microsoftwindows.client.coreai",
+        "microsoftcorporationii.quickassist",
+        "microsoft.microsoftofficehub",
+        "clipchamp.clipchamp",
+        "microsoftbingnews",
+        "microsofttodos",
+        "microsoftwindows.devhome",
+        "microsoftpowerautomatedesktop",
+        "microsoftmicrosoftsolitairecollection",
         "microsoftyourphone",
         "microsoftsechealthui",
         "microsoftcopilot",
@@ -623,7 +924,10 @@ fn normalize_xbox_title(
         || trimmed.starts_with("ms-resource:")
         || is_placeholder_xbox_title(trimmed)
     {
-        if let Some(package_name) = package_name.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(package_name) = package_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             return package_name.to_string();
         }
         return package_family_name.trim().to_string();
@@ -716,11 +1020,7 @@ fn insert_xbox_entry(
         INSERT INTO game_sources (id, game_id, platform_id, external_id)
         VALUES (?1, ?2, 'xbox', ?3)
         "#,
-        params![
-            candidate.source_id,
-            candidate.game_id,
-            candidate.app_id
-        ],
+        params![candidate.source_id, candidate.game_id, candidate.app_id],
     )?;
     upsert_xbox_primary_action(transaction, candidate, true, &candidate.launch_id)?;
     transaction.execute(
@@ -814,6 +1114,8 @@ fn mark_xbox_entry_unavailable(
             title: existing_row.title.clone(),
             package_family_name: String::new(),
             install_location: None,
+            launch_target: None,
+            store_id: None,
             source_id: String::new(),
             game_id: existing_row.game_id.clone(),
             entry_id: existing_row.entry_id.clone(),
@@ -833,7 +1135,8 @@ fn mark_xbox_entry_unavailable(
                 || action.working_directory != expected_action.working_directory
         })
         .unwrap_or(true);
-    let needs_entry_update = existing_row.installed || existing_row.install_status != "not_installed";
+    let needs_entry_update =
+        existing_row.installed || existing_row.install_status != "not_installed";
 
     if !needs_entry_update && !needs_action_update {
         return Ok(false);
@@ -857,7 +1160,10 @@ fn mark_xbox_entry_unavailable(
     }
 
     if needs_action_update {
-        let fallback_launch_id = format!("launch-xbox-store-{}", stable_hash_hex(&existing_row.game_id));
+        let fallback_launch_id = format!(
+            "launch-xbox-store-{}",
+            stable_hash_hex(&existing_row.game_id)
+        );
         upsert_xbox_primary_action(
             transaction,
             &XboxGameCandidate {
@@ -865,6 +1171,8 @@ fn mark_xbox_entry_unavailable(
                 title: existing_row.title.clone(),
                 package_family_name: String::new(),
                 install_location: None,
+                launch_target: None,
+                store_id: None,
                 source_id: String::new(),
                 game_id: existing_row.game_id.clone(),
                 entry_id: existing_row.entry_id.clone(),
@@ -920,7 +1228,8 @@ fn upsert_xbox_primary_action(
     launch_id: &str,
 ) -> rusqlite::Result<()> {
     let action = xbox_action_for_candidate(candidate, installed);
-    let arguments_json = serde_json::to_string(&action.arguments).unwrap_or_else(|_| "[]".to_string());
+    let arguments_json =
+        serde_json::to_string(&action.arguments).unwrap_or_else(|_| "[]".to_string());
     let changed = transaction.execute(
         r#"
         UPDATE launch_actions
@@ -970,18 +1279,38 @@ fn xbox_action_for_candidate(
     installed: bool,
 ) -> XboxPrimaryActionRow {
     if installed {
-        XboxPrimaryActionRow {
-            kind: "executable".to_string(),
-            label: "Jogar no Xbox".to_string(),
-            target: windows_explorer_target().to_string_lossy().to_string(),
-            arguments: vec![format!("shell:AppsFolder\\{}", candidate.app_id)],
-            working_directory: None,
+        if is_registered_xbox_app_id(&candidate.app_id) {
+            XboxPrimaryActionRow {
+                kind: "executable".to_string(),
+                label: "Jogar no Xbox".to_string(),
+                target: windows_explorer_target().to_string_lossy().to_string(),
+                arguments: vec![format!("shell:AppsFolder\\{}", candidate.app_id)],
+                working_directory: None,
+            }
+        } else if let Some(target) = candidate.launch_target.as_deref() {
+            XboxPrimaryActionRow {
+                kind: "executable".to_string(),
+                label: "Jogar no Xbox".to_string(),
+                target: target.to_string(),
+                arguments: Vec::new(),
+                working_directory: Path::new(target)
+                    .parent()
+                    .map(|path| path.to_string_lossy().to_string()),
+            }
+        } else {
+            XboxPrimaryActionRow {
+                kind: "uri".to_string(),
+                label: "Abrir Microsoft Store".to_string(),
+                target: build_store_target(&candidate.title, candidate.store_id.as_deref()),
+                arguments: Vec::new(),
+                working_directory: None,
+            }
         }
     } else {
         XboxPrimaryActionRow {
             kind: "uri".to_string(),
             label: "Abrir Microsoft Store".to_string(),
-            target: build_store_target(&candidate.title, None),
+            target: build_store_target(&candidate.title, candidate.store_id.as_deref()),
             arguments: Vec::new(),
             working_directory: None,
         }
@@ -1069,14 +1398,7 @@ fn create_slug(value: &str) -> String {
 
 fn deterministic_accent_color(value: &str) -> &'static str {
     const PALETTE: [&str; 8] = [
-        "#0d9488",
-        "#2563eb",
-        "#7c3aed",
-        "#be123c",
-        "#c2410c",
-        "#15803d",
-        "#9333ea",
-        "#b45309",
+        "#0d9488", "#2563eb", "#7c3aed", "#be123c", "#c2410c", "#15803d", "#9333ea", "#b45309",
     ];
     let hash: usize = value.chars().map(|character| character as usize).sum();
 
@@ -1122,6 +1444,8 @@ mod tests {
             title: title.to_string(),
             package_family_name: "Microsoft.HaloInfinite_8wekyb3d8bbwe".to_string(),
             install_location: Some("C:\\Program Files\\WindowsApps\\Halo".to_string()),
+            launch_target: None,
+            store_id: Some("9MWPM2CQNLHN".to_string()),
             source_id: format!("source-xbox-{slug}-{hash}"),
             game_id: format!("game-xbox-{slug}-{hash}"),
             entry_id: format!("entry-xbox-{slug}-{hash}"),
@@ -1215,6 +1539,141 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
+    fn reads_xbox_games_folder_record_from_microsoft_game_config() {
+        let root = std::env::temp_dir().join(format!(
+            "biblioteca-xbox-game-config-{}",
+            std::process::id()
+        ));
+        let content = root.join("Content");
+        let executable = content.join("Hollow Knight.exe");
+
+        std::fs::create_dir_all(&content).expect("create content dir");
+        std::fs::write(&executable, "").expect("write executable placeholder");
+        std::fs::write(
+            content.join("MicrosoftGame.config"),
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<Game configVersion="0">
+  <Identity Name="TeamCherry.15373CD61C66B" Publisher="CN=test" Version="1.0.0.0" />
+  <StoreId>9MW9469V91LM</StoreId>
+  <ExecutableList>
+    <Executable Name="Hollow Knight.exe" Id="Game" TargetDeviceFamily="PC" />
+  </ExecutableList>
+  <ShellVisuals DefaultDisplayName="Hollow Knight" PublisherDisplayName="Team Cherry" />
+</Game>"#,
+        )
+        .expect("write config");
+
+        let record = xbox_record_from_game_directory(&root).expect("read xbox game config");
+
+        assert_eq!(record.title, "Hollow Knight");
+        assert_eq!(record.app_id, "TeamCherry.15373CD61C66B!Game");
+        assert_eq!(record.store_id.as_deref(), Some("9MW9469V91LM"));
+        assert!(executable.is_file());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn reads_minecraft_launcher_without_executable_id() {
+        let root = std::env::temp_dir().join(format!(
+            "biblioteca-xbox-minecraft-config-{}",
+            std::process::id()
+        ));
+        let content = root.join("Content");
+        let executable = content.join("Minecraft.exe");
+
+        std::fs::create_dir_all(&content).expect("create content dir");
+        std::fs::write(&executable, "").expect("write executable placeholder");
+        std::fs::write(
+            content.join("MicrosoftGame.config"),
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<Game configVersion="1">
+  <Identity Name="Microsoft.4297127D64EC6" Publisher="CN=Microsoft Corporation" Version="2.6.2.0" />
+  <ExecutableList>
+    <Executable Name="Minecraft.exe" TargetDeviceFamily="PC" IsDevOnly="false" />
+  </ExecutableList>
+  <ShellVisuals DefaultDisplayName="Minecraft Launcher" PublisherDisplayName="Microsoft Studios" />
+  <StoreId>9PGW18NPBZV5</StoreId>
+</Game>"#,
+        )
+        .expect("write config");
+
+        let record = xbox_record_from_game_directory(&root).expect("read minecraft config");
+
+        assert_eq!(record.title, "Minecraft Launcher");
+        assert_eq!(record.app_id, "Microsoft.4297127D64EC6!Minecraft");
+        assert_eq!(record.store_id.as_deref(), Some("9PGW18NPBZV5"));
+        assert!(should_keep_xbox_record(&record));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn rejects_xbox_games_folder_dlc_stub_config() {
+        let root =
+            std::env::temp_dir().join(format!("biblioteca-xbox-dlc-config-{}", std::process::id()));
+        let content = root.join("Content");
+
+        std::fs::create_dir_all(&content).expect("create content dir");
+        std::fs::write(
+            content.join("MicrosoftGame.config"),
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<Game configVersion="1">
+  <Identity Name="Example.DLCStub" Publisher="CN=test" Version="1.0.0.0" />
+  <ShellVisuals DefaultDisplayName="DLC Game Stub" PublisherDisplayName="Publisher" />
+  <TargetDeviceFamilyForDLC>PC</TargetDeviceFamilyForDLC>
+  <AllowedProducts>
+    <AllowedProduct>9TEST</AllowedProduct>
+  </AllowedProducts>
+</Game>"#,
+        )
+        .expect("write config");
+
+        assert!(xbox_record_from_game_directory(&root).is_none());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn xbox_action_for_registered_candidate_uses_appsfolder_activation() {
+        let candidate = sample_candidate();
+
+        let action = xbox_action_for_candidate(&candidate, true);
+
+        assert_eq!(action.kind, "executable");
+        assert!(action.target.ends_with(r"\explorer.exe"));
+        assert_eq!(
+            action.arguments,
+            vec!["shell:AppsFolder\\Microsoft.HaloInfinite_8wekyb3d8bbwe!App"]
+        );
+        assert_eq!(action.working_directory, None);
+    }
+
+    #[test]
+    fn xbox_action_for_folder_only_candidate_uses_resolved_executable() {
+        let mut candidate = sample_candidate();
+        candidate.app_id = "Microsoft.HaloInfinite!App".to_string();
+        candidate.launch_target =
+            Some(r"C:\XboxGames\Halo Infinite\Content\HaloInfinite.exe".to_string());
+
+        let action = xbox_action_for_candidate(&candidate, true);
+
+        assert_eq!(action.kind, "executable");
+        assert_eq!(
+            action.target,
+            r"C:\XboxGames\Halo Infinite\Content\HaloInfinite.exe"
+        );
+        assert_eq!(action.arguments, Vec::<String>::new());
+        assert_eq!(
+            action.working_directory.as_deref(),
+            Some(r"C:\XboxGames\Halo Infinite\Content")
+        );
+    }
+
+    #[test]
     fn dedupes_duplicate_discovery_records_by_app_id() {
         let records = vec![
             XboxDiscoveryRecord {
@@ -1222,8 +1681,13 @@ mod tests {
                 title: "Halo Infinite".to_string(),
                 package_family_name: "Microsoft.HaloInfinite_8wekyb3d8bbwe".to_string(),
                 package_name: Some("Halo Infinite".to_string()),
-                package_full_name: Some("Microsoft.HaloInfinite_1.0.0.0_x64__8wekyb3d8bbwe".to_string()),
+                package_full_name: Some(
+                    "Microsoft.HaloInfinite_1.0.0.0_x64__8wekyb3d8bbwe".to_string(),
+                ),
                 install_location: Some("C:\\Games\\Halo".to_string()),
+                launch_target: None,
+                store_id: None,
+                has_microsoft_game_config: true,
                 is_framework: false,
                 non_removable: false,
                 signature_kind: Some("Store".to_string()),
@@ -1233,8 +1697,13 @@ mod tests {
                 title: "Halo Infinite".to_string(),
                 package_family_name: "Microsoft.HaloInfinite_8wekyb3d8bbwe".to_string(),
                 package_name: Some("Halo Infinite".to_string()),
-                package_full_name: Some("Microsoft.HaloInfinite_1.0.0.0_x64__8wekyb3d8bbwe".to_string()),
+                package_full_name: Some(
+                    "Microsoft.HaloInfinite_1.0.0.0_x64__8wekyb3d8bbwe".to_string(),
+                ),
                 install_location: Some("C:\\Games\\Halo".to_string()),
+                launch_target: None,
+                store_id: None,
+                has_microsoft_game_config: true,
                 is_framework: false,
                 non_removable: false,
                 signature_kind: Some("Store".to_string()),
@@ -1243,24 +1712,90 @@ mod tests {
 
         let candidates = discover_xbox_game_candidates_from_records(&records);
         assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].app_id, "Microsoft.HaloInfinite_8wekyb3d8bbwe!App");
+        assert_eq!(
+            candidates[0].app_id,
+            "Microsoft.HaloInfinite_8wekyb3d8bbwe!App"
+        );
+    }
+
+    #[test]
+    fn prefers_registered_aumid_over_folder_only_record_for_same_store_game() {
+        let records = vec![
+            XboxDiscoveryRecord {
+                app_id: "KeplerInteractive.Expedition33!AppExpedition33Shipping".to_string(),
+                title: "Clair Obscur: Expedition 33".to_string(),
+                package_family_name: "KeplerInteractive.Expedition33".to_string(),
+                package_name: Some("KeplerInteractive.Expedition33".to_string()),
+                package_full_name: Some("KeplerInteractive.Expedition33".to_string()),
+                install_location: Some(r"E:\XboxGames\Clair Obscur- Expedition 33".to_string()),
+                launch_target: Some(
+                    r"E:\XboxGames\Clair Obscur- Expedition 33\Content\SandFall.exe".to_string(),
+                ),
+                store_id: Some("9NQZDJNV65BR".to_string()),
+                has_microsoft_game_config: true,
+                is_framework: false,
+                non_removable: false,
+                signature_kind: Some("XboxGames".to_string()),
+            },
+            XboxDiscoveryRecord {
+                app_id: "KeplerInteractive.Expedition33_ymj30pw7xe604!AppExpedition33Shipping"
+                    .to_string(),
+                title: "Clair Obscur: Expedition 33".to_string(),
+                package_family_name: "KeplerInteractive.Expedition33_ymj30pw7xe604".to_string(),
+                package_name: Some("Clair Obscur: Expedition 33".to_string()),
+                package_full_name: Some(
+                    "KeplerInteractive.Expedition33_1.0.0.0_x64__ymj30pw7xe604".to_string(),
+                ),
+                install_location: Some(
+                    r"C:\Program Files\WindowsApps\KeplerInteractive.Expedition33".to_string(),
+                ),
+                launch_target: None,
+                store_id: Some("9NQZDJNV65BR".to_string()),
+                has_microsoft_game_config: true,
+                is_framework: false,
+                non_removable: false,
+                signature_kind: Some("Store".to_string()),
+            },
+        ];
+
+        let candidates = discover_xbox_game_candidates_from_records(&records);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].app_id,
+            "KeplerInteractive.Expedition33_ymj30pw7xe604!AppExpedition33Shipping"
+        );
+        let action = xbox_action_for_candidate(&candidates[0], true);
+        assert!(action.target.ends_with(r"\explorer.exe"));
+        assert_eq!(
+            action.arguments,
+            vec![
+                "shell:AppsFolder\\KeplerInteractive.Expedition33_ymj30pw7xe604!AppExpedition33Shipping"
+            ]
+        );
     }
 
     #[test]
     fn parse_discovery_output_skips_invalid_lines_without_failing() {
         let raw = concat!(
-            r#"{"AppId":"Microsoft.HaloInfinite_8wekyb3d8bbwe!App","Title":"Halo Infinite","PackageFamilyName":"Microsoft.HaloInfinite_8wekyb3d8bbwe","PackageName":"Halo Infinite","PackageFullName":"Microsoft.HaloInfinite_1.0.0.0_x64__8wekyb3d8bbwe","InstallLocation":"C:\\Games\\Halo","IsFramework":false,"NonRemovable":false,"SignatureKind":3}"#,
+            r#"{"AppId":"Microsoft.HaloInfinite_8wekyb3d8bbwe!App","Title":"Halo Infinite","PackageFamilyName":"Microsoft.HaloInfinite_8wekyb3d8bbwe","PackageName":"Halo Infinite","PackageFullName":"Microsoft.HaloInfinite_1.0.0.0_x64__8wekyb3d8bbwe","InstallLocation":"C:\\Games\\Halo","HasMicrosoftGameConfig":true,"IsFramework":false,"NonRemovable":false,"SignatureKind":3}"#,
             "\n",
             "not-json",
             "\n",
-            r#"{"AppId":"Microsoft.ForzaHorizon5_8wekyb3d8bbwe!App","Title":"Forza Horizon 5","PackageFamilyName":"Microsoft.ForzaHorizon5_8wekyb3d8bbwe","PackageName":null,"PackageFullName":null,"InstallLocation":null,"IsFramework":false,"NonRemovable":false,"SignatureKind":"Store"}"#,
+            r#"{"AppId":"Microsoft.ForzaHorizon5_8wekyb3d8bbwe!App","Title":"Forza Horizon 5","PackageFamilyName":"Microsoft.ForzaHorizon5_8wekyb3d8bbwe","PackageName":null,"PackageFullName":null,"InstallLocation":null,"HasMicrosoftGameConfig":true,"IsFramework":false,"NonRemovable":false,"SignatureKind":"Store"}"#,
             "\n",
         );
 
         let records = parse_discovery_output(raw).expect("parse discovery output");
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0].app_id, "Microsoft.HaloInfinite_8wekyb3d8bbwe!App");
-        assert_eq!(records[1].app_id, "Microsoft.ForzaHorizon5_8wekyb3d8bbwe!App");
+        assert_eq!(
+            records[0].app_id,
+            "Microsoft.HaloInfinite_8wekyb3d8bbwe!App"
+        );
+        assert_eq!(
+            records[1].app_id,
+            "Microsoft.ForzaHorizon5_8wekyb3d8bbwe!App"
+        );
         assert_eq!(records[0].signature_kind.as_deref(), Some("3"));
         assert_eq!(records[1].signature_kind.as_deref(), Some("Store"));
     }
@@ -1284,8 +1819,13 @@ mod tests {
             title: "App".to_string(),
             package_family_name: "Microsoft.HaloInfinite_8wekyb3d8bbwe".to_string(),
             package_name: Some("Halo Infinite".to_string()),
-            package_full_name: Some("Microsoft.HaloInfinite_1.0.0.0_x64__8wekyb3d8bbwe".to_string()),
+            package_full_name: Some(
+                "Microsoft.HaloInfinite_1.0.0.0_x64__8wekyb3d8bbwe".to_string(),
+            ),
             install_location: Some("C:\\Games\\Halo".to_string()),
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: true,
             is_framework: false,
             non_removable: true,
             signature_kind: Some("Store".to_string()),
@@ -1301,8 +1841,13 @@ mod tests {
             title: "Gaming Services".to_string(),
             package_family_name: "Microsoft.GamingServices_8wekyb3d8bbwe".to_string(),
             package_name: Some("Gaming Services".to_string()),
-            package_full_name: Some("Microsoft.GamingServices_1.0.0.0_x64__8wekyb3d8bbwe".to_string()),
+            package_full_name: Some(
+                "Microsoft.GamingServices_1.0.0.0_x64__8wekyb3d8bbwe".to_string(),
+            ),
             install_location: Some("C:\\Program Files\\WindowsApps\\GamingServices".to_string()),
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: false,
             is_framework: false,
             non_removable: true,
             signature_kind: Some("Store".to_string()),
@@ -1320,6 +1865,9 @@ mod tests {
             package_name: None,
             package_full_name: None,
             install_location: None,
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: true,
             is_framework: false,
             non_removable: false,
             signature_kind: None,
@@ -1349,6 +1897,9 @@ mod tests {
             package_name: Some("Xbox TCUI".to_string()),
             package_full_name: Some("Microsoft.XboxTCUI_1.0.0.0_x64__8wekyb3d8bbwe".to_string()),
             install_location: Some("C:\\Program Files\\WindowsApps\\XboxTCUI".to_string()),
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: false,
             is_framework: false,
             non_removable: true,
             signature_kind: Some("Store".to_string()),
@@ -1364,8 +1915,35 @@ mod tests {
             title: "Calculadora".to_string(),
             package_family_name: "Microsoft.WindowsCalculator_8wekyb3d8bbwe".to_string(),
             package_name: Some("Microsoft.WindowsCalculator".to_string()),
-            package_full_name: Some("Microsoft.WindowsCalculator_10.0.0.0_x64__8wekyb3d8bbwe".to_string()),
+            package_full_name: Some(
+                "Microsoft.WindowsCalculator_10.0.0.0_x64__8wekyb3d8bbwe".to_string(),
+            ),
             install_location: Some("C:\\Program Files\\WindowsApps\\Calculator".to_string()),
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: false,
+            is_framework: false,
+            non_removable: false,
+            signature_kind: Some("Store".to_string()),
+        };
+
+        assert!(!should_keep_xbox_record(&record));
+    }
+
+    #[test]
+    fn should_keep_xbox_record_rejects_store_app_without_game_config() {
+        let record = XboxDiscoveryRecord {
+            app_id: "Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe!App".to_string(),
+            title: "Solitaire & Casual Games".to_string(),
+            package_family_name: "Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe".to_string(),
+            package_name: Some("Microsoft.MicrosoftSolitaireCollection".to_string()),
+            package_full_name: Some(
+                "Microsoft.MicrosoftSolitaireCollection_1.0.0.0_x64__8wekyb3d8bbwe".to_string(),
+            ),
+            install_location: Some("C:\\Program Files\\WindowsApps\\Solitaire".to_string()),
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: false,
             is_framework: false,
             non_removable: false,
             signature_kind: Some("Store".to_string()),
@@ -1383,6 +1961,9 @@ mod tests {
             package_name: None,
             package_full_name: None,
             install_location: None,
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: false,
             is_framework: false,
             non_removable: false,
             signature_kind: Some("Store".to_string()),
@@ -1400,6 +1981,9 @@ mod tests {
             package_name: Some("Skype".to_string()),
             package_full_name: Some("Microsoft.SkypeApp_1.0.0.0_x64__kzf8qxf38zg5c".to_string()),
             install_location: Some("C:\\Program Files\\WindowsApps\\Skype".to_string()),
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: false,
             is_framework: false,
             non_removable: false,
             signature_kind: Some("Store".to_string()),
@@ -1413,8 +1997,9 @@ mod tests {
         let mut connection = open_memory_database();
         let candidate = sample_candidate();
 
-        let summary = sync_xbox_games_from_candidates(&mut connection, std::slice::from_ref(&candidate))
-            .expect("sync xbox games");
+        let summary =
+            sync_xbox_games_from_candidates(&mut connection, std::slice::from_ref(&candidate))
+                .expect("sync xbox games");
         assert_eq!(summary.discovered, 1);
         assert_eq!(summary.inserted, 1);
         assert_eq!(summary.updated, 0);
@@ -1484,8 +2069,7 @@ mod tests {
 
         assert!(records.len() >= candidates.len());
         assert!(summary.discovered <= candidates.len());
-        assert!(candidates.iter().any(|candidate| candidate.title.contains(' ')));
-        assert!(!entries.is_empty());
+        assert_eq!(entries.len(), candidates.len());
     }
 
     #[test]
@@ -1493,12 +2077,12 @@ mod tests {
         let mut connection = open_memory_database();
         let candidate = sample_candidate();
 
-        let initial = sync_xbox_games_from_candidates(&mut connection, std::slice::from_ref(&candidate))
-            .expect("initial sync");
+        let initial =
+            sync_xbox_games_from_candidates(&mut connection, std::slice::from_ref(&candidate))
+                .expect("initial sync");
         assert_eq!(initial.inserted, 1);
 
-        let missing = sync_xbox_games_from_candidates(&mut connection, &[])
-            .expect("missing sync");
+        let missing = sync_xbox_games_from_candidates(&mut connection, &[]).expect("missing sync");
         assert_eq!(missing.unavailable, 1);
 
         connection
@@ -1508,8 +2092,9 @@ mod tests {
             )
             .expect("archive xbox entry");
 
-        let restored = sync_xbox_games_from_candidates(&mut connection, std::slice::from_ref(&candidate))
-            .expect("restored sync");
+        let restored =
+            sync_xbox_games_from_candidates(&mut connection, std::slice::from_ref(&candidate))
+                .expect("restored sync");
         assert_eq!(restored.inserted, 0);
         assert_eq!(restored.updated, 1);
 
@@ -1639,7 +2224,48 @@ mod tests {
 
         assert_eq!(action.0, "uri");
         assert_eq!(action.1, "Abrir Microsoft Store");
-        assert!(action.2.starts_with("ms-windows-store://search/?query=Halo+Infinite"));
+        assert!(action
+            .2
+            .starts_with("ms-windows-store://search/?query=Halo+Infinite"));
         assert_eq!(action.3, "[]");
+    }
+
+    #[test]
+    fn sync_xbox_games_archives_rejected_existing_store_apps() {
+        let mut connection = open_memory_database();
+        let candidate = XboxGameCandidate {
+            app_id: "Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe!App".to_string(),
+            title: "Solitaire & Casual Games".to_string(),
+            package_family_name: "Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe".to_string(),
+            install_location: Some("C:\\Program Files\\WindowsApps\\Solitaire".to_string()),
+            launch_target: None,
+            store_id: None,
+            source_id: "source-xbox-solitaire".to_string(),
+            game_id: "game-xbox-solitaire".to_string(),
+            entry_id: "entry-xbox-solitaire".to_string(),
+            launch_id: "launch-xbox-solitaire".to_string(),
+            accent_color: "#2563eb",
+        };
+
+        sync_xbox_games_from_candidates(&mut connection, std::slice::from_ref(&candidate))
+            .expect("seed rejected app");
+        let summary =
+            sync_xbox_games_from_candidates(&mut connection, &[]).expect("archive rejected app");
+        let state = connection
+            .query_row(
+                r#"
+                SELECT is_archived, install_status
+                FROM library_entries
+                WHERE id = 'entry-xbox-solitaire'
+                "#,
+                [],
+                |row| Ok((row.get::<_, i64>(0)? == 1, row.get::<_, String>(1)?)),
+            )
+            .expect("read archived rejected app");
+
+        assert_eq!(summary.archived, 1);
+        assert_eq!(summary.unavailable, 0);
+        assert!(state.0);
+        assert_eq!(state.1, "not_installed");
     }
 }

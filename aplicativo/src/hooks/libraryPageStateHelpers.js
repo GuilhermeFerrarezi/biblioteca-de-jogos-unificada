@@ -145,7 +145,9 @@ export function getLaunchChoices(selectedEntry, preferredPlatformId = 'steam') {
       ? selectedEntry.memberEntries
       : [selectedEntry]
 
-  return launchEntries
+  const choicesByPlatform = new Map()
+
+  launchEntries
     .map((entry) => {
       const launchState = getLaunchActionState(entry)
       const primaryLaunchAction = launchState.primaryLaunchAction
@@ -165,6 +167,13 @@ export function getLaunchChoices(selectedEntry, preferredPlatformId = 'steam') {
     })
     .filter(Boolean)
     .sort((left, right) => compareLaunchChoices(left, right, preferredPlatformId))
+    .forEach((choice) => {
+      if (!choicesByPlatform.has(choice.platformId)) {
+        choicesByPlatform.set(choice.platformId, choice)
+      }
+    })
+
+  return Array.from(choicesByPlatform.values())
 }
 
 export function getPreferredLaunchEntryId(selectedEntry, preferredPlatformId = 'steam') {

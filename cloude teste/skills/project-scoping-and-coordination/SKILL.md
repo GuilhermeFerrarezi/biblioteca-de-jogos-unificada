@@ -1,35 +1,35 @@
 ---
 name: project-scoping-and-coordination
-description: Use para transformar pedidos em escopo executavel, dividir trabalho entre agentes, registrar dependencias, criterios de aceite e validacoes obrigatorias.
+description: Use when turning a request into a clear plan with scope, owners, risks and validation.
 ---
 
 # Project Scoping and Coordination
 
-## Workflow
+## Use when
 
-1. Defina o objetivo da entrega em uma frase.
-2. Liste arquivos/modulos provaveis.
-3. Identifique agentes e skills necessarios.
-4. Separe pre-requisitos, bloqueios e riscos.
-5. Defina criterios de aceite e comandos de validacao.
-6. Registre documentacao que precisara ser atualizada.
+- A request is vague, large or likely to expand.
+- You need ownership, milestones and validation before implementation.
+- The cut needs to stay small and executable.
 
-## Saida esperada
+## Checklist
+
+- Define the goal in one sentence.
+- List in-scope and out-of-scope items.
+- Pick the owner and supporting roles.
+- Register risks, assumptions and blockers.
+- Set acceptance criteria and validation.
+- Note docs that must be updated.
+
+## Output
 
 ```text
-Objetivo:
-Escopo dentro:
-Escopo fora:
-Agentes:
-Skills:
-Riscos:
-Criterios de aceite:
-Validacoes:
-Documentacao:
+Goal:
+In scope:
+Out of scope:
+Owner:
+Supporting roles:
+Risks:
+Acceptance criteria:
+Validation:
+Docs:
 ```
-
-## Regras
-
-- Evite escopos grandes sem cortes intermediarios.
-- Priorize entregas que preservem o app executavel.
-- Quando houver conflito entre velocidade e seguranca, explicite o tradeoff.

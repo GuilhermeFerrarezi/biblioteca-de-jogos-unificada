@@ -1,31 +1,30 @@
 ---
 name: react-performance-optimization
-description: Use ao otimizar busca, filtros, listas grandes, renderizacao de componentes e estado React.
+description: Use when improving React performance for large lists or frequent state changes.
 ---
 
 # React Performance Optimization
 
-## Tecnicas
+## Use when
 
-- `useDeferredValue` para busca digitada.
-- `useMemo` para listas filtradas e metricas derivadas.
-- `useCallback` para callbacks passados a componentes profundos quando houver rerender relevante.
-- Subcomponentes pequenos para reduzir escopo de rerender.
-- Virtualizacao ou paginacao quando a lista crescer.
+- Search, filtering or list rendering feels heavy.
+- A screen has avoidable rerenders.
+- The UI needs better perceived speed.
 
-## Sinais de alerta
+## Checklist
 
-- Componente com multiplas responsabilidades.
-- Filtro recalculado em cada render sem necessidade.
-- Prop drilling profundo.
-- Estado global usado para estado local.
+- Split large components.
+- Reduce rerenders and expensive work.
+- Defer heavy updates when useful.
+- Validate that the change actually helps.
 
-## Saida esperada
+## Output
 
 ```text
-Gargalo:
-Evidencia:
-Mudanca proposta:
-Risco:
-Validacao:
+Bottleneck:
+Cause:
+Optimization:
+Expected gain:
+Validation:
+Risks:
 ```

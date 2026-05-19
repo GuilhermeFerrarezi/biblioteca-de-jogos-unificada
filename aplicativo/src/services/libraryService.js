@@ -252,6 +252,14 @@ export const getSteamAccountConfig = async () => {
   return invoke('get_steam_account_config')
 }
 
+export const getSteamLibraryRoots = async () => {
+  if (!hasTauriRuntime()) {
+    return { providerId: 'steam', roots: [] }
+  }
+
+  return invoke('get_steam_library_roots')
+}
+
 export const saveSteamAccountConfig = async (steamId64) => {
   const normalizedSteamId64 = String(steamId64 ?? '').trim()
 
@@ -264,6 +272,18 @@ export const saveSteamAccountConfig = async (steamId64) => {
   }
 
   return invoke('save_steam_account_config', { input: { steamId64: normalizedSteamId64 } })
+}
+
+export const saveSteamLibraryRoots = async (roots) => {
+  const normalizedRoots = Array.isArray(roots)
+    ? roots.map((root) => String(root ?? '').trim()).filter(Boolean)
+    : []
+
+  if (!hasTauriRuntime()) {
+    return { providerId: 'steam', roots: normalizedRoots }
+  }
+
+  return invoke('save_steam_library_roots', { input: { roots: normalizedRoots } })
 }
 
 export const startSteamLogin = async () => {

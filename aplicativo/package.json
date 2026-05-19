@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "set VITE_CACHE_DIR=%LOCALAPPDATA%\\BibliotecaJogosUnificada\\vite-cache&& vite",
     "build": "vite build",
     "lint": "eslint .",
     "test:smoke": "node --test src/hooks/libraryPageStateHelpers.test.js src/hooks/libraryGroupingHelpers.test.js src/adapters/libraryEntryAdapter.test.js src/services/libraryService.test.js",
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "lucide-react": "0.468.0",
     "react": "18.3.1",
     "react-dom": "18.3.1"

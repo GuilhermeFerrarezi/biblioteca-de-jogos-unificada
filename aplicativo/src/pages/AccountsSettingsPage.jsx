@@ -3,27 +3,29 @@ import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
-  CircleDot,
   Clock3,
   Cloud,
-  Gamepad2,
+  FolderOpen,
   KeyRound,
-  LockKeyhole,
   LogIn,
   Save,
   Store,
   Trash2,
-  UserRound,
 } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
+import { open } from '@tauri-apps/plugin-dialog'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import SteamIcon from '../components/icons/SteamIcon'
+import XboxIcon from '../components/icons/XboxIcon'
 import {
   deleteSteamApiKey,
   getSteamAccountConfig,
   getSteamApiKeyStatus,
+  getSteamLibraryRoots,
   normalizeProviderErrorFeedback,
   saveSteamAccountConfig,
   saveSteamApiKey,
+  saveSteamLibraryRoots,
   startSteamLogin,
 } from '../services/libraryService'
 
@@ -35,11 +37,15 @@ const emptySteamAccountForm = Object.freeze({
   steamId64: '',
 })
 
+const emptySteamLibraryRootsForm = Object.freeze({
+  rootsText: '',
+})
+
 const accountProviders = Object.freeze([
   {
     id: 'steam',
     name: 'Steam',
-    icon: CircleDot,
+    icon: SteamIcon,
     state: 'Sync local e por conta',
     tone: 'ready',
     detail: 'Manifestos instalados continuam disponiveis sem credencial.',
@@ -48,7 +54,7 @@ const accountProviders = Object.freeze([
   {
     id: 'xbox',
     name: 'Xbox / Game Pass',
-    icon: Gamepad2,
+    icon: XboxIcon,
     state: 'Descoberta local',
     tone: 'ready',
     detail: 'Instalados entram no app. Achievements sao apenas indicio auxiliar.',
@@ -104,6 +110,12 @@ const validateSteamId64Input = (steamId64) => {
 
   return ''
 }
+
+const parseSteamLibraryRootsText = (value) =>
+  String(value ?? '')
+    .split(/\r?\n|;/)
+    .map((root) => root.trim())
+    .filter(Boolean)
 
 function ProviderFeedback({ defaultMessage, errorFeedback, id, statusMessage }) {
   const [isDetailsOpen, setIsDetailsOpen] = useState(false)
@@ -190,16 +202,21 @@ function AccountsSettingsPage({
   const [isSteamPanelOpen, setIsSteamPanelOpen] = useState(false)
   const [steamApiKeyForm, setSteamApiKeyForm] = useState(emptySteamApiKeyForm)
   const [steamAccountForm, setSteamAccountForm] = useState(emptySteamAccountForm)
+  const [steamLibraryRootsForm, setSteamLibraryRootsForm] = useState(emptySteamLibraryRootsForm)
   const [steamApiKeyConfigured, setSteamApiKeyConfigured] = useState(false)
   const [steamApiKeyStatusMessage, setSteamApiKeyStatusMessage] = useState('')
   const [steamApiKeyError, setSteamApiKeyError] = useState(null)
   const [steamAccountStatusMessage, setSteamAccountStatusMessage] = useState('')
   const [steamAccountError, setSteamAccountError] = useState(null)
+  const [steamLibraryRootsStatusMessage, setSteamLibraryRootsStatusMessage] = useState('')
+  const [steamLibraryRootsError, setSteamLibraryRootsError] = useState(null)
   const [isSteamAccountConnected, setIsSteamAccountConnected] = useState(false)
   const [isSteamLoginStarting, setIsSteamLoginStarting] = useState(false)
   const [isSteamApiKeyLoading, setIsSteamApiKeyLoading] = useState(true)
   const [isSteamApiKeySaving, setIsSteamApiKeySaving] = useState(false)
   const [isSteamApiKeyDeleting, setIsSteamApiKeyDeleting] = useState(false)
+  const [isSteamLibraryRootsLoading, setIsSteamLibraryRootsLoading] = useState(true)
+  const [isSteamLibraryRootsSaving, setIsSteamLibraryRootsSaving] = useState(false)
 
   const steamPanelRef = useRef(null)
   const steamToggleRef = useRef(null)
@@ -253,6 +270,51 @@ function AccountsSettingsPage({
     }
 
     void loadSteamAccountConfig()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isMounted = true
+
+    const loadSteamLibraryRoots = async () => {
+      setIsSteamLibraryRootsLoading(true)
+      setSteamLibraryRootsError(null)
+
+      try {
+        const config = await getSteamLibraryRoots()
+
+        if (!isMounted) {
+          return
+        }
+
+        const roots = Array.isArray(config?.roots) ? config.roots : []
+        setSteamLibraryRootsForm({ rootsText: roots.join('\n') })
+        setSteamLibraryRootsStatusMessage(
+          roots.length > 0
+            ? `${roots.length} ${roots.length === 1 ? 'biblioteca adicional configurada.' : 'bibliotecas adicionais configuradas.'}`
+            : 'Nenhuma biblioteca adicional configurada.',
+        )
+      } catch (error) {
+        if (isMounted) {
+          setSteamLibraryRootsError(
+            normalizeProviderErrorFeedback(
+              error,
+              'Nao foi possivel consultar as pastas Steam adicionais.',
+              'Consulta de bibliotecas Steam adicionais',
+            ),
+          )
+        }
+      } finally {
+        if (isMounted) {
+          setIsSteamLibraryRootsLoading(false)
+        }
+      }
+    }
+
+    void loadSteamLibraryRoots()
 
     return () => {
       isMounted = false
@@ -548,6 +610,76 @@ function AccountsSettingsPage({
     }
   }
 
+  const handleSteamLibraryRootsChange = (event) => {
+    setSteamLibraryRootsForm({ rootsText: event.target.value })
+    setSteamLibraryRootsError(null)
+    setSteamLibraryRootsStatusMessage('Pastas prontas para salvar.')
+  }
+
+  const handleSteamLibraryRootSelect = async () => {
+    setSteamLibraryRootsError(null)
+
+    try {
+      const selectedPath = await open({
+        directory: true,
+        multiple: false,
+        title: 'Selecionar biblioteca Steam',
+      })
+
+      if (typeof selectedPath !== 'string' || !selectedPath.trim()) {
+        return
+      }
+
+      setSteamLibraryRootsForm((currentForm) => {
+        const currentRoots = parseSteamLibraryRootsText(currentForm.rootsText)
+        const hasRoot = currentRoots.some((root) => root.toLowerCase() === selectedPath.trim().toLowerCase())
+        const nextRoots = hasRoot ? currentRoots : [...currentRoots, selectedPath.trim()]
+
+        return { rootsText: nextRoots.join('\n') }
+      })
+      setSteamLibraryRootsStatusMessage('Pasta adicionada. Salve para usar na proxima sincronizacao local.')
+    } catch (error) {
+      setSteamLibraryRootsError(
+        normalizeProviderErrorFeedback(
+          error,
+          'Nao foi possivel abrir o seletor de pastas.',
+          'Selecionar biblioteca Steam',
+        ),
+      )
+    }
+  }
+
+  const handleSteamLibraryRootsSubmit = async (event) => {
+    event.preventDefault()
+
+    const roots = parseSteamLibraryRootsText(steamLibraryRootsForm.rootsText)
+    setIsSteamLibraryRootsSaving(true)
+    setSteamLibraryRootsError(null)
+    setSteamLibraryRootsStatusMessage('Salvando bibliotecas Steam adicionais.')
+
+    try {
+      const config = await saveSteamLibraryRoots(roots)
+      const savedRoots = Array.isArray(config?.roots) ? config.roots : roots
+      setSteamLibraryRootsForm({ rootsText: savedRoots.join('\n') })
+      setSteamLibraryRootsStatusMessage(
+        savedRoots.length > 0
+          ? `${savedRoots.length} ${savedRoots.length === 1 ? 'biblioteca adicional salva.' : 'bibliotecas adicionais salvas.'}`
+          : 'Lista de bibliotecas adicionais limpa.',
+      )
+    } catch (error) {
+      setSteamLibraryRootsError(
+        normalizeProviderErrorFeedback(
+          error,
+          'Nao foi possivel salvar as pastas Steam. Confirme se cada caminho existe e contem a pasta steamapps.',
+          'Salvar bibliotecas Steam adicionais',
+        ),
+      )
+      setSteamLibraryRootsStatusMessage('')
+    } finally {
+      setIsSteamLibraryRootsSaving(false)
+    }
+  }
+
   const handleSteamPanelToggle = () => {
     setIsSteamPanelOpen((currentValue) => !currentValue)
   }
@@ -590,6 +722,8 @@ function AccountsSettingsPage({
                     isSteamApiKeyDeleting={isSteamApiKeyDeleting}
                     isSteamApiKeyLoading={isSteamApiKeyLoading}
                     isSteamApiKeySaving={isSteamApiKeySaving}
+                    isSteamLibraryRootsLoading={isSteamLibraryRootsLoading}
+                    isSteamLibraryRootsSaving={isSteamLibraryRootsSaving}
                     isSteamLoginStarting={isSteamLoginStarting}
                     isSteamSyncing={isSteamSyncing}
                     panelRef={steamPanelRef}
@@ -599,12 +733,18 @@ function AccountsSettingsPage({
                     steamApiKeyForm={steamApiKeyForm}
                     steamApiKeyStatusLabel={steamApiKeyStatusLabel}
                     steamApiKeyStatusMessage={steamApiKeyStatusMessage}
+                    steamLibraryRootsError={steamLibraryRootsError}
+                    steamLibraryRootsForm={steamLibraryRootsForm}
+                    steamLibraryRootsStatusMessage={steamLibraryRootsStatusMessage}
                     onStartSteamLogin={handleSteamLoginStart}
                     onSteamAccountChange={handleSteamId64Change}
                     onSteamAccountSave={handleSteamAccountSave}
                     onSteamApiKeyChange={handleSteamApiKeyChange}
                     onSteamApiKeyDelete={handleSteamApiKeyDelete}
                     onSteamApiKeySubmit={handleSteamApiKeySubmit}
+                    onSteamLibraryRootsChange={handleSteamLibraryRootsChange}
+                    onSteamLibraryRootSelect={handleSteamLibraryRootSelect}
+                    onSteamLibraryRootsSubmit={handleSteamLibraryRootsSubmit}
                     onSyncSteamAccountGames={handleSteamAccountSync}
                     onSyncSteamGames={onSyncSteamGames}
                     panelId={steamPanelContentId}
@@ -695,6 +835,8 @@ function SteamProviderPanel({
   isSteamApiKeyDeleting,
   isSteamApiKeyLoading,
   isSteamApiKeySaving,
+  isSteamLibraryRootsLoading,
+  isSteamLibraryRootsSaving,
   isSteamLoginStarting,
   isSteamSyncing,
   onSteamAccountChange,
@@ -702,6 +844,9 @@ function SteamProviderPanel({
   onSteamApiKeyChange,
   onSteamApiKeyDelete,
   onSteamApiKeySubmit,
+  onSteamLibraryRootsChange,
+  onSteamLibraryRootSelect,
+  onSteamLibraryRootsSubmit,
   onStartSteamLogin,
   onSyncSteamAccountGames,
   onSyncSteamGames,
@@ -713,6 +858,9 @@ function SteamProviderPanel({
   steamApiKeyForm,
   steamApiKeyStatusLabel,
   steamApiKeyStatusMessage,
+  steamLibraryRootsError,
+  steamLibraryRootsForm,
+  steamLibraryRootsStatusMessage,
 }) {
   return (
     <div className="steam-panel-popover" id={panelId} ref={panelRef}>
@@ -777,6 +925,18 @@ function SteamProviderPanel({
         onDelete={onSteamApiKeyDelete}
         onSubmit={onSteamApiKeySubmit}
       />
+
+      <SteamLibraryRootsPanel
+        errorFeedback={steamLibraryRootsError}
+        form={steamLibraryRootsForm}
+        isBusy={isSteamLibraryRootsLoading || isSteamLibraryRootsSaving || isSteamSyncing}
+        isLoading={isSteamLibraryRootsLoading}
+        isSaving={isSteamLibraryRootsSaving}
+        statusMessage={steamLibraryRootsStatusMessage}
+        onChange={onSteamLibraryRootsChange}
+        onSelectRoot={onSteamLibraryRootSelect}
+        onSubmit={onSteamLibraryRootsSubmit}
+      />
     </div>
   )
 }
@@ -786,7 +946,7 @@ function SteamAccountPanel({ errorFeedback, form, isBusy, isConfigured, onChange
     <article className="steam-account-panel" aria-labelledby="steam-account-title" aria-busy={isBusy}>
       <div className="steam-api-vault-heading">
         <div className="account-provider-icon" aria-hidden="true">
-          <UserRound size={22} />
+          <SteamIcon size={22} />
         </div>
 
         <div>
@@ -836,6 +996,75 @@ function SteamAccountPanel({ errorFeedback, form, isBusy, isConfigured, onChange
   )
 }
 
+function SteamLibraryRootsPanel({
+  errorFeedback,
+  form,
+  isBusy,
+  isLoading,
+  isSaving,
+  onChange,
+  onSelectRoot,
+  onSubmit,
+  statusMessage,
+}) {
+  return (
+    <article className="steam-library-roots-panel" aria-labelledby="steam-library-roots-title" aria-busy={isBusy}>
+      <div className="steam-api-vault-heading">
+        <div className="account-provider-icon" aria-hidden="true">
+          <SteamIcon size={22} />
+        </div>
+
+        <div>
+          <div className="account-provider-heading">
+            <h2 id="steam-library-roots-title">Bibliotecas Steam</h2>
+            <span className="account-status" data-tone="ready">
+              <CheckCircle2 size={14} aria-hidden="true" />
+              Pastas adicionais
+            </span>
+          </div>
+          <p>Adicione uma pasta por linha para bibliotecas em outros armazenamentos.</p>
+        </div>
+      </div>
+
+      <form className="steam-library-roots-form" onSubmit={onSubmit}>
+        <label htmlFor="steam-library-roots">
+          <span>Pastas Steam adicionais</span>
+          <textarea
+            id="steam-library-roots"
+            value={form.rootsText}
+            rows={4}
+            spellCheck="false"
+            placeholder={'D:\\SteamLibrary\nE:\\Jogos\\SteamLibrary'}
+            aria-invalid={errorFeedback ? 'true' : 'false'}
+            aria-describedby="steam-library-roots-help steam-library-roots-feedback"
+            disabled={isBusy}
+            onChange={onChange}
+          />
+        </label>
+        <p id="steam-library-roots-help">
+          Use a raiz da biblioteca ou a propria pasta steamapps. Cada caminho precisa existir neste computador.
+        </p>
+        <div className="steam-api-key-actions">
+          <button className="secondary-button" type="button" disabled={isBusy} onClick={onSelectRoot}>
+            <FolderOpen size={16} aria-hidden="true" />
+            Selecionar pasta
+          </button>
+          <button className="primary-button" type="submit" disabled={isBusy}>
+            <Save size={16} aria-hidden="true" />
+            {isSaving ? 'Salvando' : 'Salvar pastas'}
+          </button>
+        </div>
+      </form>
+      <ProviderFeedback
+        defaultMessage={isLoading ? 'Consultando bibliotecas adicionais.' : 'Informe pastas Steam fora do disco C quando necessario.'}
+        errorFeedback={errorFeedback}
+        id="steam-library-roots-feedback"
+        statusMessage={statusMessage}
+      />
+    </article>
+  )
+}
+
 function SteamWebApiVaultPanel({
   errorFeedback,
   form,
@@ -854,7 +1083,7 @@ function SteamWebApiVaultPanel({
     <article className="steam-api-vault" aria-labelledby="steam-api-vault-title">
       <div className="steam-api-vault-heading">
         <div className="account-provider-icon" aria-hidden="true">
-          <LockKeyhole size={22} />
+          <SteamIcon size={22} />
         </div>
 
         <div>

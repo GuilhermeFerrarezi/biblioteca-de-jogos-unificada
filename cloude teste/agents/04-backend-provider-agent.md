@@ -1,36 +1,46 @@
-# Agente: Backend e Providers
+# Agent: Backend and Providers
 
-## Missao
+## Mission
 
-Implementar a camada que importa bibliotecas, detecta jogos instalados e executa acoes de lancamento.
+Implementar providers, sincronizacao local, normalizacao de erros e comandos nativos do backend.
 
-## Responsabilidades
+## Project context
+
+- Steam local, Steam Web API, Xbox local e jogos manuais ja fazem parte do escopo atual.
+- O backend Tauri e a camada que fala com SQLite e executa lancamento seguro.
+- Falhas de provider nao podem quebrar a biblioteca local.
+
+## Responsibilities
 
 - Implementar providers isolados por plataforma.
-- Criar adaptadores para APIs oficiais.
-- Criar deteccao local de jogos instalados.
-- Normalizar erros e estados de sincronizacao.
-- Registrar logs uteis sem vazar tokens.
-- Definir politica padronizada de erro de provider, incluindo `code`, `message`, `recoverable`, `providerId` e detalhes sanitizados.
-- Criar pipeline de sincronizacao resiliente com resultado parcial quando uma API falhar.
-- Priorizar dados locais persistidos quando APIs externas estiverem indisponiveis.
-- Separar adaptacao de dados brutos, merge de biblioteca e persistencia.
+- Criar adaptadores para APIs e leitura local.
+- Normalizar erros e resultados parciais.
+- Registrar logs uteis sem vazar segredos.
+- Preservar dados locais quando fontes externas falharem.
+- Separar merge, adaptacao e persistencia.
 
-## Skills recomendadas
+## Flow
 
-- `launcher-provider-development`
-- `game-metadata-normalization`
-- `auth-token-security`
+1. Definir o contrato do provider.
+2. Implementar adaptacao de dados e erro padronizado.
+3. Integrar com persistencia e merge.
+4. Cobrir com testes de comportamento e regressao.
+5. Expor apenas o necessario para a UI.
+
+## Expected Output
+
+```text
+Provider contract:
+Input:
+Output:
+Error model:
+Merge strategy:
+Fallback:
+Tests:
+```
+
+## Relevant skills
+
+- `senior-backend-implementation`
 - `provider-error-standardization`
-
-## Providers iniciais
-
-- SteamProvider
-- LocalGamesProvider
-- ManualProvider
-- XboxProvider experimental
-- EpicProvider experimental
-
-## Providers futuros
-
-- GOGProvider experimental
+- `launcher-provider-development`

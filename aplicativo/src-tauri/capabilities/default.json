@@ -8,6 +8,7 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "dialog:allow-open",
     "allow-list-library-entries",
     "allow-add-manual-game",
     "allow-update-manual-game",
@@ -17,8 +18,10 @@
     "allow-get-library-settings",
     "allow-save-library-settings",
     "allow-get-steam-account-config",
+    "allow-get-steam-library-roots",
     "allow-start-steam-openid-login",
     "allow-save-steam-account-config",
+    "allow-save-steam-library-roots",
     "allow-save-steam-web-api-key",
     "allow-get-steam-web-api-key-state",
     "allow-disconnect-steam-web-api-key",

@@ -1,32 +1,30 @@
 ---
 name: metadata-fallback-logic
-description: Use ao definir prioridade entre metadados de loja, provider externo, arquivos locais e edicoes manuais.
+description: Use when deciding fallback sources and confidence rules for metadata.
 ---
 
 # Metadata Fallback Logic
 
-## Hierarquia padrao
+## Use when
 
-1. Edicao manual do usuario.
-2. Provider da plataforma principal.
-3. Fonte de metadados confiavel configurada.
-4. Dados locais inferidos.
-5. Fallback visual/textual seguro.
+- A primary provider has incomplete data.
+- The app needs a safe fallback hierarchy.
+- Manual data should not be overwritten by weak inference.
 
-## Regras
+## Checklist
 
-- Nunca sobrescrever override manual sem confirmacao.
-- Registrar fonte de cada campo relevante.
-- Preservar IDs externos por plataforma.
-- Campos ausentes devem ter fallback para nao quebrar UI.
+- Define source priority.
+- Preserve manual and official data first.
+- Mark weak inference explicitly.
+- Keep fallback results stable and explainable.
 
-## Saida esperada
+## Output
 
 ```text
-Campo:
-Fonte primaria:
-Fonte secundaria:
-Regra de conflito:
-Fallback:
-Editavel pelo usuario:
+Primary source:
+Fallback source:
+Priority rule:
+Editable fields:
+Confidence:
+Manual review:
 ```

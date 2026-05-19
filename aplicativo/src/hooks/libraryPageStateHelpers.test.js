@@ -129,6 +129,7 @@ test('getLaunchChoices returns one option per underlying platform entry', () => 
           launchActions: [
             {
               isPrimary: true,
+              platformId: 'steam',
               kind: 'uri',
               target: 'steam://rungameid/10',
               label: 'Jogar na Steam',
@@ -166,6 +167,7 @@ test('getLaunchChoices prioritizes the preferred platform first', () => {
           launchActions: [
             {
               isPrimary: true,
+              platformId: 'steam',
               kind: 'uri',
               target: 'steam://rungameid/10',
               label: 'Jogar na Steam',
@@ -189,6 +191,66 @@ test('getLaunchChoices prioritizes the preferred platform first', () => {
 
   assert.equal(launchChoices[0]?.platformLabel, 'Xbox')
   assert.equal(launchChoices[1]?.platformLabel, 'Steam')
+})
+
+test('getLaunchChoices deduplicates repeated entries from the same platform', () => {
+  const groupedEntry = {
+    memberEntries: [
+      {
+        id: 'steam-entry',
+        primaryPlatformId: 'steam',
+        game: {
+          launchActions: [
+            {
+              isPrimary: true,
+              platformId: 'steam',
+              kind: 'uri',
+              target: 'steam://rungameid/10',
+              label: 'Jogar na Steam',
+            },
+          ],
+        },
+      },
+      {
+        id: 'xbox-folder-entry',
+        primaryPlatformId: 'xbox',
+        installStatus: 'installed',
+        game: {
+          launchActions: [
+            {
+              isPrimary: true,
+              platformId: 'xbox',
+              kind: 'executable',
+              target: 'E:\\XboxGames\\Clair Obscur- Expedition 33\\Content\\SandFall.exe',
+              label: 'Jogar no Xbox',
+            },
+          ],
+        },
+      },
+      {
+        id: 'xbox-aumid-entry',
+        primaryPlatformId: 'xbox',
+        installStatus: 'installed',
+        game: {
+          launchActions: [
+            {
+              isPrimary: true,
+              platformId: 'xbox',
+              kind: 'executable',
+              target: 'C:\\Windows\\explorer.exe',
+              label: 'Jogar no Xbox',
+            },
+          ],
+        },
+      },
+    ],
+  }
+
+  const launchChoices = getLaunchChoices(groupedEntry, 'xbox')
+
+  assert.equal(launchChoices.length, 2)
+  assert.deepEqual(launchChoices.map((choice) => choice.platformId), ['xbox', 'steam'])
+  assert.equal(launchChoices[0]?.entryId, 'xbox-folder-entry')
 })
 
 test('getPreferredLaunchEntryId picks the first launchable option from grouped entries', () => {
@@ -221,6 +283,47 @@ test('getPreferredLaunchEntryId picks the first launchable option from grouped e
   }
 
   assert.equal(getPreferredLaunchEntryId(groupedEntry), 'steam-entry')
+})
+
+test('getPreferredLaunchEntryId follows the selected platform preference', () => {
+  const groupedEntry = {
+    memberEntries: [
+      {
+        id: 'steam-entry',
+        primaryPlatformId: 'steam',
+        game: {
+          launchActions: [
+            {
+              isPrimary: true,
+              platformId: 'steam',
+              kind: 'uri',
+              target: 'steam://rungameid/10',
+              label: 'Jogar na Steam',
+            },
+          ],
+        },
+      },
+      {
+        id: 'xbox-entry',
+        primaryPlatformId: 'xbox',
+        installStatus: 'installed',
+        game: {
+          launchActions: [
+            {
+              isPrimary: true,
+              platformId: 'xbox',
+              kind: 'executable',
+              target: 'C:\\Windows\\explorer.exe',
+              label: 'Jogar no Xbox',
+            },
+          ],
+        },
+      },
+    ],
+  }
+
+  assert.equal(getPreferredLaunchEntryId(groupedEntry, 'xbox'), 'xbox-entry')
+  assert.equal(getPreferredLaunchEntryId(groupedEntry, 'steam'), 'steam-entry')
 })
 
 test('getLaunchActionState honors the preferred platform for grouped entries', () => {

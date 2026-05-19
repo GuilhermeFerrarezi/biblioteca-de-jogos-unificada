@@ -1,57 +1,31 @@
 ---
 name: api-compliance-review
-description: Use ao revisar termos de uso, privacidade, limites de API, endpoints nao documentados e riscos legais de integracoes com plataformas de jogos.
+description: Use when checking API rules, terms and data handling before integration.
 ---
 
 # API Compliance Review
 
-## Workflow
+## Use when
 
-1. Localize termos oficiais da API ou plataforma.
-2. Verifique se o uso pretendido e permitido.
-3. Separe dados publicos, dados autenticados e dados sensiveis.
-4. Identifique restricoes de cache, redistribuicao e exibicao.
-5. Verifique regras de marca, nome e logos.
-6. Registre riscos e alternativas.
+- A platform API may have usage limits or policy constraints.
+- The project needs a compliance-focused decision.
+- Data storage or auth behavior is uncertain.
 
-## Classificacao de risco
+## Checklist
 
-- Baixo: API publica documentada cobre o caso.
-- Medio: API documentada cobre parcialmente ou exige consentimento especifico.
-- Alto: depende de endpoint interno, scraping, automacao de launcher ou comportamento nao garantido.
-- Bloqueado: termos proibem o uso ou exigem credenciais/senhas do usuario.
+- Confirm official rules and allowed use.
+- Check what data may be stored or displayed.
+- Note rate limits, scopes and revocation behavior.
+- State whether the integration is safe to implement.
 
-## Matriz de risco por API
-
-Para cada plataforma, avalie separadamente:
-
-- Autenticacao e escopos exigidos.
-- Limites de requisicao, rate limit e latencia esperada.
-- Permissao de cache, retencao e redistribuicao de dados.
-- Estabilidade do contrato: oficial, documentado parcialmente, comunitario ou inferido.
-- Dados sensiveis envolvidos: tokens, IDs privados, biblioteca privada, localizacao de arquivos.
-- Alternativa aceitavel se a API nao puder ser usada.
-
-## Saida esperada
+## Output
 
 ```text
-Plataforma:
-Uso pretendido:
-Permissao aparente:
-Risco:
-Escopos/autenticacao:
-Rate limits/latencia:
-Cache/retencao:
-Condicoes:
-Dados que podem ser armazenados:
-Dados que nao devem ser armazenados:
-Alternativa tecnica:
-Fontes:
-Recomendacao:
+API:
+Allowed use:
+Stored data:
+Display data:
+Limits:
+Risks:
+Decision:
 ```
-
-## Regras
-
-- Nao dar parecer juridico definitivo.
-- Usar fontes oficiais quando possivel.
-- Se houver incerteza material, marcar como risco e propor alternativa tecnica.

@@ -1,36 +1,30 @@
 ---
 name: deduplication-heuristics-engine
-description: Use ao criar heuristicas para identificar duplicatas entre Steam, locais, manuais e outras plataformas.
+description: Use when deciding whether two game records should merge or stay separate.
 ---
 
 # Deduplication Heuristics Engine
 
-## Sinais fortes
+## Use when
 
-- Mesmo ID externo na mesma plataforma.
-- Mapeamento conhecido entre lojas.
-- Mesmo executavel/caminho canonicalizado.
+- The same game can appear from multiple platforms.
+- Low-confidence matches must not merge automatically.
+- Manual review may be needed for duplicates.
 
-## Sinais medios
+## Checklist
 
-- Titulo normalizado igual.
-- Titulo muito similar.
-- Mesmo ano, genero e arte/metadados proximos.
+- Prefer exact IDs and official mappings.
+- Use title normalization only as a secondary signal.
+- Block obvious false matches.
+- Mark uncertain matches for manual confirmation.
 
-## Regras
-
-- Separar duplicata de jogo de multiplas instalacoes.
-- Nunca mesclar automaticamente quando a confianca for baixa.
-- Guardar fontes antigas ao mesclar.
-- Permitir desfazer/editar quando houver interface para isso.
-
-## Saida esperada
+## Output
 
 ```text
-Candidatos:
-Sinais:
-Confianca:
-Acao:
-Dados preservados:
-Risco:
+Match level:
+Primary signals:
+Secondary signals:
+Blocked cases:
+Manual review:
+Decision:
 ```

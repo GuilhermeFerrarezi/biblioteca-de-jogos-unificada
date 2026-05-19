@@ -1,34 +1,30 @@
 ---
 name: architecture-extensibility-blueprint
-description: Use ao definir contratos de providers, plugins futuros, DTOs e boundaries para adicionar plataformas sem refatorar o core.
+description: Use when defining modules, contracts, versioning and future extensibility.
 ---
 
 # Architecture Extensibility Blueprint
 
-## Contratos obrigatorios
+## Use when
 
-- Provider isolado por plataforma.
-- Adapter de normalizacao para o contrato interno.
-- Service para orquestrar sync/merge.
-- Repository para persistencia quando houver SQLite.
-- DTO estavel para comandos Tauri.
+- A change affects core contracts or boundaries.
+- The app needs to grow without a rewrite.
+- Multiple providers or storage layers must stay decoupled.
 
-## Regras
+## Checklist
 
-- O core nao conhece payload bruto de plataforma.
-- Provider falho retorna erro recuperavel e nao quebra a biblioteca.
-- Dados originais ficam preservados em `game_sources` ou estrutura equivalente.
-- Integracoes experimentais devem ser marcadas como tal.
+- Define the main modules and contracts.
+- Separate core, UI, services, providers and storage.
+- Document versioning and compatibility decisions.
+- Note tradeoffs and future extension points.
 
-## Saida esperada
+## Output
 
 ```text
-Modulo:
-Contrato publico:
-Entradas:
-Saidas:
-Erros:
-Persistencia:
-Dependencias:
-Compatibilidade futura:
+Modules:
+Main contracts:
+Boundaries:
+Versioning plan:
+Extension points:
+Tradeoffs:
 ```

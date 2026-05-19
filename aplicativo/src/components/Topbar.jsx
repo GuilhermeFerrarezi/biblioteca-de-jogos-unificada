@@ -1,4 +1,5 @@
-import { CircleDot, FolderPlus, RefreshCw, SlidersHorizontal } from 'lucide-react'
+import { FolderPlus, RefreshCw, SlidersHorizontal } from 'lucide-react'
+import SteamIcon from './icons/SteamIcon'
 
 function Topbar({
   entriesCount,
@@ -29,7 +30,7 @@ function Topbar({
           onClick={onSyncSteamGames}
           disabled={isSyncing}
         >
-          <CircleDot size={18} aria-hidden="true" className={isSteamSyncing ? 'spin-icon' : ''} />
+          <SteamIcon size={18} className={isSteamSyncing ? 'spin-icon' : ''} />
         </button>
         <button
           className="icon-button"

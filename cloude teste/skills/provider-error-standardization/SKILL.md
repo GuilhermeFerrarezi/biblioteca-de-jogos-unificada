@@ -1,35 +1,30 @@
 ---
 name: provider-error-standardization
-description: Use para padronizar erros de providers, sync parcial, mensagens recuperaveis e fallback de dados locais.
+description: Use when normalizing provider errors, partial sync results and user-facing feedback.
 ---
 
 # Provider Error Standardization
 
-## Modelo de erro
+## Use when
+
+- A provider can fail independently from the rest of the library.
+- The UI needs short actionable messages.
+- Raw external payloads must not reach the frontend.
+
+## Checklist
+
+- Return a stable error shape.
+- Include recoverability and provider identity.
+- Sanitize details before exposing them.
+- Keep sync partial when possible.
+
+## Output
 
 ```text
-code
-message
-recoverable
-providerId
-phase
-details_sanitized
+Code:
+Message:
+Recoverable:
+Provider:
+Phase:
+Sanitized details:
 ```
-
-## Codigos sugeridos
-
-- `auth_required`
-- `auth_expired`
-- `rate_limited`
-- `network_unavailable`
-- `platform_unavailable`
-- `unsupported_operation`
-- `parse_failed`
-- `local_scan_failed`
-
-## Regras
-
-- Nunca retornar payload bruto externo para a UI.
-- Falha de um provider nao invalida dados persistidos.
-- Sync parcial deve informar itens inseridos, atualizados, ignorados e falhos.
-- Mensagens ao usuario devem ser acionaveis e curtas.

@@ -1,47 +1,45 @@
-# Agente: Desenvolvedor Senior Backend
+# Agent: Senior Backend Development
 
-## Missao
+## Mission
 
-Implementar a base backend do aplicativo, os contratos de dominio, persistencia local, providers e comandos Tauri com foco em codigo testavel, seguro e extensivel.
+Implementar dominio, persistencia, comandos Tauri e testes do backend da biblioteca.
 
-## Responsabilidades
+## Project context
 
-- Transformar decisoes de arquitetura em codigo backend real.
-- Implementar e manter modelos de dominio, services, repositories e adapters.
-- Implementar providers iniciais: SteamProvider, LocalGamesProvider e ManualProvider.
-- Preparar providers experimentais para Xbox e Epic sem acoplar detalhes instaveis ao core.
-- Criar comandos Tauri para sincronizacao, leitura da biblioteca, cadastro manual e lancamento de jogos.
-- Implementar persistencia local com SQLite quando a dependencia nativa estiver disponivel.
-- Normalizar erros de providers, estados de sincronizacao e resultados parciais.
-- Evitar vazamento de tokens, cookies, caminhos sensiveis e dados pessoais em logs.
-- Escrever testes unitarios ou de integracao para regras criticas do backend.
-- Usar padrao Repository para acesso SQLite quando a area crescer alem de queries pontuais.
-- Padronizar erros backend antes de retornar por comandos Tauri.
-- Sanitizar entradas do frontend antes de escrita, sincronizacao, consulta SQL ou execucao local.
-- Manter boundaries claros entre `storage`, `launcher`, `providers`, `services` e `commands`.
+- O backend atual e Rust com SQLite e comandos Tauri.
+- A camada deve preservar jogos manuais, syncs e launch seguro.
+- O contrato do frontend passa por `libraryService.js`.
 
-## Skills recomendadas
+## Responsibilities
 
+- Implementar regras de dominio e persistencia.
+- Criar ou ajustar comandos Tauri.
+- Manter integridade de dados e compatibilidade de schema.
+- Cobrir comportamentos criticos com testes.
+- Evitar acoplamento com UI.
+
+## Flow
+
+1. Entender o contrato do corte.
+2. Implementar dominio e persistencia.
+3. Expor comandos Tauri ou serviços locais.
+4. Cobrir com testes.
+5. Validar impacto em banco e integracao.
+
+## Expected Output
+
+```text
+Domain:
+Persistence:
+Commands:
+Tests:
+Validation:
+Risks:
+```
+
+## Relevant skills
+
+- `backend-implementation`
 - `senior-backend-implementation`
-- `launcher-provider-development`
-- `safe-local-executable-launch`
-- `game-metadata-normalization`
-- `auth-token-security`
-- `api-compliance-review`
-- `provider-error-standardization`
+- `sqlite-migrations-repositories`
 - `sqlite-schema-versioning`
-
-## Escopo inicial
-
-1. Criar camada `domain` e manter contratos estaveis.
-2. Criar camada `storage` para persistencia local.
-3. Criar camada `providers` com providers isolados.
-4. Criar camada `commands` para a ponte Tauri/frontend.
-5. Implementar Steam primeiro, Local e Manual como suporte ao MVP.
-
-## Entregaveis
-
-- Codigo backend compilavel e testado.
-- Interfaces e implementacoes documentadas pelo proprio tipo.
-- Testes focados em merge de biblioteca, providers e persistencia.
-- Registro de riscos tecnicos quando uma integracao depender de API instavel.

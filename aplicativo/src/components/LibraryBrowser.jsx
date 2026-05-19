@@ -1,9 +1,19 @@
-import { LayoutGrid, List, Search } from 'lucide-react'
+import { CircleDot, HardDrive, LayoutGrid, Library, List, Search } from 'lucide-react'
 import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
 import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, PLATFORM_LABELS, QUICK_FILTERS, QUICK_FILTER_IDS } from '../constants/libraryConstants'
+import SteamIcon from './icons/SteamIcon'
+import XboxIcon from './icons/XboxIcon'
 
 const STATUS_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.INSTALLED, QUICK_FILTER_IDS.NOT_INSTALLED])
 const PLATFORM_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.LOCAL])
+const QUICK_FILTER_ICONS = Object.freeze({
+  [QUICK_FILTER_IDS.ALL]: Library,
+  [QUICK_FILTER_IDS.INSTALLED]: CircleDot,
+  [QUICK_FILTER_IDS.NOT_INSTALLED]: HardDrive,
+  [QUICK_FILTER_IDS.STEAM]: SteamIcon,
+  [QUICK_FILTER_IDS.XBOX]: XboxIcon,
+  [QUICK_FILTER_IDS.LOCAL]: HardDrive,
+})
 
 function LibraryBrowser({
   entriesCount,
@@ -163,17 +173,22 @@ function SearchBox({ searchTerm, onSearchChange }) {
 function FilterChipsRow({ quickFilters, onFilterChange }) {
   return (
     <div className="filter-chips" aria-label="Filtros rapidos">
-      {QUICK_FILTERS.map((filter) => (
-        <button
-          className={isFilterActive(quickFilters, filter.id) ? 'filter-chip active' : 'filter-chip'}
-          type="button"
-          key={filter.id}
-          aria-pressed={isFilterActive(quickFilters, filter.id)}
-          onClick={() => onFilterChange(filter.id)}
-        >
-          {filter.label}
-        </button>
-      ))}
+      {QUICK_FILTERS.map((filter) => {
+        const Icon = QUICK_FILTER_ICONS[filter.id]
+
+        return (
+          <button
+            className={isFilterActive(quickFilters, filter.id) ? 'filter-chip active' : 'filter-chip'}
+            type="button"
+            key={filter.id}
+            aria-pressed={isFilterActive(quickFilters, filter.id)}
+            onClick={() => onFilterChange(filter.id)}
+          >
+            {Icon ? <Icon size={16} /> : null}
+            {filter.label}
+          </button>
+        )
+      })}
     </div>
   )
 }

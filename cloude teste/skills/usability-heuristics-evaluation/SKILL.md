@@ -1,33 +1,29 @@
 ---
 name: usability-heuristics-evaluation
-description: Use ao revisar UX de telas, fluxos, densidade, feedback, estados vazios, erros e acessibilidade basica.
+description: Use when reviewing the UI for clarity, feedback and repeated-use comfort.
 ---
 
 # Usability Heuristics Evaluation
 
-## Heuristicas
+## Use when
 
-- O usuario sabe o estado atual da biblioteca.
-- Acoes principais estao proximas do contexto.
-- Erros explicam recuperacao.
-- Estados vazios sugerem proxima acao sem texto longo.
-- Fluxos repetidos exigem poucos cliques.
-- Teclado e leitor de tela recebem sinais basicos.
+- The interface changed in a way users will feel.
+- Feedback, discoverability or keyboard flow may be weak.
+- The library experience needs a fast review.
 
 ## Checklist
 
-- Carregando, vazio, erro e sucesso existem.
-- Filtros e busca sao previsiveis.
-- Textos longos truncam/quebram corretamente.
-- Botao sem acao real da feedback ou fica desabilitado.
-- Layout funciona em janela estreita.
+- Check feedback and error prevention.
+- Check consistency and discoverability.
+- Check keyboard flow and focus behavior.
+- Check density and repeated-use comfort.
 
-## Saida esperada
+## Output
 
 ```text
-Tela:
-Problema:
-Impacto:
-Recomendacao:
-Prioridade:
+Findings:
+Positive points:
+Issues:
+Severity:
+Recommendation:
 ```

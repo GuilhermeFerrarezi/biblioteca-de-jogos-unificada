@@ -1,34 +1,30 @@
 ---
 name: sqlite-schema-versioning
-description: Use ao evoluir schema SQLite, criar migracoes idempotentes, testar upgrades e documentar versoes.
+description: Use when a schema change needs versioned migration and legacy compatibility.
 ---
 
 # SQLite Schema Versioning
 
-## Regras
+## Use when
 
-- Toda alteracao de schema precisa de versao ou rotina de compatibilidade.
-- Migracoes devem ser idempotentes quando possivel.
-- Evitar operacoes destrutivas sem copia/transicao.
-- Testar banco vazio e banco legado.
-- Atualizar `ESTRUTURA_BANCO_DADOS.md`.
+- The local schema changes in a backward-sensitive way.
+- Legacy databases need to keep working.
+- Migration history must stay explicit.
 
 ## Checklist
 
-- Nova tabela, coluna, indice ou constraint documentada.
-- Query afetada revisada.
-- Teste Rust cobrindo upgrade.
-- Seed continua idempotente.
-- Dados do usuario preservados.
+- Record a version for the change.
+- Keep migrations incremental and idempotent.
+- Test upgrade from legacy data.
+- Preserve user records and settings.
 
-## Saida esperada
+## Output
 
 ```text
-Versao/compat:
-Mudanca:
-Motivo:
-Migracao:
-Rollback logico:
-Testes:
-Documentacao:
+Schema version:
+Tables affected:
+Migration path:
+Legacy support:
+Tests:
+Risks:
 ```
