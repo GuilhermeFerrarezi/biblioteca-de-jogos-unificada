@@ -27,6 +27,7 @@
     "allow-disconnect-steam-web-api-key",
     "allow-set-library-entry-archived",
     "allow-launch-library-entry",
-    "allow-sync-xbox-games"
+    "allow-sync-xbox-games",
+    "allow-sync-xbox-achievement-games"
   ]
 }

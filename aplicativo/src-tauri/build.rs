@@ -5,6 +5,8 @@ const COMMANDS: &[&str] = &[
     "sync_local_games",
     "sync_steam_games",
     "sync_xbox_games",
+    "sync_xbox_achievement_games",
+    "import_xbox_achievement_title_history",
     "sync_steam_account_games",
     "get_steam_account_config",
     "get_steam_library_roots",

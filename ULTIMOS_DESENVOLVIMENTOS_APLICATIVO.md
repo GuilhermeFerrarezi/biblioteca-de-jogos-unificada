@@ -103,6 +103,24 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - Quando um jogo Steam local tambem aparece na biblioteca remota, o sync por conta preserva o estado instalado local e preenche `game_sources.account_id`.
 - O OpenID nao concede acesso automatico a biblioteca privada; ele apenas verifica a identidade e retorna SteamID64. A Web API continua dependendo de chave valida e visibilidade da biblioteca.
 
+## Xbox heuristics hardening
+
+- A heuristica do Xbox local foi reforcada para rejeitar apps de sistema/loja como `Filmes e TV`.
+- O provider passou a cortar falsos positivos de instalacao local de desktop, mantendo jogos como `osu!` no fluxo `local` em vez de `xbox`.
+- Foram adicionados testes Rust cobrindo a variante `Filmes e TV`, um falso positivo desktop local e o caso legitimo do `Minecraft Launcher`.
+
+## Xbox persisted cleanup
+
+- A limpeza de Xbox persistido agora tambem considera o alvo de lancamento armazenado para arquivar entradas antigas claramente ligadas a executaveis desktop locais.
+- O provider continua preservando Appx/Xbox reais, inclusive quando a descoberta roda sem encontrar o mesmo registro na forma atual.
+- Foram adicionados testes Rust para o falso positivo desktop local e para um alvo Appx real continuar valido.
+
+## Local staging hardening
+
+- O scanner local passou a tratar `staging` como diretório auxiliar.
+- Itens sob `_staging` nao entram mais como jogos locais, reduzindo ruido de build/infra.
+- Foi adicionado teste Rust dedicado para garantir que um executavel em `_staging` nao seja promovido a `local`.
+
 ## Validacoes recentes
 
 Ultima validacao confirmada:
@@ -154,3 +172,6 @@ Resultado registrado: lint/build aprovados e suite Rust com 42 testes passando a
 2. Em seguida, fazer o corte inicial de Epic Games, tratando compliance e limite de API como bloqueios de decisao antes de qualquer fluxo de conta.
 3. Depois das novas plataformas, preparar consulta filtrada/paginacao no backend para bibliotecas maiores e ajustar a UI para listas mais longas.
 4. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch.
+5. Opcao A para o Xbox: implementar o fluxo real de autenticacao Xbox Live/XUID para liberar a importacao de title history por achievements.
+6. Opcao B para o Xbox: manter o auth para depois e refinar a UX do bloqueio de importacao, explicando melhor ao usuario porque a operacao ainda nao pode rodar.
+7. O proximo ajuste do projeto e reduzir o tempo de abertura do aplicativo, porque o Tauri esta demorando demais para mostrar a interface completa.

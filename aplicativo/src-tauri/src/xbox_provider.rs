@@ -80,6 +80,8 @@ struct EntryRow {
     sort_title: String,
     installed: bool,
     accent_color: Option<String>,
+    primary_action_kind: Option<String>,
+    primary_action_target: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +109,15 @@ struct XboxDiscoveryRecord {
     non_removable: bool,
     #[serde(default, deserialize_with = "deserialize_optional_signature_kind")]
     signature_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct XboxAchievementHistoryRecord {
+    title_id: String,
+    service_config_id: Option<String>,
+    name: String,
+    title_type: Option<String>,
 }
 
 fn deserialize_optional_signature_kind<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -150,6 +161,101 @@ pub fn sync_xbox_games(connection: &mut Connection) -> Result<SyncSummaryDto, Xb
     }
 
     Ok(summary)
+}
+
+pub fn sync_xbox_achievement_games(
+    connection: &mut Connection,
+) -> Result<SyncSummaryDto, XboxProviderError> {
+    let xuid = read_required_xbox_account_xuid(
+        connection,
+        "Configure o XUID da conta Xbox antes de sincronizar pelos achievements.",
+    )?;
+    let achievement_titles = fetch_xbox_achievement_title_history(&xuid)?;
+    let summary = import_xbox_achievement_title_history_from_records(
+        connection,
+        &xuid,
+        &achievement_titles,
+    )
+        .map_err(|error| {
+            XboxProviderError::new(
+                "xbox_achievement_library_merge_failed",
+                "Nao foi possivel aplicar a sincronizacao Xbox baseada em achievements no banco local.",
+                false,
+                "merge",
+                Some(error.to_string()),
+            )
+        })?;
+
+    if let Err(error) = crate::storage::record_xbox_achievement_sync_metadata(
+        connection,
+        &xuid,
+        achievement_titles.len(),
+        &summary,
+    ) {
+        eprintln!("xbox achievement provider metadata update failed: {error}");
+    }
+
+    Ok(summary)
+}
+
+pub fn import_xbox_achievement_title_history(
+    connection: &mut Connection,
+) -> Result<SyncSummaryDto, XboxProviderError> {
+    let xuid = read_required_xbox_account_xuid(
+        connection,
+        "Configure o XUID da conta Xbox antes de importar o historico de titulos.",
+    )?;
+    let achievement_titles = fetch_xbox_achievement_title_history(&xuid)?;
+    let summary = import_xbox_achievement_title_history_from_records(
+        connection,
+        &xuid,
+        &achievement_titles,
+    )
+    .map_err(|error| {
+        XboxProviderError::new(
+            "xbox_achievement_title_history_merge_failed",
+            "Nao foi possivel aplicar a importacao do historico de titulos do Xbox no banco local.",
+            false,
+            "merge",
+            Some(error.to_string()),
+        )
+    })?;
+
+    if let Err(error) = crate::storage::record_xbox_achievement_sync_metadata(
+        connection,
+        &xuid,
+        achievement_titles.len(),
+        &summary,
+    ) {
+        eprintln!("xbox achievement provider metadata update failed: {error}");
+    }
+
+    Ok(summary)
+}
+
+fn read_required_xbox_account_xuid(
+    connection: &Connection,
+    missing_message: &'static str,
+) -> Result<String, XboxProviderError> {
+    crate::storage::read_xbox_account_config(connection)
+        .map_err(|error| {
+            XboxProviderError::new(
+                "xbox_account_read_failed",
+                "Nao foi possivel ler a conta Xbox configurada.",
+                true,
+                "preflight",
+                Some(error.to_string()),
+            )
+        })?
+        .ok_or_else(|| {
+            XboxProviderError::new(
+                "xbox_account_missing",
+                missing_message,
+                true,
+                "preflight",
+                Some("xuid ausente em provider_account_configs".to_string()),
+            )
+        })
 }
 
 fn sync_xbox_games_from_candidates(
@@ -202,11 +308,79 @@ fn sync_xbox_games_from_candidates(
     Ok(summary)
 }
 
+fn fetch_xbox_achievement_title_history(
+    _xuid: &str,
+) -> Result<Vec<XboxAchievementHistoryRecord>, XboxProviderError> {
+    Err(XboxProviderError::new(
+        "xbox_achievement_auth_unavailable",
+        "A sincronizacao Xbox por achievements ainda depende de um fluxo de autenticacao Xbox Live nao implementado neste corte.",
+        false,
+        "preflight",
+        Some("nenhum token Xbox Live disponivel".to_string()),
+    ))
+}
+
+fn import_xbox_achievement_title_history_from_records(
+    connection: &mut Connection,
+    xuid: &str,
+    titles: &[XboxAchievementHistoryRecord],
+) -> rusqlite::Result<SyncSummaryDto> {
+    let existing_entries_by_source = list_xbox_entries_by_source(connection)?;
+    let existing_entries_by_title = list_xbox_entries_by_title(connection)?;
+    let mut summary = SyncSummaryDto {
+        discovered: titles.len(),
+        inserted: 0,
+        updated: 0,
+        archived: 0,
+        unavailable: 0,
+    };
+
+    let transaction = connection.transaction()?;
+
+    for title in titles {
+        let candidate = xbox_achievement_candidate_from_record(title);
+        let normalized_title = normalize_name(&candidate.title);
+
+        if normalized_title.is_empty() {
+            continue;
+        }
+
+        if let Some(existing_row) = existing_entries_by_source.get(&candidate.app_id) {
+            if update_xbox_achievement_entry(&transaction, existing_row, &candidate, xuid)? {
+                summary.updated += 1;
+            }
+            continue;
+        }
+
+        if let Some(existing_row) = existing_entries_by_title.get(&normalized_title) {
+            if existing_row.install_status == "installed" {
+                continue;
+            }
+            if update_xbox_achievement_entry(&transaction, existing_row, &candidate, xuid)? {
+                summary.updated += 1;
+            }
+            continue;
+        }
+
+        insert_xbox_achievement_entry(&transaction, &candidate, xuid)?;
+        summary.inserted += 1;
+    }
+
+    transaction.commit()?;
+    Ok(summary)
+}
+
 fn is_rejected_persisted_xbox_entry(app_id: &str, existing_row: &EntryRow) -> bool {
     let package_family_name = app_id.split('!').next().unwrap_or(app_id);
 
     is_known_non_game_xbox_record(&existing_row.title, None, package_family_name)
         || normalize_name(&existing_row.title).is_empty()
+        || matches!(
+            existing_row.primary_action_kind.as_deref(),
+            Some("executable")
+        ) && existing_row.primary_action_target.as_deref().is_some_and(|target| {
+            is_probably_local_desktop_install_location(target, package_family_name)
+        })
 }
 
 fn archive_xbox_entry(
@@ -719,6 +893,19 @@ fn should_keep_xbox_record(record: &XboxDiscoveryRecord) -> bool {
         return false;
     }
 
+    if record
+        .install_location
+        .as_deref()
+        .is_some_and(|install_location| {
+            is_probably_local_desktop_install_location(
+                install_location,
+                &record.package_family_name,
+            )
+        })
+    {
+        return false;
+    }
+
     let haystack = normalize_name(&format!(
         "{} {} {} {}",
         title,
@@ -788,6 +975,7 @@ fn is_known_non_game_xbox_record(
         "email",
         "feedback hub",
         "films and tv",
+        "filmes e tv",
         "get help",
         "hyperx ngenuity",
         "intel graphics software",
@@ -835,6 +1023,7 @@ fn is_known_non_game_xbox_record(
         "netflix",
         "mixed reality portal",
         "hello",
+        "osu",
         "click to do",
         "acao com um clique",
         "aÃ§Ã£o com um clique",
@@ -914,6 +1103,17 @@ fn is_known_non_game_xbox_record(
     })
 }
 
+fn is_probably_local_desktop_install_location(
+    install_location: &str,
+    package_family_name: &str,
+) -> bool {
+    let normalized_install_location = normalize_name(install_location);
+    let normalized_package_family_name = normalize_name(package_family_name);
+
+    normalized_install_location.contains("appdatalocal")
+        && !normalized_package_family_name.contains("microsoft")
+}
+
 fn normalize_xbox_title(
     title: &str,
     package_name: Option<&str>,
@@ -957,10 +1157,16 @@ fn list_xbox_entries_by_source(
           games.title,
           games.sort_title,
           games.installed,
-          games.accent_color
+          games.accent_color,
+          launch_actions.kind,
+          launch_actions.target
         FROM library_entries
         JOIN games ON games.id = library_entries.game_id
         JOIN game_sources ON game_sources.game_id = library_entries.game_id
+        LEFT JOIN launch_actions
+          ON launch_actions.game_id = games.id
+         AND launch_actions.platform_id = 'xbox'
+         AND launch_actions.is_primary = 1
         WHERE library_entries.primary_platform_id = 'xbox'
           AND game_sources.platform_id = 'xbox'
         "#,
@@ -979,12 +1185,210 @@ fn list_xbox_entries_by_source(
                     sort_title: row.get(6)?,
                     installed: row.get::<_, i64>(7)? == 1,
                     accent_color: row.get(8)?,
+                    primary_action_kind: row.get(9)?,
+                    primary_action_target: row.get(10)?,
                 },
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     Ok(rows.into_iter().collect())
+}
+
+fn list_xbox_entries_by_title(
+    connection: &Connection,
+) -> rusqlite::Result<HashMap<String, EntryRow>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT
+          games.title,
+          library_entries.id,
+          library_entries.install_status,
+          library_entries.is_archived,
+          games.id,
+          games.title,
+          games.sort_title,
+          games.installed,
+          games.accent_color,
+          launch_actions.kind,
+          launch_actions.target
+        FROM library_entries
+        JOIN games ON games.id = library_entries.game_id
+        LEFT JOIN launch_actions
+          ON launch_actions.game_id = games.id
+         AND launch_actions.platform_id = 'xbox'
+         AND launch_actions.is_primary = 1
+        WHERE library_entries.primary_platform_id = 'xbox'
+        "#,
+    )?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                normalize_name(&row.get::<_, String>(0)?),
+                EntryRow {
+                    entry_id: row.get(1)?,
+                    install_status: row.get(2)?,
+                    is_archived: row.get::<_, i64>(3)? == 1,
+                    game_id: row.get(4)?,
+                    title: row.get(5)?,
+                    sort_title: row.get(6)?,
+                    installed: row.get::<_, i64>(7)? == 1,
+                    accent_color: row.get(8)?,
+                    primary_action_kind: row.get(9)?,
+                    primary_action_target: row.get(10)?,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(rows.into_iter().collect())
+}
+
+fn xbox_achievement_candidate_from_record(
+    record: &XboxAchievementHistoryRecord,
+) -> XboxGameCandidate {
+    let package_family_name = record
+        .service_config_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(&record.title_id)
+        .to_string();
+    let title = normalize_xbox_title(&record.name, None, &package_family_name);
+    let title_slug = create_slug(&title);
+    let hash = stable_hash_hex(&record.title_id);
+    let accent_color = deterministic_accent_color(&title);
+
+    XboxGameCandidate {
+        app_id: record.title_id.trim().to_string(),
+        title,
+        package_family_name,
+        install_location: None,
+        launch_target: None,
+        store_id: None,
+        source_id: format!("source-xbox-achievements-{title_slug}-{hash}"),
+        game_id: format!("game-xbox-achievements-{title_slug}-{hash}"),
+        entry_id: format!("entry-xbox-achievements-{title_slug}-{hash}"),
+        launch_id: format!("launch-xbox-achievements-{hash}"),
+        accent_color,
+    }
+}
+
+fn insert_xbox_achievement_entry(
+    transaction: &rusqlite::Transaction<'_>,
+    candidate: &XboxGameCandidate,
+    xuid: &str,
+) -> rusqlite::Result<()> {
+    let now = now_iso();
+    transaction.execute(
+        r#"
+        INSERT INTO games (
+          id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, 0, 0, ?4, ?5, ?5)
+        "#,
+        params![
+            candidate.game_id,
+            candidate.title,
+            candidate.title,
+            candidate.accent_color,
+            now,
+        ],
+    )?;
+    transaction.execute(
+        r#"
+        INSERT INTO library_entries (
+          id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
+        ) VALUES (?1, ?2, 'xbox', 'not_installed', 'Nunca', 0, ?3, ?3)
+        "#,
+        params![candidate.entry_id, candidate.game_id, now],
+    )?;
+    transaction.execute(
+        r#"
+        INSERT INTO game_sources (id, game_id, platform_id, external_id, account_id)
+        VALUES (?1, ?2, 'xbox', ?3, ?4)
+        "#,
+        params![candidate.source_id, candidate.game_id, candidate.app_id, xuid],
+    )?;
+    upsert_xbox_primary_action(transaction, candidate, false, &candidate.launch_id)?;
+    transaction.execute(
+        "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Xbox', 0)",
+        params![candidate.game_id],
+    )?;
+
+    Ok(())
+}
+
+fn update_xbox_achievement_entry(
+    transaction: &rusqlite::Transaction<'_>,
+    existing_row: &EntryRow,
+    candidate: &XboxGameCandidate,
+    _xuid: &str,
+) -> rusqlite::Result<bool> {
+    let current_action = find_xbox_primary_action(transaction, &existing_row.game_id)?;
+    let expected_action = xbox_action_for_candidate(candidate, false);
+    let needs_action_update = current_action
+        .as_ref()
+        .map(|action| {
+            action.kind != expected_action.kind
+                || action.label != expected_action.label
+                || action.target != expected_action.target
+                || action.arguments != expected_action.arguments
+                || action.working_directory != expected_action.working_directory
+        })
+        .unwrap_or(true);
+    let needs_entry_update = existing_row.title != candidate.title
+        || existing_row.sort_title != candidate.title
+        || existing_row.installed
+        || existing_row.install_status != "not_installed"
+        || existing_row.is_archived
+        || existing_row.accent_color.as_deref() != Some(candidate.accent_color);
+
+    if !needs_entry_update && !needs_action_update {
+        return Ok(false);
+    }
+
+    let updated_at = now_iso();
+    if needs_entry_update {
+        transaction.execute(
+            r#"
+            UPDATE games
+            SET title = ?2,
+                sort_title = ?3,
+                installed = 0,
+                accent_color = ?4,
+                updated_at = ?5
+            WHERE id = ?1
+            "#,
+            params![
+                existing_row.game_id,
+                candidate.title,
+                candidate.title,
+                candidate.accent_color,
+                updated_at,
+            ],
+        )?;
+        transaction.execute(
+            r#"
+            UPDATE library_entries
+            SET install_status = 'not_installed',
+                is_archived = 0,
+                updated_at = ?2
+            WHERE id = ?1
+            "#,
+            params![existing_row.entry_id, updated_at],
+        )?;
+    }
+
+    if needs_action_update {
+        upsert_xbox_primary_action(transaction, candidate, false, &candidate.launch_id)?;
+    }
+
+    transaction.execute(
+        "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Xbox', 0)",
+        params![existing_row.game_id],
+    )?;
+
+    Ok(true)
 }
 
 fn insert_xbox_entry(
@@ -1522,6 +1926,13 @@ mod tests {
         connection
     }
 
+    fn table_row_count(connection: &Connection, table: &str) -> i64 {
+        let sql = format!("SELECT COUNT(*) FROM {table}");
+        connection
+            .query_row(sql.as_str(), [], |row| row.get::<_, i64>(0))
+            .expect("count rows")
+    }
+
     #[test]
     fn builds_store_target_with_search_fallback() {
         assert_eq!(
@@ -1535,6 +1946,164 @@ mod tests {
         assert_eq!(
             build_store_target("Halo Infinite", Some("9MWPM2CQNLHN")),
             "ms-windows-store://pdp/?ProductId=9MWPM2CQNLHN"
+        );
+    }
+
+    #[test]
+    fn import_xbox_achievement_title_history_requires_configured_xuid_and_leaves_database_untouched() {
+        let mut connection = open_memory_database();
+
+        let before_games = table_row_count(&connection, "games");
+        let before_entries = table_row_count(&connection, "library_entries");
+        let before_sources = table_row_count(&connection, "game_sources");
+        let before_actions = table_row_count(&connection, "launch_actions");
+        let before_provider_configs = table_row_count(&connection, "provider_account_configs");
+
+        let error = import_xbox_achievement_title_history(&mut connection)
+            .expect_err("import should require a configured xbox xuid");
+
+        assert_eq!(error.code, "xbox_account_missing");
+        assert!(error.recoverable);
+        assert_eq!(table_row_count(&connection, "games"), before_games);
+        assert_eq!(table_row_count(&connection, "library_entries"), before_entries);
+        assert_eq!(table_row_count(&connection, "game_sources"), before_sources);
+        assert_eq!(table_row_count(&connection, "launch_actions"), before_actions);
+        assert_eq!(
+            table_row_count(&connection, "provider_account_configs"),
+            before_provider_configs
+        );
+    }
+
+    #[test]
+    fn import_xbox_achievement_title_history_from_records_inserts_not_installed_entry_with_store_action() {
+        let mut connection = open_memory_database();
+        let xuid = "2533274791234567";
+        let record = XboxAchievementHistoryRecord {
+            title_id: "11111111-2222-3333-4444-555555555555".to_string(),
+            service_config_id: None,
+            name: "Halo Infinite".to_string(),
+            title_type: Some("Game".to_string()),
+        };
+
+        let summary = import_xbox_achievement_title_history_from_records(
+            &mut connection,
+            xuid,
+            std::slice::from_ref(&record),
+        )
+        .expect("import xbox title history");
+
+        let candidate = xbox_achievement_candidate_from_record(&record);
+        assert_eq!(summary.discovered, 1);
+        assert_eq!(summary.inserted, 1);
+        assert_eq!(summary.updated, 0);
+        assert_eq!(summary.archived, 0);
+        assert_eq!(summary.unavailable, 0);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT installed FROM games WHERE id = ?1",
+                    params![candidate.game_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("read imported game"),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT install_status FROM library_entries WHERE id = ?1",
+                    params![candidate.entry_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("read imported entry"),
+            "not_installed"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT account_id FROM game_sources WHERE id = ?1",
+                    params![candidate.source_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .expect("read imported source"),
+            Some(xuid.to_string())
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    r#"
+                    SELECT kind, label, target
+                    FROM launch_actions
+                    WHERE game_id = ?1 AND platform_id = 'xbox' AND is_primary = 1
+                    "#,
+                    params![candidate.game_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .expect("read imported launch action"),
+            (
+                "uri".to_string(),
+                "Abrir Microsoft Store".to_string(),
+                "ms-windows-store://search/?query=Halo+Infinite".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn import_xbox_achievement_title_history_rolls_back_partial_changes_when_the_primary_action_insert_fails() {
+        let mut connection = open_memory_database();
+        let xuid = "2533274791234567";
+        let record = XboxAchievementHistoryRecord {
+            title_id: "99999999-8888-7777-6666-555555555555".to_string(),
+            service_config_id: None,
+            name: "Forza Horizon 5".to_string(),
+            title_type: Some("Game".to_string()),
+        };
+        let candidate = xbox_achievement_candidate_from_record(&record);
+
+        connection
+            .execute(
+                r#"
+                INSERT INTO launch_actions (
+                  id, game_id, platform_id, kind, label, target, arguments_json, working_directory, is_primary
+                ) VALUES (?1, 'existing-game', 'xbox', 'uri', 'Existing', 'ms-windows-store://search/?query=Existing', '[]', NULL, 1)
+                "#,
+                params![candidate.launch_id],
+            )
+            .expect("seed conflicting primary action");
+
+        let error = import_xbox_achievement_title_history_from_records(
+            &mut connection,
+            xuid,
+            std::slice::from_ref(&record),
+        )
+        .expect_err("import should fail when the conflicting launch action id already exists");
+
+        assert!(matches!(error, rusqlite::Error::SqliteFailure(_, _)));
+        assert_eq!(
+            table_row_count(&connection, "games"),
+            0,
+            "game insert should be rolled back"
+        );
+        assert_eq!(
+            table_row_count(&connection, "library_entries"),
+            0,
+            "entry insert should be rolled back"
+        );
+        assert_eq!(
+            table_row_count(&connection, "game_sources"),
+            0,
+            "source insert should be rolled back"
+        );
+        assert_eq!(
+            table_row_count(&connection, "launch_actions"),
+            1,
+            "only the pre-existing conflicting action should remain"
         );
     }
 
@@ -1931,6 +2500,48 @@ mod tests {
     }
 
     #[test]
+    fn should_keep_xbox_record_rejects_filmes_e_tv_app() {
+        let record = XboxDiscoveryRecord {
+            app_id: "Microsoft.ZuneVideo_8wekyb3d8bbwe!App".to_string(),
+            title: "Filmes e TV".to_string(),
+            package_family_name: "Microsoft.ZuneVideo_8wekyb3d8bbwe".to_string(),
+            package_name: Some("Microsoft.ZuneVideo".to_string()),
+            package_full_name: Some(
+                "Microsoft.ZuneVideo_10.22091.10020.0_x64__8wekyb3d8bbwe".to_string(),
+            ),
+            install_location: Some("C:\\Program Files\\WindowsApps\\ZuneVideo".to_string()),
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: false,
+            is_framework: false,
+            non_removable: false,
+            signature_kind: Some("Store".to_string()),
+        };
+
+        assert!(!should_keep_xbox_record(&record));
+    }
+
+    #[test]
+    fn should_keep_xbox_record_rejects_local_desktop_install_location() {
+        let record = XboxDiscoveryRecord {
+            app_id: "osu!_is1!osu!".to_string(),
+            title: "Desktop Game".to_string(),
+            package_family_name: "osu!_is1".to_string(),
+            package_name: Some("Desktop Game".to_string()),
+            package_full_name: Some("osu!_is1".to_string()),
+            install_location: Some(r"C:\Users\Guiti\AppData\Local\osu!".to_string()),
+            launch_target: Some(r"C:\Users\Guiti\AppData\Local\osu!\osu!.exe".to_string()),
+            store_id: None,
+            has_microsoft_game_config: true,
+            is_framework: false,
+            non_removable: false,
+            signature_kind: Some("Store".to_string()),
+        };
+
+        assert!(!should_keep_xbox_record(&record));
+    }
+
+    #[test]
     fn should_keep_xbox_record_rejects_store_app_without_game_config() {
         let record = XboxDiscoveryRecord {
             app_id: "Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe!App".to_string(),
@@ -1964,6 +2575,26 @@ mod tests {
             launch_target: None,
             store_id: None,
             has_microsoft_game_config: false,
+            is_framework: false,
+            non_removable: false,
+            signature_kind: Some("Store".to_string()),
+        };
+
+        assert!(!should_keep_xbox_record(&record));
+    }
+
+    #[test]
+    fn should_keep_xbox_record_rejects_local_game_shortcut_titles() {
+        let record = XboxDiscoveryRecord {
+            app_id: "osu!_is1!osu!".to_string(),
+            title: "osu!".to_string(),
+            package_family_name: "osu!_is1".to_string(),
+            package_name: Some("osu!".to_string()),
+            package_full_name: Some("osu!_is1".to_string()),
+            install_location: Some(r"C:\Users\Guiti\AppData\Local\osu!".to_string()),
+            launch_target: Some(r"C:\Users\Guiti\AppData\Local\osu!\osu!.exe".to_string()),
+            store_id: None,
+            has_microsoft_game_config: true,
             is_framework: false,
             non_removable: false,
             signature_kind: Some("Store".to_string()),
@@ -2266,6 +2897,112 @@ mod tests {
         assert_eq!(summary.archived, 1);
         assert_eq!(summary.unavailable, 0);
         assert!(state.0);
+        assert_eq!(state.1, "not_installed");
+    }
+
+    #[test]
+    fn sync_xbox_games_archives_persisted_desktop_local_primary_actions() {
+        let mut connection = open_memory_database();
+        let mut candidate = sample_candidate();
+        candidate.app_id = "Contoso.DesktopGame!App".to_string();
+        candidate.package_family_name = "Contoso.DesktopGame".to_string();
+        candidate.launch_target = Some(r"C:\Users\Guiti\AppData\Local\Contoso\DesktopGame.exe".to_string());
+        candidate.store_id = None;
+        candidate.source_id = "source-xbox-halo-local".to_string();
+        candidate.game_id = "game-xbox-halo-local".to_string();
+        candidate.entry_id = "entry-xbox-halo-local".to_string();
+        candidate.launch_id = "launch-xbox-halo-local".to_string();
+
+        sync_xbox_games_from_candidates(&mut connection, std::slice::from_ref(&candidate))
+            .expect("seed local desktop entry");
+
+        let seeded_action = connection
+            .query_row(
+                r#"
+                SELECT kind, target
+                FROM launch_actions
+                WHERE game_id = ?1 AND platform_id = 'xbox' AND is_primary = 1
+                "#,
+                params![candidate.game_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("read seeded desktop action");
+
+        assert_eq!(seeded_action.0, "executable");
+        assert_eq!(
+            seeded_action.1,
+            r"C:\Users\Guiti\AppData\Local\Contoso\DesktopGame.exe"
+        );
+
+        let summary =
+            sync_xbox_games_from_candidates(&mut connection, &[]).expect("archive desktop entry");
+        let state = connection
+            .query_row(
+                r#"
+                SELECT is_archived, install_status
+                FROM library_entries
+                WHERE id = ?1
+                "#,
+                params![candidate.entry_id],
+                |row| Ok((row.get::<_, i64>(0)? == 1, row.get::<_, String>(1)?)),
+            )
+            .expect("read archived desktop entry");
+
+        assert_eq!(summary.archived, 1);
+        assert_eq!(summary.unavailable, 0);
+        assert!(state.0);
+        assert_eq!(state.1, "not_installed");
+    }
+
+    #[test]
+    fn sync_xbox_games_keeps_real_xbox_appx_primary_actions_valid() {
+        let mut connection = open_memory_database();
+        let candidate = sample_candidate();
+
+        sync_xbox_games_from_candidates(&mut connection, std::slice::from_ref(&candidate))
+            .expect("seed real xbox entry");
+
+        let seeded_action = connection
+            .query_row(
+                r#"
+                SELECT kind, target, arguments_json
+                FROM launch_actions
+                WHERE game_id = ?1 AND platform_id = 'xbox' AND is_primary = 1
+                "#,
+                params![candidate.game_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .expect("read seeded appx action");
+
+        assert_eq!(seeded_action.0, "executable");
+        assert!(seeded_action.1.ends_with(r"\explorer.exe"));
+        assert_eq!(
+            seeded_action.2,
+            r#"["shell:AppsFolder\\Microsoft.HaloInfinite_8wekyb3d8bbwe!App"]"#
+        );
+
+        let summary = sync_xbox_games_from_candidates(&mut connection, &[])
+            .expect("resync real xbox entry");
+        let state = connection
+            .query_row(
+                r#"
+                SELECT is_archived, install_status
+                FROM library_entries
+                WHERE id = ?1
+                "#,
+                params![candidate.entry_id],
+                |row| Ok((row.get::<_, i64>(0)? == 1, row.get::<_, String>(1)?)),
+            )
+            .expect("read real xbox entry state");
+
+        assert_eq!(summary.archived, 0);
+        assert!(!state.0);
         assert_eq!(state.1, "not_installed");
     }
 }

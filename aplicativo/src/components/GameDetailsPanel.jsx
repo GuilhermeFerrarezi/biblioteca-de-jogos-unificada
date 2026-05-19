@@ -1,5 +1,5 @@
 import { Archive, Clock3, Download, Pencil, Play, Store } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
 import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, PLATFORM_LABELS } from '../constants/libraryConstants'
 import { getLaunchActionState, getLaunchChoices } from '../hooks/libraryPageStateHelpers'
@@ -18,7 +18,21 @@ function GameDetailsPanel({
   onLaunchPlatformChange,
 }) {
   const [isLaunchChooserOpen, setIsLaunchChooserOpen] = useState(false)
-  const launchChoices = getLaunchChoices(selectedEntry, selectedLaunchPlatformId)
+  const launchChooserButtonRef = useRef(null)
+  const launchChooserRef = useRef(null)
+  const launchChoices = getLaunchChoices(selectedEntry, selectedLaunchPlatformId).slice().sort((left, right) => {
+    const platformComparison = (left.platformLabel ?? '').localeCompare(right.platformLabel ?? '', 'pt-BR', {
+      sensitivity: 'base',
+    })
+
+    if (platformComparison !== 0) {
+      return platformComparison
+    }
+
+    return (left.actionLabel ?? '').localeCompare(right.actionLabel ?? '', 'pt-BR', {
+      sensitivity: 'base',
+    })
+  })
   const { primaryLaunchAction, canLaunch: canLaunchSelectedEntry, hint: launchActionHint } = getLaunchActionState(
     selectedEntry,
     selectedLaunchPlatformId,
@@ -33,6 +47,45 @@ function GameDetailsPanel({
     setIsLaunchChooserOpen(false)
   }, [selectedEntry?.id])
 
+  useEffect(() => {
+    if (!isLaunchChooserOpen) {
+      return undefined
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsLaunchChooserOpen(false)
+        window.requestAnimationFrame(() => {
+          launchChooserButtonRef.current?.focus()
+        })
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isLaunchChooserOpen])
+
+  useEffect(() => {
+    if (!isLaunchChooserOpen) {
+      return undefined
+    }
+
+    const handlePointerDown = (event) => {
+      if (!launchChooserRef.current?.contains(event.target)) {
+        setIsLaunchChooserOpen(false)
+      }
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [isLaunchChooserOpen])
+
   return (
     <aside className="details-panel" aria-label="Detalhes do jogo selecionado">
       {selectedEntry ? (
@@ -46,7 +99,7 @@ function GameDetailsPanel({
             </span>
             <h2>{selectedEntry.game.title}</h2>
             {hasMultipleLaunchChoices ? (
-              <div className="timeline-note">
+              <div className="timeline-note launch-selection-note">
                 <Store size={16} aria-hidden="true" />
                 {selectedLaunchPlatformId === 'xbox' ? 'Biblioteca selecionada: Xbox.' : 'Biblioteca selecionada: Steam.'}
               </div>
@@ -64,16 +117,42 @@ function GameDetailsPanel({
                 {primaryActionLabel}
               </button>
               {hasMultipleLaunchChoices ? (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  aria-haspopup="menu"
-                  aria-expanded={isLaunchChooserOpen}
-                  aria-controls="launch-choice-panel"
-                  onClick={() => setIsLaunchChooserOpen((currentValue) => !currentValue)}
-                >
-                  Selecionar launcher
-                </button>
+                <div className="launch-chooser" ref={launchChooserRef}>
+                  <button
+                    ref={launchChooserButtonRef}
+                    className="secondary-button"
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={isLaunchChooserOpen}
+                    aria-controls="launch-choice-panel"
+                    onClick={() => setIsLaunchChooserOpen((currentValue) => !currentValue)}
+                  >
+                    Selecionar launcher
+                  </button>
+                  {isLaunchChooserOpen ? (
+                    <div className="launch-choice-panel" id="launch-choice-panel" role="menu" aria-label="Escolher plataforma de inicio">
+                      {launchChoices.map((choice) => (
+                        <button
+                          key={choice.entryId}
+                          className="launch-choice-button"
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={choice.platformId === selectedLaunchPlatformId}
+                          onClick={() => {
+                            setIsLaunchChooserOpen(false)
+                            window.requestAnimationFrame(() => {
+                              launchChooserButtonRef.current?.focus()
+                            })
+                            onLaunchPlatformChange(choice.platformId)
+                          }}
+                        >
+                          <strong>{choice.platformLabel}</strong>
+                          <span>{choice.platformId === selectedLaunchPlatformId ? 'Selecionado' : choice.actionLabel}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
               <button className="icon-button" type="button" aria-label="Instalar ou localizar arquivos" title="Instalar ou localizar arquivos" onClick={onInstallAction}>
                 <Download size={18} aria-hidden="true" />
@@ -125,26 +204,6 @@ function GameDetailsPanel({
               <p className="action-hint" id="launch-action-hint">
                 {launchActionHint}
               </p>
-            ) : null}
-            {hasMultipleLaunchChoices && isLaunchChooserOpen ? (
-              <div className="launch-choice-panel" id="launch-choice-panel" role="menu" aria-label="Escolher plataforma de inicio">
-                {launchChoices.map((choice) => (
-                  <button
-                    key={choice.entryId}
-                    className="launch-choice-button"
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={choice.platformId === selectedLaunchPlatformId}
-                    onClick={() => {
-                      setIsLaunchChooserOpen(false)
-                      onLaunchPlatformChange(choice.platformId)
-                    }}
-                  >
-                    <strong>{choice.platformLabel}</strong>
-                    <span>{choice.platformId === selectedLaunchPlatformId ? 'Selecionado' : choice.actionLabel}</span>
-                  </button>
-                ))}
-              </div>
             ) : null}
             {selectedEntry.platformIds?.includes('xbox') || selectedEntry.primaryPlatformId === 'xbox' ? (
               <div className="timeline-note">

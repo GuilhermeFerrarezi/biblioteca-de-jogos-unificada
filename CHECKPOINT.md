@@ -114,6 +114,12 @@ Atualizacao em 2026-05-18: a biblioteca do frontend passou a unificar visualment
 
 Atualizacao em 2026-05-18: a descoberta local do Xbox foi refinada para filtrar apps de sistema e produtividade que estavam entrando indevidamente como jogos, como Skype, Filmes e TV, Noticias e IntelliGo Neptune. Jogos de desktop/launcher como `osu!` deixaram de ser classificados como Xbox e passaram a entrar pela descoberta local, mantendo a loja Xbox apenas para pacotes reais do ecossistema Microsoft. A regra de merge prioriza `local` quando houver duplicidade futura com Steam ou Xbox.
 
+Atualizacao em 2026-05-19: a heuristica do Xbox local foi endurecida novamente para bloquear falsos positivos de sistema/loja como `Filmes e TV` e cortar registros de instalacao desktop local que apareciam como Xbox. O corte manteve o caso legitimo do `Minecraft Launcher` e reforcou que jogos de desktop como `osu!` continuam no fluxo `local`. Foram adicionados testes Rust cobrindo a variante `Filmes e TV`, um falso positivo desktop local e a preservacao do caso Minecraft. Validacoes passaram: `cargo test`, `npm run lint` e `npm run build`.
+
+Atualizacao em 2026-05-19: o scanner local foi ajustado para tratar `staging` como diretório auxiliar, impedindo que itens como `_staging` entrem na biblioteca como jogos locais. A mudanca ficou concentrada em `is_helper_directory()` e ganhou teste dedicado sem quebrar os casos legitimos de jogo local com executavel e subpastas validas. Validacao passada: `cargo test`.
+
+Atualizacao em 2026-05-19: a limpeza do Xbox passou a considerar o alvo de lancamento persistido para arquivar falsos positivos antigos que ainda tinham acao executavel de desktop local. O provider continua aceitando Appx/Xbox reais, mas agora consegue remover entradas persistidas claramente ligadas a binarios locais quando a descoberta volta a rodar. Foram adicionados testes Rust para arquivamento de falso positivo desktop local e preservacao de um alvo Appx real. Validacao passada: `cargo test` com 92 testes.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.
@@ -212,9 +218,12 @@ A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco
 4. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento anterior, mas ainda e uma margem apertada.
 5. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
 6. Xbox/Game Pass local ja entrou como provider experimental no Windows: o app descobre jogos instalados via inventario local, abre o jogo com `explorer.exe` + `shell:AppsFolder` quando instalado e usa Microsoft Store quando nao instalado. A heuristica foi refinada para cobrir melhor pacotes reais sem reabrir helpers do Windows/Xbox. Achievements/title history continuam apenas como sinal auxiliar, nunca ownership.
+7. Implementar o fluxo real de autenticacao Xbox Live/XUID para destravar a importacao de title history por achievements, mantendo o contrato de seguranca e sem expor credenciais.
+8. Se o fluxo de autenticacao ainda nao for prioridade, melhorar a UX do erro de importacao Xbox para deixar mais claro ao usuario por que a operacao esta indisponivel e o que ele precisa configurar.
    A descoberta local tambem recebe explicitamente jogos de desktop populares como `osu!`, que aparecem como `local` e nao como `xbox`.
 7. Em paralelo ou logo depois, fazer o corte inicial de Epic Games com foco em viabilidade e limites de API/compliance antes de qualquer fluxo de conta.
 8. Depois das novas plataformas, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e ajustar a UI para suportar listas mais longas.
 9. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch, usando a base de contratos ja existente.
 10. Manter a tela de contas e a Steam em modo de manutenção incremental, priorizando regressao e pequenos refinamentos apenas quando surgirem gaps claros.
+11. O proximo ajuste do projeto e reduzir o tempo de abertura do aplicativo, porque o Tauri esta demorando demais para mostrar a interface completa.
 

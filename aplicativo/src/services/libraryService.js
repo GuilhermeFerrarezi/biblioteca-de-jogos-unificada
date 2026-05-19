@@ -236,6 +236,14 @@ export const syncXboxGames = async () => {
   return invoke('sync_xbox_games')
 }
 
+export const syncXboxAchievementGames = async () => {
+  if (!hasTauriRuntime()) {
+    return null
+  }
+
+  return invoke('sync_xbox_achievement_games')
+}
+
 export const syncSteamAccountGames = async () => {
   if (!hasTauriRuntime()) {
     return null
@@ -250,6 +258,14 @@ export const getSteamAccountConfig = async () => {
   }
 
   return invoke('get_steam_account_config')
+}
+
+export const getXboxAccountConfig = async () => {
+  if (!hasTauriRuntime()) {
+    return { connected: false, xuid: null }
+  }
+
+  return invoke('get_xbox_account_config')
 }
 
 export const getSteamLibraryRoots = async () => {

@@ -38,10 +38,12 @@ function LibraryPage() {
             isSteamSyncing={library.isSteamSyncing}
             isXboxSyncing={library.isXboxSyncing}
             preferredStoreId={library.preferredStoreId}
+            xboxIdentityStatus={library.xboxIdentityStatus}
             onBackToLibrary={() => setActiveSection('library')}
             onPreferredStoreChange={library.handlePreferredStoreChange}
             onSyncSteamAccountGames={library.handleSyncSteamAccountGames}
             onSyncSteamGames={library.handleSyncSteamGames}
+            onSyncXboxTitleHistory={library.handleSyncXboxTitleHistory}
             onSyncXboxGames={library.handleSyncXboxGames}
           />
         ) : (

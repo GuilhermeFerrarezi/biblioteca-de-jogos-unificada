@@ -2,6 +2,7 @@ import { listen } from '@tauri-apps/api/event'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addPersistedManualGame,
+  getXboxAccountConfig,
   launchLibraryEntry,
   listLibraryEntries,
   getLibrarySettings,
@@ -11,6 +12,7 @@ import {
   syncSteamAccountGames,
   syncLocalGames,
   syncSteamGames,
+  syncXboxAchievementGames,
   syncXboxGames,
   updatePersistedManualGame,
 } from '../services/libraryService'
@@ -34,6 +36,7 @@ import { useLibraryFiltering } from './useLibraryFiltering'
 
 const LIBRARY_BOOTSTRAP_COMPLETE_EVENT = 'library-bootstrap-complete'
 const XBOX_SYNC_FAILED_EVENT = 'xbox-sync-failed'
+const XBOX_ACHIEVEMENTS_SYNC_FAILED_EVENT = 'xbox-achievements-sync-failed'
 
 const hasTauriRuntime = () =>
   typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
@@ -52,6 +55,10 @@ export function useLibraryPageState() {
   const [isSteamSyncing, setIsSteamSyncing] = useState(false)
   const [isXboxSyncing, setIsXboxSyncing] = useState(false)
   const [isSteamAccountSyncing, setIsSteamAccountSyncing] = useState(false)
+  const [xboxIdentityStatus, setXboxIdentityStatus] = useState({
+    connected: false,
+    xuid: null,
+  })
   const [preferredStoreId, setPreferredStoreId] = useState('steam')
   const [selectedLaunchPlatformByEntryId, setSelectedLaunchPlatformByEntryId] = useState({})
   const [isLibrarySettingsLoading, setIsLibrarySettingsLoading] = useState(true)
@@ -104,8 +111,41 @@ export function useLibraryPageState() {
 
   useEffect(() => {
     let isMounted = true
+
+    const loadXboxIdentityStatus = async () => {
+      try {
+        const status = await getXboxAccountConfig()
+
+        if (!isMounted) {
+          return
+        }
+
+        setXboxIdentityStatus({
+          connected: Boolean(status?.connected),
+          xuid: typeof status?.xuid === 'string' && status.xuid.trim() ? status.xuid.trim() : null,
+        })
+      } catch {
+        if (isMounted) {
+          setXboxIdentityStatus({
+            connected: false,
+            xuid: null,
+          })
+        }
+      }
+    }
+
+    void loadXboxIdentityStatus()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isMounted = true
     let unlistenBootstrapComplete = null
     let unlistenXboxSyncFailed = null
+    let unlistenXboxAchievementsSyncFailed = null
     let bootstrapTimeoutId = hasTauriRuntime()
       ? window.setTimeout(() => {
           if (isMounted) {
@@ -202,8 +242,38 @@ export function useLibraryPageState() {
       }
     }
 
+    const registerXboxAchievementsSyncFailureListener = async () => {
+      if (!hasTauriRuntime()) {
+        return
+      }
+
+      try {
+        unlistenXboxAchievementsSyncFailed = await listen(
+          XBOX_ACHIEVEMENTS_SYNC_FAILED_EVENT,
+          (event) => {
+            if (!isMounted) {
+              return
+            }
+
+            const feedback = normalizeProviderErrorFeedback(
+              event?.payload,
+              'Nao foi possivel importar os titulos com progresso do Xbox.',
+              'Importacao de titulos Xbox',
+            )
+            setLaunchMessage(feedback.message)
+            setLaunchFeedback(feedback)
+          },
+        )
+      } catch {
+        if (isMounted) {
+          setLaunchFeedback(null)
+        }
+      }
+    }
+
     void registerBootstrapListener()
     void registerXboxSyncFailureListener()
+    void registerXboxAchievementsSyncFailureListener()
     syncLibraryEntries()
       .catch(() => {
         if (isMounted) {
@@ -227,6 +297,9 @@ export function useLibraryPageState() {
       }
       if (unlistenXboxSyncFailed) {
         void unlistenXboxSyncFailed()
+      }
+      if (unlistenXboxAchievementsSyncFailed) {
+        void unlistenXboxAchievementsSyncFailed()
       }
     }
   }, [])
@@ -509,6 +582,36 @@ export function useLibraryPageState() {
     }
   }
 
+  const handleSyncXboxTitleHistory = async () => {
+    setLaunchMessage('Importando titulos do historico do Xbox...')
+    setLaunchFeedback(null)
+
+    try {
+      const summary = await syncXboxAchievementGames()
+
+      if (!summary) {
+        setLaunchMessage('Importacao de titulos do Xbox disponivel apenas no aplicativo Tauri.')
+        setLaunchFeedback(null)
+        return
+      }
+
+      await refreshEntries()
+      setLaunchMessage(
+        `Importacao de titulos do Xbox concluida: ${summary.inserted} novos, ${summary.updated} atualizados, ${summary.archived ?? 0} arquivados e ${summary.unavailable ?? 0} indisponiveis em ${summary.discovered} titulos encontrados.`,
+      )
+      setLaunchFeedback(null)
+    } catch (error) {
+      const feedback = normalizeProviderErrorFeedback(
+        error,
+        'Nao foi possivel importar os titulos do Xbox.',
+        'Importacao de titulos Xbox',
+      )
+      setLaunchMessage(feedback.message)
+      setLaunchFeedback(feedback)
+      throw feedback
+    }
+  }
+
   const handleSyncSteamAccountGames = async () => {
     if (isSteamAccountSyncing || isSteamSyncing) {
       return
@@ -741,7 +844,9 @@ export function useLibraryPageState() {
     handleSelectEntry,
     handleSyncLocalGames,
     handleSyncSteamGames,
+    handleSyncXboxTitleHistory,
     handleSyncXboxGames,
     handleSyncSteamAccountGames,
+    xboxIdentityStatus,
   }
 }

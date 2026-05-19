@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   Clock3,
@@ -8,9 +9,11 @@ import {
   FolderOpen,
   KeyRound,
   LogIn,
+  RefreshCw,
   Save,
   Store,
   Trash2,
+  X,
 } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -57,7 +60,7 @@ const accountProviders = Object.freeze([
     icon: XboxIcon,
     state: 'Descoberta local',
     tone: 'ready',
-    detail: 'Instalados entram no app. Achievements sao apenas indicio auxiliar.',
+    detail: 'Instalados entram no app. O historico de titulos pode revelar jogos com progresso antes da descoberta local.',
     nextStep: 'Nao instalado: abrir Microsoft Store.',
   },
   {
@@ -81,6 +84,22 @@ const normalizeSteamApiKeyStatus = (status) => {
   }
 
   return Boolean(status.configured)
+}
+
+const normalizeXboxIdentityStatus = (status) => {
+  if (typeof status === 'boolean') {
+    return status
+  }
+
+  if (!status || typeof status !== 'object') {
+    return false
+  }
+
+  if (typeof status.configured === 'boolean') {
+    return status.configured
+  }
+
+  return Boolean(status.xuid || status.identityId || status.gamertag)
 }
 
 const validateSteamApiKeyInput = (apiKey) => {
@@ -193,8 +212,10 @@ function AccountsSettingsPage({
   isSteamSyncing,
   isXboxSyncing,
   preferredStoreId,
+  xboxIdentityStatus,
   onBackToLibrary,
   onPreferredStoreChange,
+  onSyncXboxTitleHistory,
   onSyncSteamAccountGames,
   onSyncSteamGames,
   onSyncXboxGames,
@@ -217,10 +238,18 @@ function AccountsSettingsPage({
   const [isSteamApiKeyDeleting, setIsSteamApiKeyDeleting] = useState(false)
   const [isSteamLibraryRootsLoading, setIsSteamLibraryRootsLoading] = useState(true)
   const [isSteamLibraryRootsSaving, setIsSteamLibraryRootsSaving] = useState(false)
+  const [isXboxTitleHistoryModalOpen, setIsXboxTitleHistoryModalOpen] = useState(false)
+  const [isXboxTitleHistoryScanning, setIsXboxTitleHistoryScanning] = useState(false)
+  const [xboxTitleHistoryError, setXboxTitleHistoryError] = useState(null)
+  const [xboxTitleHistoryStatusMessage, setXboxTitleHistoryStatusMessage] = useState('')
 
   const steamPanelRef = useRef(null)
   const steamToggleRef = useRef(null)
   const previousSteamPanelOpen = useRef(isSteamPanelOpen)
+  const xboxIdentityConfigured = normalizeXboxIdentityStatus(xboxIdentityStatus)
+  const xboxTitleHistoryHint = xboxIdentityConfigured
+    ? 'O historico de achievements mostra progresso, nao posse. Os titulos importados abrem a Microsoft Store antes do sync local.'
+    : 'Requer Xbox/XUID configurado para importar titulos.'
 
   const steamApiKeyStatusLabel = useMemo(() => {
     if (!steamApiKeyConfigured) {
@@ -239,6 +268,12 @@ function AccountsSettingsPage({
     : !isSteamAccountConnected
       ? 'Conecte a conta Steam para sincronizar.'
       : steamId64Error || ''
+  const canSyncXboxTitleHistory = xboxIdentityConfigured && typeof onSyncXboxTitleHistory === 'function'
+  const xboxTitleHistoryDisabledReason = !xboxIdentityConfigured
+    ? 'Conecte a identidade Xbox/XUID antes de importar titulos.'
+    : typeof onSyncXboxTitleHistory !== 'function'
+      ? 'Importacao de titulos ainda nao conectada ao backend.'
+      : ''
 
   useEffect(() => {
     let isMounted = true
@@ -684,6 +719,61 @@ function AccountsSettingsPage({
     setIsSteamPanelOpen((currentValue) => !currentValue)
   }
 
+  const handleXboxTitleHistoryModalOpen = () => {
+    if (!canSyncXboxTitleHistory) {
+      setXboxTitleHistoryError(
+        normalizeProviderErrorFeedback(
+          null,
+          xboxTitleHistoryDisabledReason || 'Importacao de titulos indisponivel no momento.',
+          'Importacao de titulos Xbox',
+        ),
+      )
+      setXboxTitleHistoryStatusMessage('')
+      return
+    }
+
+    setXboxTitleHistoryError(null)
+    setXboxTitleHistoryStatusMessage('')
+    setIsXboxTitleHistoryModalOpen(true)
+  }
+
+  const handleXboxTitleHistoryModalClose = () => {
+    if (isXboxTitleHistoryScanning) {
+      return
+    }
+
+    setIsXboxTitleHistoryModalOpen(false)
+  }
+
+  const handleXboxTitleHistoryConfirm = async () => {
+    if (!canSyncXboxTitleHistory || isXboxTitleHistoryScanning) {
+      return
+    }
+
+    setIsXboxTitleHistoryScanning(true)
+    setXboxTitleHistoryError(null)
+    setXboxTitleHistoryStatusMessage('Importando titulos descobertos pelo historico do Xbox.')
+
+    try {
+      await onSyncXboxTitleHistory()
+      setXboxTitleHistoryStatusMessage(
+        'Importacao concluida. As entradas novas devem abrir a Microsoft Store ao serem acionadas.',
+      )
+      setIsXboxTitleHistoryModalOpen(false)
+    } catch (error) {
+      setXboxTitleHistoryError(
+        normalizeProviderErrorFeedback(
+          error,
+          'Nao foi possivel importar os titulos do Xbox.',
+          'Importacao de titulos Xbox',
+        ),
+      )
+      setXboxTitleHistoryStatusMessage('')
+    } finally {
+      setIsXboxTitleHistoryScanning(false)
+    }
+  }
+
   return (
     <section className="accounts-page" aria-labelledby="accounts-title">
       <header className="topbar accounts-topbar">
@@ -707,7 +797,13 @@ function AccountsSettingsPage({
               isSteamLoginStarting={isSteamLoginStarting}
               isSteamPanelOpen={isSteamPanelOpen}
               isSteamSyncing={isSteamSyncing}
+              isXboxIdentityConfigured={xboxIdentityConfigured}
+              isXboxTitleHistoryScanning={isXboxTitleHistoryScanning}
               isXboxSyncing={isXboxSyncing}
+              xboxTitleHistoryErrorFeedback={xboxTitleHistoryError}
+              xboxTitleHistoryDisabledReason={xboxTitleHistoryDisabledReason}
+              xboxTitleHistoryHint={xboxTitleHistoryHint}
+              xboxTitleHistoryStatusMessage={xboxTitleHistoryStatusMessage}
               key={provider.id}
               panelContent={
                 provider.id === 'steam' && isSteamPanelOpen ? (
@@ -754,6 +850,7 @@ function AccountsSettingsPage({
               provider={provider}
               steamPanelContentId={steamPanelContentId}
               steamToggleRef={steamToggleRef}
+              onOpenXboxTitleHistoryModal={handleXboxTitleHistoryModalOpen}
               onSyncXboxGames={onSyncXboxGames}
               onToggleSteamPanel={handleSteamPanelToggle}
             />
@@ -790,6 +887,17 @@ function AccountsSettingsPage({
           ) : null}
         </aside>
       </div>
+
+      {isXboxTitleHistoryModalOpen ? (
+        <XboxTitleHistoryModal
+          errorFeedback={xboxTitleHistoryError}
+          isBusy={isXboxTitleHistoryScanning}
+          isConfigured={xboxIdentityConfigured}
+          statusMessage={xboxTitleHistoryStatusMessage}
+          onClose={handleXboxTitleHistoryModalClose}
+          onConfirm={handleXboxTitleHistoryConfirm}
+        />
+      ) : null}
     </section>
   )
 }
@@ -1152,8 +1260,15 @@ function ProviderAccountRow({
   isSteamAccountSyncing,
   isSteamPanelOpen,
   isSteamSyncing,
+  isXboxIdentityConfigured,
+  isXboxTitleHistoryScanning,
   isXboxSyncing,
+  xboxTitleHistoryErrorFeedback,
+  xboxTitleHistoryDisabledReason,
+  xboxTitleHistoryHint,
+  xboxTitleHistoryStatusMessage,
   onSyncXboxGames,
+  onOpenXboxTitleHistoryModal,
   onToggleSteamPanel,
   panelContent,
   provider,
@@ -1199,9 +1314,39 @@ function ProviderAccountRow({
           <ChevronDown size={18} aria-hidden="true" className={isSteamPanelOpen ? 'expand-icon open' : 'expand-icon'} />
         </button>
       ) : isXbox ? (
-        <button className="secondary-button" type="button" disabled={isXboxSyncing} onClick={onSyncXboxGames}>
-          {isXboxSyncing ? 'Sincronizando Xbox' : 'Sincronizar local'}
-        </button>
+        <div className="account-actions account-actions--xbox">
+          <button className="secondary-button" type="button" disabled={isXboxSyncing} onClick={onSyncXboxGames}>
+            {isXboxSyncing ? 'Sincronizando Xbox' : 'Sincronizar local'}
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={!isXboxIdentityConfigured || isXboxTitleHistoryScanning}
+            aria-describedby="xbox-title-history-hint"
+            aria-label={xboxTitleHistoryDisabledReason || 'Abrir confirmacao para importar titulos do Xbox'}
+            onClick={onOpenXboxTitleHistoryModal}
+          >
+            {isXboxTitleHistoryScanning ? (
+              <>
+                <RefreshCw size={16} aria-hidden="true" className="spin-icon" />
+                Importando titulos
+              </>
+            ) : (
+              'Importar titulos'
+            )}
+          </button>
+          <span id="xbox-title-history-hint" className="account-action-hint">
+            {xboxTitleHistoryHint}
+          </span>
+          {xboxTitleHistoryErrorFeedback || xboxTitleHistoryStatusMessage ? (
+            <ProviderFeedback
+              defaultMessage="Confirme o aviso para importar titulos do Xbox."
+              errorFeedback={xboxTitleHistoryErrorFeedback}
+              id="xbox-title-history-row-feedback"
+              statusMessage={xboxTitleHistoryStatusMessage}
+            />
+          ) : null}
+        </div>
       ) : (
         <button className="secondary-button" type="button" disabled={isPlanned}>
           Em breve
@@ -1210,6 +1355,140 @@ function ProviderAccountRow({
 
       {panelContent}
     </article>
+  )
+}
+
+function XboxTitleHistoryModal({ errorFeedback, isBusy, isConfigured, onClose, onConfirm, statusMessage }) {
+  const panelRef = useRef(null)
+  const closeButtonRef = useRef(null)
+  const previouslyFocusedRef = useRef(null)
+
+  useEffect(() => {
+    previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+
+    const focusFirstElement = () => {
+      const focusableElements = panelRef.current?.querySelectorAll(
+        'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+      )
+      const firstFocusable = focusableElements?.[0] ?? closeButtonRef.current
+
+      if (firstFocusable instanceof HTMLElement) {
+        firstFocusable.focus()
+      }
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+
+      if (event.key !== 'Tab') {
+        return
+      }
+
+      const focusableElements = Array.from(
+        panelRef.current?.querySelectorAll(
+          'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element instanceof HTMLElement)
+
+      if (focusableElements.length === 0) {
+        return
+      }
+
+      const firstFocusable = focusableElements[0]
+      const lastFocusable = focusableElements[focusableElements.length - 1]
+
+      if (event.shiftKey && document.activeElement === firstFocusable) {
+        event.preventDefault()
+        lastFocusable.focus()
+        return
+      }
+
+      if (!event.shiftKey && document.activeElement === lastFocusable) {
+        event.preventDefault()
+        firstFocusable.focus()
+      }
+    }
+
+    const focusTimeoutId = window.setTimeout(focusFirstElement, 0)
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.clearTimeout(focusTimeoutId)
+      window.removeEventListener('keydown', handleKeyDown)
+      previouslyFocusedRef.current?.focus?.()
+    }
+  }, [onClose])
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        ref={panelRef}
+        className="modal-panel xbox-title-history-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="xbox-title-history-title"
+      >
+        <header className="modal-header">
+          <div>
+            <span>Xbox / Game Pass</span>
+            <h2 id="xbox-title-history-title">Importar titulos com progresso</h2>
+          </div>
+          <button
+            ref={closeButtonRef}
+            className="icon-button"
+            type="button"
+            aria-label="Fechar importacao de titulos do Xbox"
+            title="Fechar"
+            onClick={onClose}
+            disabled={isBusy}
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="xbox-title-history-content">
+          <p className="xbox-title-history-intro">
+            Esta leitura pega os titulos em que o usuario ja tem progresso em achievements e os adiciona a biblioteca,
+            mesmo antes da descoberta local do Xbox encontrar a instalacao. Isso nao confirma posse do jogo.
+          </p>
+
+          <div className="xbox-title-history-warning" role="note" aria-label="Aviso sobre Microsoft Store">
+            <AlertTriangle size={18} aria-hidden="true" />
+            <p>
+              As entradas importadas devem abrir na pagina do jogo na Microsoft Store. Instale por la e depois use
+              <strong> Sincronizar local</strong> para o Xbox reconhecer o jogo instalado.
+            </p>
+          </div>
+
+          <ul className="xbox-title-history-list">
+            <li>Importa apenas titulos que aparecem no historico de progresso.</li>
+            <li>Historico de achievements nao e prova de posse ou licenca do jogo.</li>
+            <li>Mantem a descoberta local do Xbox separada do sync de instalados.</li>
+            <li>Nao altera o comportamento atual do botao <strong>Sincronizar local</strong>.</li>
+          </ul>
+
+          <ProviderFeedback
+            defaultMessage="Confirme o aviso antes de iniciar a importacao."
+            errorFeedback={errorFeedback}
+            id="xbox-title-history-feedback"
+            statusMessage={statusMessage}
+          />
+        </div>
+
+        <div className="modal-actions">
+          <button className="secondary-button" type="button" disabled={isBusy} onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="primary-button" type="button" disabled={isBusy || !isConfigured} onClick={onConfirm}>
+            {isBusy ? 'Importando' : 'Confirmar importacao'}
+          </button>
+        </div>
+      </section>
+    </div>
   )
 }
 

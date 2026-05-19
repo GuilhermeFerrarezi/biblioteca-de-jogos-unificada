@@ -3,6 +3,8 @@ use tauri::{Emitter, Manager};
 const LIBRARY_BOOTSTRAP_COMPLETE_EVENT: &str = "library-bootstrap-complete";
 const STEAM_SYNC_FAILED_EVENT: &str = "steam-sync-failed";
 const XBOX_SYNC_FAILED_EVENT: &str = "xbox-sync-failed";
+const XBOX_ACHIEVEMENTS_SYNC_FAILED_EVENT: &str = "xbox-achievements-sync-failed";
+const XBOX_TITLE_HISTORY_IMPORT_FAILED_EVENT: &str = "xbox-title-history-import-failed";
 
 mod xbox_provider;
 
@@ -47,6 +49,8 @@ pub fn run() {
             commands::sync_local_games,
             commands::sync_steam_games,
             commands::sync_xbox_games,
+            commands::sync_xbox_achievement_games,
+            commands::import_xbox_achievement_title_history,
             commands::sync_steam_account_games,
             commands::get_steam_account_config,
             commands::get_steam_library_roots,
@@ -230,6 +234,66 @@ mod commands {
                 provider_error.details_sanitized
             );
             let _ = app.emit(super::XBOX_SYNC_FAILED_EVENT, provider_error.clone());
+            provider_error_json
+        })
+    }
+
+    #[tauri::command]
+    pub fn sync_xbox_achievement_games(
+        app: AppHandle,
+        state: State<'_, AppState>,
+    ) -> Result<storage::SyncSummaryDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        xbox_provider::sync_xbox_achievement_games(&mut connection).map_err(|error| {
+            let provider_error = error.into_provider_error();
+            let provider_error_json = serde_json::to_string(&provider_error)
+                .unwrap_or_else(|_| provider_error.message.clone());
+            log::warn!(
+                "xbox achievements sync failed: code={} phase={} recoverable={} provider_id={} details_sanitized={:?}",
+                provider_error.code,
+                provider_error.phase,
+                provider_error.recoverable,
+                provider_error.provider_id,
+                provider_error.details_sanitized
+            );
+            let _ = app.emit(
+                super::XBOX_ACHIEVEMENTS_SYNC_FAILED_EVENT,
+                provider_error.clone(),
+            );
+            provider_error_json
+        })
+    }
+
+    #[tauri::command]
+    pub fn import_xbox_achievement_title_history(
+        app: AppHandle,
+        state: State<'_, AppState>,
+    ) -> Result<storage::SyncSummaryDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        xbox_provider::import_xbox_achievement_title_history(&mut connection).map_err(|error| {
+            let provider_error = error.into_provider_error();
+            let provider_error_json = serde_json::to_string(&provider_error)
+                .unwrap_or_else(|_| provider_error.message.clone());
+            log::warn!(
+                "xbox title history import failed: code={} phase={} recoverable={} provider_id={} details_sanitized={:?}",
+                provider_error.code,
+                provider_error.phase,
+                provider_error.recoverable,
+                provider_error.provider_id,
+                provider_error.details_sanitized
+            );
+            let _ = app.emit(
+                super::XBOX_TITLE_HISTORY_IMPORT_FAILED_EVENT,
+                provider_error.clone(),
+            );
             provider_error_json
         })
     }
@@ -2577,6 +2641,20 @@ mod storage {
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct XboxAccountConfigInput {
+        xuid: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct XboxAccountConfigDto {
+        provider_id: &'static str,
+        connected: bool,
+        xuid: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct SteamLibraryRootsInput {
         roots: Vec<String>,
     }
@@ -2608,6 +2686,14 @@ mod storage {
         Ok(steam_account_config_dto(steam_id64))
     }
 
+    pub fn get_xbox_account_config(
+        connection: &Connection,
+    ) -> rusqlite::Result<XboxAccountConfigDto> {
+        let xuid = read_xbox_account_config(connection)?;
+
+        Ok(xbox_account_config_dto(xuid))
+    }
+
     pub fn save_steam_account_config(
         connection: &mut Connection,
         input: SteamAccountConfigInput,
@@ -2617,6 +2703,16 @@ mod storage {
         save_verified_steam_account_config(connection, &steam_id64)?;
 
         Ok(steam_account_config_dto(Some(steam_id64)))
+    }
+
+    pub fn save_xbox_account_config(
+        connection: &mut Connection,
+        input: XboxAccountConfigInput,
+    ) -> rusqlite::Result<XboxAccountConfigDto> {
+        let xuid = normalize_xuid(&input.xuid).ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+        save_verified_xbox_account_config(connection, &xuid)?;
+
+        Ok(xbox_account_config_dto(Some(xuid)))
     }
 
     pub fn get_steam_library_roots(
@@ -2806,11 +2902,89 @@ mod storage {
         Ok(())
     }
 
+    pub fn record_xbox_achievement_sync_metadata(
+        connection: &mut Connection,
+        xuid: &str,
+        discovered_titles_count: usize,
+        summary: &SyncSummaryDto,
+    ) -> rusqlite::Result<()> {
+        let transaction = connection.transaction()?;
+        let existing_config_json = transaction
+            .query_row(
+                r#"
+                SELECT config_json
+                FROM provider_account_configs
+                WHERE provider_id = 'xbox'
+                "#,
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        let mut config = existing_config_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let sync_summary = serde_json::json!({
+            "discovered": summary.discovered,
+            "inserted": summary.inserted,
+            "updated": summary.updated,
+            "archived": summary.archived,
+            "unavailable": summary.unavailable,
+        });
+
+        config.insert(
+            "xuid".to_string(),
+            serde_json::Value::String(xuid.to_string()),
+        );
+        if !config.contains_key("linkedBy") {
+            config.insert(
+                "linkedBy".to_string(),
+                serde_json::Value::String("xbox_achievements".to_string()),
+            );
+        }
+        config.insert(
+            "lastAchievementsSyncAt".to_string(),
+            serde_json::Value::String(now_iso()),
+        );
+        config.insert(
+            "lastAchievementsCount".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(discovered_titles_count as u64)),
+        );
+        config.insert("lastAchievementsSummary".to_string(), sync_summary);
+
+        transaction.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id, account_id, config_json, updated_at
+            )
+            VALUES ('xbox', ?1, ?2, ?3)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              account_id = excluded.account_id,
+              config_json = excluded.config_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![xuid, serde_json::Value::Object(config).to_string(), now_iso()],
+        )?;
+        transaction.commit()?;
+
+        Ok(())
+    }
+
     fn steam_account_config_dto(steam_id64: Option<String>) -> SteamAccountConfigDto {
         SteamAccountConfigDto {
             provider_id: "steam",
             connected: steam_id64.is_some(),
             steam_id64,
+        }
+    }
+
+    fn xbox_account_config_dto(xuid: Option<String>) -> XboxAccountConfigDto {
+        XboxAccountConfigDto {
+            provider_id: "xbox",
+            connected: xuid.is_some(),
+            xuid,
         }
     }
 
@@ -2953,7 +3127,9 @@ mod storage {
                 continue;
             }
 
-            if let Some(value) = read_provider_account_config_value(connection, &columns, column)? {
+            if let Some(value) =
+                read_provider_account_config_value(connection, &columns, "steam", column)?
+            {
                 if let Some(steam_id) = normalize_steam_id64(&value) {
                     return Ok(Some(steam_id));
                 }
@@ -2965,7 +3141,9 @@ mod storage {
                 continue;
             }
 
-            if let Some(value) = read_provider_account_config_value(connection, &columns, column)? {
+            if let Some(value) =
+                read_provider_account_config_value(connection, &columns, "steam", column)?
+            {
                 if let Some(steam_id) = steam_id64_from_config_json(&value) {
                     return Ok(Some(steam_id));
                 }
@@ -2973,6 +3151,97 @@ mod storage {
         }
 
         Ok(None)
+    }
+
+    pub fn read_xbox_account_config(connection: &Connection) -> rusqlite::Result<Option<String>> {
+        let columns = table_columns(connection, "provider_account_configs")?;
+        if columns.is_empty() {
+            return Ok(None);
+        }
+
+        for column in ["account_id", "xuid", "xuid64"] {
+            if !columns.iter().any(|existing| existing == column) {
+                continue;
+            }
+
+            if let Some(value) =
+                read_provider_account_config_value(connection, &columns, "xbox", column)?
+            {
+                if let Some(xuid) = normalize_xuid(&value) {
+                    return Ok(Some(xuid));
+                }
+            }
+        }
+
+        for column in ["config_json", "config"] {
+            if !columns.iter().any(|existing| existing == column) {
+                continue;
+            }
+
+            if let Some(value) =
+                read_provider_account_config_value(connection, &columns, "xbox", column)?
+            {
+                if let Some(xuid) = xuid_from_config_json(&value) {
+                    return Ok(Some(xuid));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub fn save_verified_xbox_account_config(
+        connection: &mut Connection,
+        xuid: &str,
+    ) -> rusqlite::Result<()> {
+        let xuid = normalize_xuid(xuid).ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+        let transaction = connection.transaction()?;
+        let existing_config_json = transaction
+            .query_row(
+                r#"
+                SELECT config_json
+                FROM provider_account_configs
+                WHERE provider_id = 'xbox'
+                "#,
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        let mut config = existing_config_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+
+        config.insert(
+            "xuid".to_string(),
+            serde_json::Value::String(xuid.clone()),
+        );
+        config.insert(
+            "linkedBy".to_string(),
+            serde_json::Value::String("xbox_manual_config".to_string()),
+        );
+
+        transaction.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id,
+              account_id,
+              config_json,
+              updated_at
+            )
+            VALUES ('xbox', ?1, ?2, ?3)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              account_id = excluded.account_id,
+              config_json = excluded.config_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![xuid, serde_json::Value::Object(config).to_string(), now_iso()],
+        )?;
+        transaction.commit()?;
+
+        Ok(())
     }
 
     #[derive(Debug, Serialize)]
@@ -3579,6 +3848,7 @@ mod storage {
     fn read_provider_account_config_value(
         connection: &Connection,
         columns: &[String],
+        provider_id: &str,
         value_column: &str,
     ) -> rusqlite::Result<Option<String>> {
         let filter_column = if columns.iter().any(|column| column == "provider_id") {
@@ -3595,7 +3865,7 @@ mod storage {
         };
         let query = if let Some(filter_column) = filter_column {
             format!(
-                "SELECT {value_column} FROM provider_account_configs WHERE {filter_column} = 'steam' AND {value_column} IS NOT NULL{order_clause} LIMIT 1"
+                "SELECT {value_column} FROM provider_account_configs WHERE {filter_column} = ?1 AND {value_column} IS NOT NULL{order_clause} LIMIT 1"
             )
         } else {
             format!(
@@ -3603,9 +3873,15 @@ mod storage {
             )
         };
 
-        connection
-            .query_row(&query, [], |row| row.get::<_, String>(0))
-            .optional()
+        if filter_column.is_some() {
+            connection
+                .query_row(&query, params![provider_id], |row| row.get::<_, String>(0))
+                .optional()
+        } else {
+            connection
+                .query_row(&query, [], |row| row.get::<_, String>(0))
+                .optional()
+        }
     }
 
     fn normalize_steam_id64(value: &str) -> Option<String> {
@@ -3616,6 +3892,24 @@ mod storage {
         } else {
             None
         }
+    }
+
+    fn normalize_xuid(value: &str) -> Option<String> {
+        let value = value.trim();
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+
+        value.parse::<u64>().ok().map(|value| value.to_string())
+    }
+
+    fn xuid_from_config_json(value: &str) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_str(value).ok()?;
+
+        ["xuid", "xUid", "accountId", "account_id"]
+            .into_iter()
+            .find_map(|key| value.get(key).and_then(|value| value.as_str()))
+            .and_then(normalize_xuid)
     }
 
     fn steam_id64_from_config_json(value: &str) -> Option<String> {
@@ -4554,12 +4848,22 @@ mod storage {
     }
 
     fn is_helper_directory(path: &Path) -> bool {
-        let normalized_path = path
+        let normalized_components = path
             .components()
             .filter_map(|component| component.as_os_str().to_str())
             .map(normalize_name)
-            .collect::<Vec<_>>()
-            .join("/");
+            .collect::<Vec<_>>();
+
+        if normalized_components.iter().any(|component| {
+            matches!(
+                component.as_str(),
+                "staging" | "build" | "helper" | "helpers"
+            )
+        }) {
+            return true;
+        }
+
+        let normalized_path = normalized_components.join("/");
 
         [
             "setup",
@@ -6088,6 +6392,83 @@ mod storage {
         }
 
         #[test]
+        fn save_verified_xbox_account_config_preserves_sync_metadata() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+
+            save_verified_xbox_account_config(&mut connection, "2533274791234567")
+                .expect("save xbox account");
+            record_xbox_achievement_sync_metadata(
+                &mut connection,
+                "2533274791234567",
+                2,
+                &SyncSummaryDto {
+                    discovered: 2,
+                    inserted: 1,
+                    updated: 1,
+                    archived: 0,
+                    unavailable: 0,
+                },
+            )
+            .expect("record xbox metadata");
+
+            let config_json: String = connection
+                .query_row(
+                    "SELECT config_json FROM provider_account_configs WHERE provider_id = 'xbox'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("read xbox config json");
+
+            assert!(config_json.contains("\"xuid\":\"2533274791234567\""));
+            assert!(config_json.contains("\"lastAchievementsSyncAt\""));
+            assert!(config_json.contains("\"lastAchievementsSummary\""));
+            assert!(config_json.contains("\"linkedBy\":\"xbox_manual_config\""));
+        }
+
+        #[test]
+        fn read_xbox_account_config_accepts_direct_column_and_json() {
+            let connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            ensure_provider_account_configs_table(&connection).expect("ensure account config");
+
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO provider_account_configs (
+                      provider_id, account_id, config_json, updated_at
+                    ) VALUES ('xbox', '2533274791234567', NULL, ?1)
+                    "#,
+                    params![now_iso()],
+                )
+                .expect("insert direct xbox xuid");
+
+            assert_eq!(
+                read_xbox_account_config(&connection).expect("read direct xbox xuid"),
+                Some("2533274791234567".to_string())
+            );
+
+            connection
+                .execute("DELETE FROM provider_account_configs", [])
+                .expect("clear xbox config");
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO provider_account_configs (
+                      provider_id, account_id, config_json, updated_at
+                    ) VALUES ('xbox', NULL, '{"xuid":"2533274791234568"}', ?1)
+                    "#,
+                    params![now_iso()],
+                )
+                .expect("insert json xbox xuid");
+
+            assert_eq!(
+                read_xbox_account_config(&connection).expect("read json xbox xuid"),
+                Some("2533274791234568".to_string())
+            );
+        }
+
+        #[test]
         fn sync_steam_account_games_imports_remote_games_as_not_installed() {
             let mut connection = Connection::open_in_memory().expect("open in-memory database");
             migrate(&connection).expect("apply migration");
@@ -6378,6 +6759,49 @@ mod storage {
             );
 
             let _ = std::fs::remove_file(executable);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_skips_staging_helper_directories() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-helper-regression-root-{}",
+                timestamp_millis()
+            ));
+            let staging_dir = root.join("_staging");
+            let staging_exe = staging_dir.join("Build.exe");
+            let game_dir = root.join("Skybound");
+            let game_exe = game_dir.join("Skybound.exe");
+
+            std::fs::create_dir_all(&staging_dir).expect("create staging dir");
+            std::fs::create_dir_all(&game_dir).expect("create game dir");
+            std::fs::write(&staging_exe, b"fake exe").expect("create staging exe");
+            std::fs::write(&game_exe, b"fake exe").expect("create game exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-helper-regression-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            let summary = sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+            let entries = list_library_entries(&connection).expect("list local entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].game.title, "Skybound");
+            assert_eq!(
+                entries[0].game.launch_actions[0].target,
+                game_exe.to_string_lossy()
+            );
+
+            let _ = std::fs::remove_file(staging_exe);
+            let _ = std::fs::remove_file(game_exe);
             let _ = std::fs::remove_dir_all(root);
             let _ = std::fs::remove_file(path);
         }

@@ -498,20 +498,50 @@ button:disabled {
   font-size: 13px;
 }
 
+.launch-selection-note {
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: #121b21;
+  color: #9fb0ad;
+  font-size: 12px;
+  line-height: 1.35;
+  align-self: flex-start;
+}
+
+.launch-chooser {
+  position: relative;
+  display: inline-flex;
+  align-self: flex-start;
+}
+
+.launch-chooser > .secondary-button {
+  position: relative;
+  z-index: 1;
+}
+
 .launch-choice-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 4;
   display: grid;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px;
+  gap: 6px;
+  width: min(260px, calc(100vw - 56px));
+  min-width: 220px;
+  padding: 8px;
   border: 1px solid #2a3d47;
-  border-radius: 8px;
-  background: #0b1217;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #0c1418 0%, #0f181c 100%);
+  box-shadow: 0 18px 40px rgb(0 0 0 / 28%);
 }
 
 .launch-choice-button {
   display: grid;
   gap: 2px;
-  padding: 10px 12px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: #172229;
   color: #edf4f2;
@@ -520,16 +550,22 @@ button:disabled {
 
 .launch-choice-button:hover,
 .launch-choice-button:focus-visible {
+  border-color: #2dd4bf;
   background: #22313a;
 }
 
+.launch-choice-button[aria-pressed='true'] {
+  border-color: #2dd4bf;
+  background: #143b3a;
+}
+
 .launch-choice-button strong {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .launch-choice-button span {
   color: #91a39f;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .launch-feedback,
@@ -1271,6 +1307,17 @@ button:disabled {
   justify-items: stretch;
 }
 
+.account-actions--xbox {
+  min-width: 320px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.account-actions--xbox .account-action-hint,
+.account-actions--xbox .provider-feedback {
+  grid-column: 1 / -1;
+}
+
 .account-actions .primary-button,
 .account-actions .secondary-button {
   justify-content: center;
@@ -1283,6 +1330,61 @@ button:disabled {
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.account-actions--xbox .account-action-hint {
+  max-width: none;
+}
+
+.xbox-title-history-modal {
+  width: min(100%, 560px);
+}
+
+.xbox-title-history-content {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.xbox-title-history-intro {
+  margin: 0;
+  color: #edf4f2;
+  line-height: 1.55;
+}
+
+.xbox-title-history-warning {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid #5b4319;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #23180a 0%, #171209 100%);
+}
+
+.xbox-title-history-warning svg {
+  margin-top: 2px;
+  color: #fbbf24;
+}
+
+.xbox-title-history-warning p {
+  margin: 0;
+  color: #f7e8c4;
+  line-height: 1.5;
+}
+
+.xbox-title-history-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 8px;
+  color: #d8e5e1;
+  line-height: 1.45;
+}
+
+.xbox-title-history-list li::marker {
+  color: #5eead4;
 }
 
 .account-status {
