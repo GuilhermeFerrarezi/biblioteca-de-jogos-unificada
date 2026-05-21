@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-xbox-live-auth-state"
+description = "Enables the get_xbox_live_auth_state command without any pre-configured scope."
+commands.allow = ["get_xbox_live_auth_state"]
+
+[[permission]]
+identifier = "deny-get-xbox-live-auth-state"
+description = "Denies the get_xbox_live_auth_state command without any pre-configured scope."
+commands.deny = ["get_xbox_live_auth_state"]

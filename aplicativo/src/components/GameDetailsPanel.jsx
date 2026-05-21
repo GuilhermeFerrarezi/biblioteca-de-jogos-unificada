@@ -2,7 +2,7 @@ import { Archive, Clock3, Download, Pencil, Play, Store } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
 import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, PLATFORM_LABELS } from '../constants/libraryConstants'
-import { getLaunchActionState, getLaunchChoices } from '../hooks/libraryPageStateHelpers'
+import { getLaunchActionState, getLaunchChoices, isMicrosoftStoreUri } from '../hooks/libraryPageStateHelpers'
 import StatusDisclosure from './StatusDisclosure'
 
 function GameDetailsPanel({
@@ -20,6 +20,7 @@ function GameDetailsPanel({
   const [isLaunchChooserOpen, setIsLaunchChooserOpen] = useState(false)
   const launchChooserButtonRef = useRef(null)
   const launchChooserRef = useRef(null)
+  const artwork = selectedEntry?.game.artwork
   const launchChoices = getLaunchChoices(selectedEntry, selectedLaunchPlatformId).slice().sort((left, right) => {
     const platformComparison = (left.platformLabel ?? '').localeCompare(right.platformLabel ?? '', 'pt-BR', {
       sensitivity: 'base',
@@ -38,10 +39,10 @@ function GameDetailsPanel({
     selectedLaunchPlatformId,
   )
   const hasMultipleLaunchChoices = launchChoices.length > 1
-  const isXboxStoreAction =
-    selectedEntry?.primaryPlatformId === 'xbox' && selectedEntry?.installStatus !== INSTALL_STATUS.INSTALLED
-  const primaryActionLabel = isXboxStoreAction ? 'Abrir Microsoft Store' : 'Jogar'
-  const PrimaryActionIcon = isXboxStoreAction ? Store : Play
+  const isMicrosoftStoreAction =
+    primaryLaunchAction?.label === 'Abrir Microsoft Store' || isMicrosoftStoreUri(primaryLaunchAction?.target)
+  const primaryActionLabel = isMicrosoftStoreAction ? 'Abrir Microsoft Store' : 'Jogar'
+  const PrimaryActionIcon = isMicrosoftStoreAction ? Store : Play
 
   useEffect(() => {
     setIsLaunchChooserOpen(false)
@@ -90,9 +91,12 @@ function GameDetailsPanel({
     <aside className="details-panel" aria-label="Detalhes do jogo selecionado">
       {selectedEntry ? (
         <>
-          <div className="detail-cover" style={{ background: selectedEntry.game.artwork.accentColor ?? DEFAULT_ACCENT_COLOR }}>
-            <span>{selectedEntry.game.title}</span>
-          </div>
+          <DetailArtworkFrame
+            imageUrls={[artwork?.coverUrl, artwork?.heroUrl]}
+            accentColor={artwork?.accentColor}
+            fallbackText={selectedEntry.game.title}
+            imageAlt=""
+          />
           <div className="detail-content">
             <span className="platform-label">
               {selectedEntry.platformSummary ?? PLATFORM_LABELS[selectedEntry.primaryPlatformId] ?? selectedEntry.primaryPlatformId}
@@ -113,7 +117,7 @@ function GameDetailsPanel({
                 title={!canLaunchSelectedEntry ? launchActionHint : primaryActionLabel}
                 onClick={onLaunchEntry}
               >
-                <PrimaryActionIcon size={18} fill={isXboxStoreAction ? 'none' : 'currentColor'} aria-hidden="true" />
+                <PrimaryActionIcon size={18} fill={isMicrosoftStoreAction ? 'none' : 'currentColor'} aria-hidden="true" />
                 {primaryActionLabel}
               </button>
               {hasMultipleLaunchChoices ? (
@@ -236,6 +240,28 @@ function GameDetailsPanel({
         </div>
       )}
     </aside>
+  )
+}
+
+function DetailArtworkFrame({ imageUrls, accentColor, fallbackText, imageAlt }) {
+  const availableImageUrls = imageUrls.filter(Boolean)
+  const imageUrlsKey = availableImageUrls.join('\n')
+  const [imageIndex, setImageIndex] = useState(0)
+  const imageUrl = availableImageUrls[imageIndex]
+  const shouldShowImage = Boolean(imageUrl)
+
+  useEffect(() => {
+    setImageIndex(0)
+  }, [imageUrlsKey])
+
+  return (
+    <div className="detail-cover" style={{ background: accentColor ?? DEFAULT_ACCENT_COLOR }}>
+      {shouldShowImage ? (
+        <img className="artwork-image" src={imageUrl} alt={imageAlt} onError={() => setImageIndex((currentIndex) => currentIndex + 1)} />
+      ) : (
+        <span className="artwork-fallback-text">{fallbackText}</span>
+      )}
+    </div>
   )
 }
 

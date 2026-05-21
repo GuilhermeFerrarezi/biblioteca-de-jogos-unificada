@@ -1,4 +1,5 @@
 import { CircleDot, HardDrive, LayoutGrid, Library, List, Search } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
 import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, PLATFORM_LABELS, QUICK_FILTERS, QUICK_FILTER_IDS } from '../constants/libraryConstants'
 import SteamIcon from './icons/SteamIcon'
@@ -238,6 +239,8 @@ function ViewModeToggle({ viewMode, onViewModeChange }) {
 }
 
 function GameRow({ entry, isSelected, onSelectEntry }) {
+  const artwork = entry.game.artwork
+
   return (
     <article
       className={isSelected ? 'game-row selected' : 'game-row'}
@@ -251,9 +254,13 @@ function GameRow({ entry, isSelected, onSelectEntry }) {
         }
       }}
     >
-      <div className="cover" style={{ background: entry.game.artwork.accentColor ?? DEFAULT_ACCENT_COLOR }}>
-        {entry.game.title.slice(0, 1)}
-      </div>
+      <ArtworkFrame
+        className="cover"
+        imageUrls={[artwork.coverUrl, artwork.heroUrl]}
+        accentColor={artwork.accentColor}
+        fallbackText={entry.game.title.slice(0, 1)}
+        imageAlt=""
+      />
       <div className="game-info">
         <strong>{entry.game.title}</strong>
         <span>{entry.platformSummary ?? PLATFORM_LABELS[entry.primaryPlatformId]} / {entry.game.genres[0]}</span>
@@ -267,6 +274,8 @@ function GameRow({ entry, isSelected, onSelectEntry }) {
 }
 
 function GameCoverCard({ entry, isSelected, onSelectEntry }) {
+  const artwork = entry.game.artwork
+
   return (
     <article
       className={isSelected ? 'game-cover-card selected' : 'game-cover-card'}
@@ -280,12 +289,44 @@ function GameCoverCard({ entry, isSelected, onSelectEntry }) {
         }
       }}
     >
-      <div className="poster" style={{ background: entry.game.artwork.accentColor ?? DEFAULT_ACCENT_COLOR }}>
-        <span>{entry.game.title}</span>
-      </div>
+      <ArtworkFrame
+        className="poster"
+        imageUrls={[artwork.coverUrl, artwork.heroUrl]}
+        accentColor={artwork.accentColor}
+        fallbackText={entry.game.title}
+        imageAlt=""
+      />
       <strong>{entry.game.title}</strong>
       <span>{entry.platformSummary ?? PLATFORM_LABELS[entry.primaryPlatformId]}</span>
     </article>
+  )
+}
+
+function ArtworkFrame({ className, imageUrls, accentColor, fallbackText, imageAlt }) {
+  const availableImageUrls = imageUrls.filter(Boolean)
+  const imageUrlsKey = availableImageUrls.join('\n')
+  const [imageIndex, setImageIndex] = useState(0)
+  const imageUrl = availableImageUrls[imageIndex]
+  const shouldShowImage = Boolean(imageUrl)
+
+  useEffect(() => {
+    setImageIndex(0)
+  }, [imageUrlsKey])
+
+  return (
+    <div className={className} style={{ background: accentColor ?? DEFAULT_ACCENT_COLOR }}>
+      {shouldShowImage ? (
+        <img
+          className="artwork-image"
+          src={imageUrl}
+          alt={imageAlt}
+          loading="lazy"
+          onError={() => setImageIndex((currentIndex) => currentIndex + 1)}
+        />
+      ) : (
+        <span className="artwork-fallback-text">{fallbackText}</span>
+      )}
+    </div>
   )
 }
 

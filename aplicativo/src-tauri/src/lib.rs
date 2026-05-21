@@ -6,6 +6,7 @@ const XBOX_SYNC_FAILED_EVENT: &str = "xbox-sync-failed";
 const XBOX_ACHIEVEMENTS_SYNC_FAILED_EVENT: &str = "xbox-achievements-sync-failed";
 const XBOX_TITLE_HISTORY_IMPORT_FAILED_EVENT: &str = "xbox-title-history-import-failed";
 
+mod xbox_live_auth;
 mod xbox_provider;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -55,8 +56,16 @@ pub fn run() {
             commands::get_steam_account_config,
             commands::get_steam_library_roots,
             commands::start_steam_openid_login,
+            commands::start_xbox_live_login,
+            commands::get_xbox_live_auth_state,
+            commands::get_xbox_live_client_config,
+            commands::get_xbox_live_client_secret_state,
             commands::save_steam_account_config,
             commands::save_steam_library_roots,
+            commands::get_xbox_library_roots,
+            commands::save_xbox_library_roots,
+            commands::save_xbox_live_client_config,
+            commands::save_xbox_live_client_secret,
             commands::get_library_settings,
             commands::save_library_settings,
             commands::save_steam_web_api_key,
@@ -149,7 +158,8 @@ fn bootstrap_library(
 
 mod commands {
     use super::{
-        launcher, security, steam_openid, steam_web_api, storage, xbox_provider, AppState,
+        launcher, security, steam_openid, steam_web_api, storage, xbox_live_auth, xbox_provider,
+        AppState,
     };
     use crate::ProviderErrorDto;
     use tauri::{AppHandle, Emitter, State};
@@ -248,7 +258,7 @@ mod commands {
             .lock()
             .map_err(|_| "failed to lock local database".to_string())?;
 
-        xbox_provider::sync_xbox_achievement_games(&mut connection).map_err(|error| {
+        xbox_provider::sync_xbox_achievement_games(&mut connection, state.auth_vault.as_ref()).map_err(|error| {
             let provider_error = error.into_provider_error();
             let provider_error_json = serde_json::to_string(&provider_error)
                 .unwrap_or_else(|_| provider_error.message.clone());
@@ -278,7 +288,7 @@ mod commands {
             .lock()
             .map_err(|_| "failed to lock local database".to_string())?;
 
-        xbox_provider::import_xbox_achievement_title_history(&mut connection).map_err(|error| {
+        xbox_provider::import_xbox_achievement_title_history(&mut connection, state.auth_vault.as_ref()).map_err(|error| {
             let provider_error = error.into_provider_error();
             let provider_error_json = serde_json::to_string(&provider_error)
                 .unwrap_or_else(|_| provider_error.message.clone());
@@ -338,6 +348,48 @@ mod commands {
     }
 
     #[tauri::command]
+    pub fn start_xbox_live_login(
+        app: AppHandle,
+        state: State<'_, AppState>,
+    ) -> Result<xbox_live_auth::XboxLiveLoginStartDto, String> {
+        xbox_live_auth::start_login(app, state.connection.clone(), state.auth_vault.clone())
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn get_xbox_live_auth_state(
+        state: State<'_, AppState>,
+    ) -> Result<security::XboxLiveAuthStateDto, String> {
+        state
+            .auth_vault
+            .xbox_live_auth_state()
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn get_xbox_live_client_config(
+        state: State<'_, AppState>,
+    ) -> Result<storage::XboxLiveClientConfigDto, String> {
+        let connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::get_xbox_live_client_config(&connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn get_xbox_live_client_secret_state(
+        state: State<'_, AppState>,
+    ) -> Result<security::XboxLiveClientSecretStateDto, String> {
+        // Legacy compatibility only. The Xbox public-client login flow no longer depends on this.
+        state
+            .auth_vault
+            .xbox_live_client_secret_state()
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
     pub fn save_steam_account_config(
         input: storage::SteamAccountConfigInput,
         state: State<'_, AppState>,
@@ -374,6 +426,57 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         storage::save_steam_library_roots(&mut connection, input).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn get_xbox_library_roots(
+        state: State<'_, AppState>,
+    ) -> Result<storage::XboxLibraryRootsDto, String> {
+        let connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::get_xbox_library_roots(&connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn save_xbox_library_roots(
+        input: storage::XboxLibraryRootsInput,
+        state: State<'_, AppState>,
+    ) -> Result<storage::XboxLibraryRootsDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::save_xbox_library_roots(&mut connection, input).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn save_xbox_live_client_config(
+        input: storage::XboxLiveClientConfigInput,
+        state: State<'_, AppState>,
+    ) -> Result<storage::XboxLiveClientConfigDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::save_xbox_live_client_config(&mut connection, input)
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn save_xbox_live_client_secret(
+        input: security::XboxLiveClientSecretInput,
+        state: State<'_, AppState>,
+    ) -> Result<security::XboxLiveClientSecretStateDto, String> {
+        // Legacy compatibility only. The Xbox public-client login flow no longer depends on this.
+        state
+            .auth_vault
+            .save_xbox_live_client_secret(input)
+            .map_err(|error| error.to_string())
     }
 
     #[tauri::command]
@@ -671,6 +774,14 @@ mod security {
     const STEAM_WEB_API_KEY_LENGTH: usize = 32;
     const STEAM_WEB_API_KEY_FILE: &str = "steam-web-api-key.dpapi";
     const STEAM_WEB_API_DPAPI_ENTROPY: &[u8] = b"com.bibliotecajogos.unificada/steam-web-api-key";
+    const XBOX_LIVE_REFRESH_TOKEN_USER: &str = "xbox-live-refresh-token";
+    const XBOX_LIVE_REFRESH_TOKEN_FILE: &str = "xbox-live-refresh-token.dpapi";
+    const XBOX_LIVE_REFRESH_TOKEN_DPAPI_ENTROPY: &[u8] =
+        b"com.bibliotecajogos.unificada/xbox-live-refresh-token";
+    const XBOX_LIVE_CLIENT_SECRET_USER: &str = "xbox-live-client-secret";
+    const XBOX_LIVE_CLIENT_SECRET_FILE: &str = "xbox-live-client-secret.dpapi";
+    const XBOX_LIVE_CLIENT_SECRET_DPAPI_ENTROPY: &[u8] =
+        b"com.bibliotecajogos.unificada/xbox-live-client-secret";
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -686,9 +797,39 @@ mod security {
         storage: &'static str,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct XboxLiveAuthStateDto {
+        configured: bool,
+        provider_id: &'static str,
+        storage: &'static str,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct XboxLiveClientSecretStateDto {
+        configured: bool,
+        provider_id: &'static str,
+        storage: &'static str,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct XboxLiveRefreshTokenInput {
+        pub refresh_token: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct XboxLiveClientSecretInput {
+        pub client_secret: String,
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum AuthVaultError {
         InvalidSteamWebApiKey,
+        InvalidXboxLiveRefreshToken,
+        InvalidXboxLiveClientSecret,
         SecureStorageUnavailable { operation: &'static str },
         LockUnavailable,
     }
@@ -698,6 +839,12 @@ mod security {
             let message = match self {
                 AuthVaultError::InvalidSteamWebApiKey => {
                     "Chave Steam Web API invalida. Informe uma chave hexadecimal de 32 caracteres."
+                }
+                AuthVaultError::InvalidXboxLiveRefreshToken => {
+                    "Credencial Xbox Live invalida. Conclua o login Xbox Live novamente."
+                }
+                AuthVaultError::InvalidXboxLiveClientSecret => {
+                    "Segredo Microsoft invalido. Informe um valor valido no campo Xbox Live."
                 }
                 AuthVaultError::SecureStorageUnavailable { operation } => {
                     return write!(
@@ -722,6 +869,8 @@ mod security {
     #[derive(Debug, Clone, Copy)]
     struct AuthVaultState {
         steam_web_api_key_configured: bool,
+        xbox_live_auth_configured: bool,
+        xbox_live_client_secret_configured: bool,
     }
 
     impl AuthVault {
@@ -731,11 +880,16 @@ mod security {
 
         fn new(store: Arc<dyn SecretStore>) -> Self {
             let steam_web_api_key_configured = store.exists().unwrap_or(false);
+            let xbox_live_auth_configured = store.xbox_live_refresh_token_exists().unwrap_or(false);
+            let xbox_live_client_secret_configured =
+                store.xbox_live_client_secret_exists().unwrap_or(false);
 
             Self {
                 store,
                 state: Mutex::new(AuthVaultState {
                     steam_web_api_key_configured,
+                    xbox_live_auth_configured,
+                    xbox_live_client_secret_configured,
                 }),
             }
         }
@@ -778,6 +932,85 @@ mod security {
             self.set_steam_web_api_key_configured(false)
         }
 
+        pub fn save_xbox_live_refresh_token(
+            &self,
+            input: XboxLiveRefreshTokenInput,
+        ) -> Result<XboxLiveAuthStateDto, AuthVaultError> {
+            let refresh_token = validate_xbox_live_refresh_token(&input.refresh_token)?;
+            self.store.set_xbox_live_refresh_token(refresh_token)?;
+            if self.store.get_xbox_live_refresh_token()?.as_deref() != Some(refresh_token) {
+                return Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "validacao da credencial",
+                });
+            }
+
+            self.set_xbox_live_auth_configured(true)
+        }
+
+        pub fn xbox_live_auth_state(&self) -> Result<XboxLiveAuthStateDto, AuthVaultError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AuthVaultError::LockUnavailable)?;
+            state.xbox_live_auth_configured = self.store.xbox_live_refresh_token_exists()?;
+
+            Ok(xbox_live_auth_state_dto(
+                state.xbox_live_auth_configured,
+                "auth_vault",
+            ))
+        }
+
+        pub fn xbox_live_refresh_token(&self) -> Result<Option<String>, AuthVaultError> {
+            self.store.get_xbox_live_refresh_token()
+        }
+
+        pub fn save_xbox_live_client_secret(
+            &self,
+            input: XboxLiveClientSecretInput,
+        ) -> Result<XboxLiveClientSecretStateDto, AuthVaultError> {
+            let client_secret = validate_xbox_live_client_secret(&input.client_secret)?;
+            self.store.set_xbox_live_client_secret(client_secret)?;
+            if self.store.get_xbox_live_client_secret()?.as_deref() != Some(client_secret) {
+                return Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "validacao da credencial",
+                });
+            }
+
+            self.set_xbox_live_client_secret_configured(true)
+        }
+
+        pub fn xbox_live_client_secret_state(
+            &self,
+        ) -> Result<XboxLiveClientSecretStateDto, AuthVaultError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AuthVaultError::LockUnavailable)?;
+            state.xbox_live_client_secret_configured =
+                self.store.xbox_live_client_secret_exists()?;
+
+            Ok(xbox_live_client_secret_state_dto(
+                state.xbox_live_client_secret_configured,
+                "auth_vault",
+            ))
+        }
+
+        pub fn xbox_live_client_secret(&self) -> Result<Option<String>, AuthVaultError> {
+            self.store.get_xbox_live_client_secret()
+        }
+
+        pub fn disconnect_xbox_live_client_secret(
+            &self,
+        ) -> Result<XboxLiveClientSecretStateDto, AuthVaultError> {
+            self.store.delete_xbox_live_client_secret()?;
+            self.set_xbox_live_client_secret_configured(false)
+        }
+
+        pub fn disconnect_xbox_live_auth(&self) -> Result<XboxLiveAuthStateDto, AuthVaultError> {
+            self.store.delete_xbox_live_refresh_token()?;
+            self.set_xbox_live_auth_configured(false)
+        }
+
         fn set_steam_web_api_key_configured(
             &self,
             configured: bool,
@@ -790,6 +1023,32 @@ mod security {
 
             Ok(steam_web_api_key_state_dto(configured, "auth_vault"))
         }
+
+        fn set_xbox_live_auth_configured(
+            &self,
+            configured: bool,
+        ) -> Result<XboxLiveAuthStateDto, AuthVaultError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AuthVaultError::LockUnavailable)?;
+            state.xbox_live_auth_configured = configured;
+
+            Ok(xbox_live_auth_state_dto(configured, "auth_vault"))
+        }
+
+        fn set_xbox_live_client_secret_configured(
+            &self,
+            configured: bool,
+        ) -> Result<XboxLiveClientSecretStateDto, AuthVaultError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| AuthVaultError::LockUnavailable)?;
+            state.xbox_live_client_secret_configured = configured;
+
+            Ok(xbox_live_client_secret_state_dto(configured, "auth_vault"))
+        }
     }
 
     fn steam_web_api_key_state_dto(
@@ -799,6 +1058,25 @@ mod security {
         SteamWebApiKeyStateDto {
             configured,
             provider_id: "steam",
+            storage,
+        }
+    }
+
+    fn xbox_live_auth_state_dto(configured: bool, storage: &'static str) -> XboxLiveAuthStateDto {
+        XboxLiveAuthStateDto {
+            configured,
+            provider_id: "xbox",
+            storage,
+        }
+    }
+
+    fn xbox_live_client_secret_state_dto(
+        configured: bool,
+        storage: &'static str,
+    ) -> XboxLiveClientSecretStateDto {
+        XboxLiveClientSecretStateDto {
+            configured,
+            provider_id: "xbox",
             storage,
         }
     }
@@ -815,21 +1093,62 @@ mod security {
         }
     }
 
+    fn validate_xbox_live_refresh_token(input: &str) -> Result<&str, AuthVaultError> {
+        let refresh_token = input.trim();
+
+        if refresh_token.is_empty() {
+            Err(AuthVaultError::InvalidXboxLiveRefreshToken)
+        } else {
+            Ok(refresh_token)
+        }
+    }
+
+    fn validate_xbox_live_client_secret(input: &str) -> Result<&str, AuthVaultError> {
+        let client_secret = input.trim();
+
+        if client_secret.is_empty() {
+            Err(AuthVaultError::InvalidXboxLiveClientSecret)
+        } else {
+            Ok(client_secret)
+        }
+    }
+
     trait SecretStore: Send + Sync {
         fn set(&self, secret: &str) -> Result<(), AuthVaultError>;
         fn get(&self) -> Result<Option<String>, AuthVaultError>;
         fn exists(&self) -> Result<bool, AuthVaultError>;
         fn delete(&self) -> Result<(), AuthVaultError>;
+        fn set_xbox_live_refresh_token(&self, secret: &str) -> Result<(), AuthVaultError>;
+        fn get_xbox_live_refresh_token(&self) -> Result<Option<String>, AuthVaultError>;
+        fn xbox_live_refresh_token_exists(&self) -> Result<bool, AuthVaultError>;
+        fn delete_xbox_live_refresh_token(&self) -> Result<(), AuthVaultError>;
+        fn set_xbox_live_client_secret(&self, secret: &str) -> Result<(), AuthVaultError>;
+        fn get_xbox_live_client_secret(&self) -> Result<Option<String>, AuthVaultError>;
+        fn xbox_live_client_secret_exists(&self) -> Result<bool, AuthVaultError>;
+        fn delete_xbox_live_client_secret(&self) -> Result<(), AuthVaultError>;
     }
 
     struct SystemSecretStore {
         fallback: DpapiFileSecretStore,
+        xbox_live_fallback: DpapiFileSecretStore,
+        xbox_live_client_secret_fallback: DpapiFileSecretStore,
     }
 
     impl SystemSecretStore {
         fn new(vault_dir: PathBuf) -> Self {
             Self {
-                fallback: DpapiFileSecretStore::new(vault_dir.join(STEAM_WEB_API_KEY_FILE)),
+                fallback: DpapiFileSecretStore::new(
+                    vault_dir.join(STEAM_WEB_API_KEY_FILE),
+                    STEAM_WEB_API_DPAPI_ENTROPY,
+                ),
+                xbox_live_fallback: DpapiFileSecretStore::new(
+                    vault_dir.join(XBOX_LIVE_REFRESH_TOKEN_FILE),
+                    XBOX_LIVE_REFRESH_TOKEN_DPAPI_ENTROPY,
+                ),
+                xbox_live_client_secret_fallback: DpapiFileSecretStore::new(
+                    vault_dir.join(XBOX_LIVE_CLIENT_SECRET_FILE),
+                    XBOX_LIVE_CLIENT_SECRET_DPAPI_ENTROPY,
+                ),
             }
         }
 
@@ -841,8 +1160,32 @@ mod security {
             })
         }
 
+        fn xbox_live_entry(&self) -> Result<Entry, AuthVaultError> {
+            Entry::new(STEAM_WEB_API_SERVICE, XBOX_LIVE_REFRESH_TOKEN_USER).map_err(|_| {
+                AuthVaultError::SecureStorageUnavailable {
+                    operation: "preparacao do AuthVault",
+                }
+            })
+        }
+
+        fn xbox_live_client_secret_entry(&self) -> Result<Entry, AuthVaultError> {
+            Entry::new(STEAM_WEB_API_SERVICE, XBOX_LIVE_CLIENT_SECRET_USER).map_err(|_| {
+                AuthVaultError::SecureStorageUnavailable {
+                    operation: "preparacao do AuthVault",
+                }
+            })
+        }
+
         fn set_keyring_secret(&self, secret: &str) -> Result<(), AuthVaultError> {
             self.entry()?.set_password(secret).map_err(|_| {
+                AuthVaultError::SecureStorageUnavailable {
+                    operation: "gravacao da credencial",
+                }
+            })
+        }
+
+        fn set_xbox_live_keyring_secret(&self, secret: &str) -> Result<(), AuthVaultError> {
+            self.xbox_live_entry()?.set_password(secret).map_err(|_| {
                 AuthVaultError::SecureStorageUnavailable {
                     operation: "gravacao da credencial",
                 }
@@ -859,8 +1202,59 @@ mod security {
             }
         }
 
+        fn get_xbox_live_keyring_secret(&self) -> Result<Option<String>, AuthVaultError> {
+            match self.xbox_live_entry()?.get_password() {
+                Ok(secret) => Ok(Some(secret)),
+                Err(KeyringError::NoEntry) => Ok(None),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "leitura da credencial",
+                }),
+            }
+        }
+
         fn delete_keyring_secret(&self) -> Result<(), AuthVaultError> {
             match self.entry()?.delete_credential() {
+                Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "remocao da credencial",
+                }),
+            }
+        }
+
+        fn delete_xbox_live_keyring_secret(&self) -> Result<(), AuthVaultError> {
+            match self.xbox_live_entry()?.delete_credential() {
+                Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "remocao da credencial",
+                }),
+            }
+        }
+
+        fn set_xbox_live_client_secret_keyring_secret(
+            &self,
+            secret: &str,
+        ) -> Result<(), AuthVaultError> {
+            self.xbox_live_client_secret_entry()?
+                .set_password(secret)
+                .map_err(|_| AuthVaultError::SecureStorageUnavailable {
+                    operation: "gravacao da credencial",
+                })
+        }
+
+        fn get_xbox_live_client_secret_keyring_secret(
+            &self,
+        ) -> Result<Option<String>, AuthVaultError> {
+            match self.xbox_live_client_secret_entry()?.get_password() {
+                Ok(secret) => Ok(Some(secret)),
+                Err(KeyringError::NoEntry) => Ok(None),
+                Err(_) => Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "leitura da credencial",
+                }),
+            }
+        }
+
+        fn delete_xbox_live_client_secret_keyring_secret(&self) -> Result<(), AuthVaultError> {
+            match self.xbox_live_client_secret_entry()?.delete_credential() {
                 Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
                 Err(_) => Err(AuthVaultError::SecureStorageUnavailable {
                     operation: "remocao da credencial",
@@ -883,6 +1277,35 @@ mod security {
                 match self.delete_keyring_secret() {
                     Ok(()) => Ok(()),
                     Err(error) if self.get_keyring_secret().ok().flatten().is_some() => Err(error),
+                    Err(_) => Ok(()),
+                }
+            } else {
+                Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "validacao da credencial",
+                })
+            }
+        }
+
+        fn set_xbox_live_refresh_token(&self, secret: &str) -> Result<(), AuthVaultError> {
+            if self.set_xbox_live_keyring_secret(secret).is_ok()
+                && self
+                    .get_xbox_live_keyring_secret()
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some(secret)
+            {
+                let _ = self.xbox_live_fallback.delete();
+                return Ok(());
+            }
+
+            self.xbox_live_fallback.set(secret)?;
+            if self.xbox_live_fallback.get()?.as_deref() == Some(secret) {
+                match self.delete_xbox_live_keyring_secret() {
+                    Ok(()) => Ok(()),
+                    Err(error) if self.get_xbox_live_keyring_secret().ok().flatten().is_some() => {
+                        Err(error)
+                    }
                     Err(_) => Ok(()),
                 }
             } else {
@@ -915,21 +1338,119 @@ mod security {
                 Err(_) => Ok(()),
             }
         }
+
+        fn get_xbox_live_refresh_token(&self) -> Result<Option<String>, AuthVaultError> {
+            if let Ok(Some(secret)) = self.get_xbox_live_keyring_secret() {
+                return Ok(Some(secret));
+            }
+
+            self.xbox_live_fallback.get()
+        }
+
+        fn xbox_live_refresh_token_exists(&self) -> Result<bool, AuthVaultError> {
+            self.get_xbox_live_refresh_token()
+                .map(|secret| secret.is_some())
+        }
+
+        fn delete_xbox_live_refresh_token(&self) -> Result<(), AuthVaultError> {
+            let keyring_result = self.delete_xbox_live_keyring_secret();
+            let fallback_result = self.xbox_live_fallback.delete();
+
+            fallback_result?;
+            match keyring_result {
+                Ok(()) => Ok(()),
+                Err(error) if self.get_xbox_live_keyring_secret().ok().flatten().is_some() => {
+                    Err(error)
+                }
+                Err(_) => Ok(()),
+            }
+        }
+
+        fn set_xbox_live_client_secret(&self, secret: &str) -> Result<(), AuthVaultError> {
+            if self
+                .set_xbox_live_client_secret_keyring_secret(secret)
+                .is_ok()
+                && self
+                    .get_xbox_live_client_secret_keyring_secret()
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some(secret)
+            {
+                let _ = self.xbox_live_client_secret_fallback.delete();
+                return Ok(());
+            }
+
+            self.xbox_live_client_secret_fallback.set(secret)?;
+            if self.xbox_live_client_secret_fallback.get()?.as_deref() == Some(secret) {
+                match self.delete_xbox_live_client_secret_keyring_secret() {
+                    Ok(()) => Ok(()),
+                    Err(error)
+                        if self
+                            .get_xbox_live_client_secret_keyring_secret()
+                            .ok()
+                            .flatten()
+                            .is_some() =>
+                    {
+                        Err(error)
+                    }
+                    Err(_) => Ok(()),
+                }
+            } else {
+                Err(AuthVaultError::SecureStorageUnavailable {
+                    operation: "validacao da credencial",
+                })
+            }
+        }
+
+        fn get_xbox_live_client_secret(&self) -> Result<Option<String>, AuthVaultError> {
+            if let Ok(Some(secret)) = self.get_xbox_live_client_secret_keyring_secret() {
+                return Ok(Some(secret));
+            }
+
+            self.xbox_live_client_secret_fallback.get()
+        }
+
+        fn xbox_live_client_secret_exists(&self) -> Result<bool, AuthVaultError> {
+            self.get_xbox_live_client_secret()
+                .map(|secret| secret.is_some())
+        }
+
+        fn delete_xbox_live_client_secret(&self) -> Result<(), AuthVaultError> {
+            let keyring_result = self.delete_xbox_live_client_secret_keyring_secret();
+            let fallback_result = self.xbox_live_client_secret_fallback.delete();
+
+            fallback_result?;
+            match keyring_result {
+                Ok(()) => Ok(()),
+                Err(error)
+                    if self
+                        .get_xbox_live_client_secret_keyring_secret()
+                        .ok()
+                        .flatten()
+                        .is_some() =>
+                {
+                    Err(error)
+                }
+                Err(_) => Ok(()),
+            }
+        }
     }
 
     struct DpapiFileSecretStore {
         path: PathBuf,
+        entropy: &'static [u8],
     }
 
     impl DpapiFileSecretStore {
-        fn new(path: PathBuf) -> Self {
-            Self { path }
+        fn new(path: PathBuf, entropy: &'static [u8]) -> Self {
+            Self { path, entropy }
         }
     }
 
     impl SecretStore for DpapiFileSecretStore {
         fn set(&self, secret: &str) -> Result<(), AuthVaultError> {
-            let protected_secret = protect_secret(secret.as_bytes())?;
+            let protected_secret = protect_secret(secret.as_bytes(), self.entropy)?;
             let parent_dir =
                 self.path
                     .parent()
@@ -982,7 +1503,7 @@ mod security {
                     });
                 }
             };
-            let secret = unprotect_secret(&protected_secret)?;
+            let secret = unprotect_secret(&protected_secret, self.entropy)?;
 
             String::from_utf8(secret).map(Some).map_err(|_| {
                 AuthVaultError::SecureStorageUnavailable {
@@ -1007,10 +1528,42 @@ mod security {
                 }),
             }
         }
+
+        fn set_xbox_live_refresh_token(&self, secret: &str) -> Result<(), AuthVaultError> {
+            self.set(secret)
+        }
+
+        fn get_xbox_live_refresh_token(&self) -> Result<Option<String>, AuthVaultError> {
+            self.get()
+        }
+
+        fn xbox_live_refresh_token_exists(&self) -> Result<bool, AuthVaultError> {
+            self.exists()
+        }
+
+        fn delete_xbox_live_refresh_token(&self) -> Result<(), AuthVaultError> {
+            self.delete()
+        }
+
+        fn set_xbox_live_client_secret(&self, secret: &str) -> Result<(), AuthVaultError> {
+            self.set(secret)
+        }
+
+        fn get_xbox_live_client_secret(&self) -> Result<Option<String>, AuthVaultError> {
+            self.get()
+        }
+
+        fn xbox_live_client_secret_exists(&self) -> Result<bool, AuthVaultError> {
+            self.exists()
+        }
+
+        fn delete_xbox_live_client_secret(&self) -> Result<(), AuthVaultError> {
+            self.delete()
+        }
     }
 
     #[cfg(target_os = "windows")]
-    fn protect_secret(secret: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
+    fn protect_secret(secret: &[u8], entropy_bytes: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
         use std::ptr;
         use windows_sys::Win32::Foundation::LocalFree;
         use windows_sys::Win32::Security::Cryptography::{
@@ -1018,8 +1571,8 @@ mod security {
         };
 
         let entropy = CRYPT_INTEGER_BLOB {
-            cbData: STEAM_WEB_API_DPAPI_ENTROPY.len() as u32,
-            pbData: STEAM_WEB_API_DPAPI_ENTROPY.as_ptr() as *mut u8,
+            cbData: entropy_bytes.len() as u32,
+            pbData: entropy_bytes.as_ptr() as *mut u8,
         };
         let input = CRYPT_INTEGER_BLOB {
             cbData: secret.len() as u32,
@@ -1053,14 +1606,17 @@ mod security {
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn protect_secret(_secret: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
+    fn protect_secret(_secret: &[u8], _entropy_bytes: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
         Err(AuthVaultError::SecureStorageUnavailable {
             operation: "criptografia da credencial DPAPI",
         })
     }
 
     #[cfg(target_os = "windows")]
-    fn unprotect_secret(protected_secret: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
+    fn unprotect_secret(
+        protected_secret: &[u8],
+        entropy_bytes: &[u8],
+    ) -> Result<Vec<u8>, AuthVaultError> {
         use std::ptr;
         use windows_sys::Win32::Foundation::LocalFree;
         use windows_sys::Win32::Security::Cryptography::{
@@ -1068,8 +1624,8 @@ mod security {
         };
 
         let entropy = CRYPT_INTEGER_BLOB {
-            cbData: STEAM_WEB_API_DPAPI_ENTROPY.len() as u32,
-            pbData: STEAM_WEB_API_DPAPI_ENTROPY.as_ptr() as *mut u8,
+            cbData: entropy_bytes.len() as u32,
+            pbData: entropy_bytes.as_ptr() as *mut u8,
         };
         let input = CRYPT_INTEGER_BLOB {
             cbData: protected_secret.len() as u32,
@@ -1103,7 +1659,10 @@ mod security {
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn unprotect_secret(_protected_secret: &[u8]) -> Result<Vec<u8>, AuthVaultError> {
+    fn unprotect_secret(
+        _protected_secret: &[u8],
+        _entropy_bytes: &[u8],
+    ) -> Result<Vec<u8>, AuthVaultError> {
         Err(AuthVaultError::SecureStorageUnavailable {
             operation: "descriptografia da credencial DPAPI",
         })
@@ -1203,6 +1762,50 @@ mod security {
             );
         }
 
+        #[test]
+        fn save_and_disconnect_xbox_live_client_secret_use_secret_store_without_exposing_secret() {
+            let store = Arc::new(InMemorySecretStore::default());
+            let vault = AuthVault::new(store.clone());
+
+            assert_eq!(
+                vault
+                    .xbox_live_client_secret_state()
+                    .expect("read empty state"),
+                xbox_live_client_secret_state_dto(false, "auth_vault")
+            );
+
+            let saved_state = vault
+                .save_xbox_live_client_secret(XboxLiveClientSecretInput {
+                    client_secret: "super-secret-value".to_string(),
+                })
+                .expect("save client secret");
+
+            assert_eq!(
+                saved_state,
+                xbox_live_client_secret_state_dto(true, "auth_vault")
+            );
+            assert_eq!(
+                store.read_secret_for(XBOX_LIVE_CLIENT_SECRET_USER),
+                Some("super-secret-value".to_string())
+            );
+            assert_eq!(
+                vault
+                    .xbox_live_client_secret_state()
+                    .expect("read saved state"),
+                xbox_live_client_secret_state_dto(true, "auth_vault")
+            );
+
+            let disconnected_state = vault
+                .disconnect_xbox_live_client_secret()
+                .expect("disconnect client secret");
+
+            assert_eq!(
+                disconnected_state,
+                xbox_live_client_secret_state_dto(false, "auth_vault")
+            );
+            assert_eq!(store.read_secret_for(XBOX_LIVE_CLIENT_SECRET_USER), None);
+        }
+
         #[derive(Default)]
         struct InMemorySecretStore {
             secrets: Mutex<HashMap<String, String>>,
@@ -1211,10 +1814,14 @@ mod security {
 
         impl InMemorySecretStore {
             fn read_secret(&self) -> Option<String> {
+                self.read_secret_for(STEAM_WEB_API_USER)
+            }
+
+            fn read_secret_for(&self, user: &str) -> Option<String> {
                 self.secrets
                     .lock()
                     .expect("lock secrets")
-                    .get(STEAM_WEB_API_USER)
+                    .get(user)
                     .cloned()
             }
 
@@ -1260,6 +1867,84 @@ mod security {
                     .lock()
                     .expect("lock secrets")
                     .remove(STEAM_WEB_API_USER);
+                Ok(())
+            }
+
+            fn set_xbox_live_refresh_token(&self, secret: &str) -> Result<(), AuthVaultError> {
+                self.secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .insert(XBOX_LIVE_REFRESH_TOKEN_USER.to_string(), secret.to_string());
+                Ok(())
+            }
+
+            fn get_xbox_live_refresh_token(&self) -> Result<Option<String>, AuthVaultError> {
+                Ok(self
+                    .secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .get(XBOX_LIVE_REFRESH_TOKEN_USER)
+                    .cloned())
+            }
+
+            fn xbox_live_refresh_token_exists(&self) -> Result<bool, AuthVaultError> {
+                Ok(self
+                    .secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .contains_key(XBOX_LIVE_REFRESH_TOKEN_USER))
+            }
+
+            fn delete_xbox_live_refresh_token(&self) -> Result<(), AuthVaultError> {
+                if *self.delete_should_fail.lock().expect("lock delete flag") {
+                    return Err(AuthVaultError::SecureStorageUnavailable {
+                        operation: "remocao da credencial",
+                    });
+                }
+
+                self.secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .remove(XBOX_LIVE_REFRESH_TOKEN_USER);
+                Ok(())
+            }
+
+            fn set_xbox_live_client_secret(&self, secret: &str) -> Result<(), AuthVaultError> {
+                self.secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .insert(XBOX_LIVE_CLIENT_SECRET_USER.to_string(), secret.to_string());
+                Ok(())
+            }
+
+            fn get_xbox_live_client_secret(&self) -> Result<Option<String>, AuthVaultError> {
+                Ok(self
+                    .secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .get(XBOX_LIVE_CLIENT_SECRET_USER)
+                    .cloned())
+            }
+
+            fn xbox_live_client_secret_exists(&self) -> Result<bool, AuthVaultError> {
+                Ok(self
+                    .secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .contains_key(XBOX_LIVE_CLIENT_SECRET_USER))
+            }
+
+            fn delete_xbox_live_client_secret(&self) -> Result<(), AuthVaultError> {
+                if *self.delete_should_fail.lock().expect("lock delete flag") {
+                    return Err(AuthVaultError::SecureStorageUnavailable {
+                        operation: "remocao da credencial",
+                    });
+                }
+
+                self.secrets
+                    .lock()
+                    .expect("lock secrets")
+                    .remove(XBOX_LIVE_CLIENT_SECRET_USER);
                 Ok(())
             }
         }
@@ -2655,6 +3340,20 @@ mod storage {
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct XboxLiveClientConfigInput {
+        client_id: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct XboxLiveClientConfigDto {
+        provider_id: &'static str,
+        configured: bool,
+        client_id: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct SteamLibraryRootsInput {
         roots: Vec<String>,
     }
@@ -2668,14 +3367,40 @@ mod storage {
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct XboxLibraryRootsInput {
+        roots: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct XboxLibraryRootsDto {
+        provider_id: &'static str,
+        roots: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct LibrarySettingsInput {
+        #[serde(default)]
         preferred_store_id: String,
+        #[serde(default)]
+        local_scan_mode: String,
+        #[serde(default)]
+        local_scan_roots: Vec<String>,
+        #[serde(default)]
+        local_scan_excluded_roots: Vec<String>,
+        #[serde(default)]
+        microsoft_client_id: String,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct LibrarySettingsDto {
         preferred_store_id: String,
+        local_scan_mode: String,
+        local_scan_roots: Vec<String>,
+        local_scan_excluded_roots: Vec<String>,
+        microsoft_client_id: String,
     }
 
     pub fn get_steam_account_config(
@@ -2713,6 +3438,25 @@ mod storage {
         save_verified_xbox_account_config(connection, &xuid)?;
 
         Ok(xbox_account_config_dto(Some(xuid)))
+    }
+
+    pub fn get_xbox_live_client_config(
+        connection: &Connection,
+    ) -> rusqlite::Result<XboxLiveClientConfigDto> {
+        let client_id = read_xbox_live_client_id(connection)?;
+
+        Ok(xbox_live_client_config_dto(client_id))
+    }
+
+    pub fn save_xbox_live_client_config(
+        connection: &mut Connection,
+        input: XboxLiveClientConfigInput,
+    ) -> rusqlite::Result<XboxLiveClientConfigDto> {
+        let client_id = normalize_xbox_live_client_id(&input.client_id)
+            .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+        save_xbox_live_client_id(connection, &client_id)?;
+
+        Ok(xbox_live_client_config_dto(Some(client_id)))
     }
 
     pub fn get_steam_library_roots(
@@ -2764,11 +3508,85 @@ mod storage {
         Ok(steam_library_roots_dto(roots))
     }
 
-    pub fn get_library_settings(connection: &Connection) -> rusqlite::Result<LibrarySettingsDto> {
-        let preferred_store_id = read_library_setting_value(connection, "preferredStoreId")?
-            .unwrap_or_else(|| "steam".to_string());
+    pub fn get_xbox_library_roots(
+        connection: &Connection,
+    ) -> rusqlite::Result<XboxLibraryRootsDto> {
+        Ok(xbox_library_roots_dto(read_xbox_library_roots(connection)?))
+    }
 
-        Ok(LibrarySettingsDto { preferred_store_id })
+    pub fn save_xbox_library_roots(
+        connection: &mut Connection,
+        input: XboxLibraryRootsInput,
+    ) -> rusqlite::Result<XboxLibraryRootsDto> {
+        let roots = normalize_xbox_library_roots(&input.roots)?;
+        let transaction = connection.transaction()?;
+        let existing_config_json = read_provider_config_json(&transaction, "xbox")?;
+        let mut config = existing_config_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let roots_json = roots
+            .iter()
+            .map(|root| serde_json::Value::String(root.clone()))
+            .collect::<Vec<_>>();
+
+        config.insert(
+            "additionalGameRoots".to_string(),
+            serde_json::Value::Array(roots_json),
+        );
+
+        transaction.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id,
+              config_json,
+              updated_at
+            )
+            VALUES ('xbox', ?1, ?2)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              config_json = excluded.config_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![serde_json::Value::Object(config).to_string(), now_iso()],
+        )?;
+        transaction.commit()?;
+
+        Ok(xbox_library_roots_dto(roots))
+    }
+
+    pub fn get_library_settings(connection: &Connection) -> rusqlite::Result<LibrarySettingsDto> {
+        let config = read_library_settings_config(connection)?;
+
+        Ok(LibrarySettingsDto {
+            preferred_store_id: normalize_preferred_store_id(
+                config
+                    .as_ref()
+                    .and_then(|value| value.get("preferredStoreId"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("steam"),
+            ),
+            local_scan_mode: normalize_local_scan_mode(
+                config
+                    .as_ref()
+                    .and_then(|value| value.get("localScanMode"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("automatic"),
+            ),
+            local_scan_roots: read_library_settings_string_array(&config, "localScanRoots"),
+            local_scan_excluded_roots: read_library_settings_string_array(
+                &config,
+                "localScanExcludedRoots",
+            ),
+            microsoft_client_id: normalize_xbox_live_client_id(
+                config
+                    .as_ref()
+                    .and_then(|value| value.get("microsoftClientId"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+            )
+            .unwrap_or_default(),
+        })
     }
 
     pub fn save_library_settings(
@@ -2776,19 +3594,14 @@ mod storage {
         input: LibrarySettingsInput,
     ) -> rusqlite::Result<LibrarySettingsDto> {
         let preferred_store_id = normalize_preferred_store_id(&input.preferred_store_id);
+        let local_scan_mode = normalize_local_scan_mode(&input.local_scan_mode);
+        let local_scan_roots = normalize_library_scan_roots(&input.local_scan_roots)?;
+        let local_scan_excluded_roots =
+            normalize_library_scan_roots(&input.local_scan_excluded_roots)?;
+        let microsoft_client_id = normalize_xbox_live_client_id(&input.microsoft_client_id)
+            .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
         let transaction = connection.transaction()?;
-        let existing_config_json = transaction
-            .query_row(
-                r#"
-                SELECT config_json
-                FROM provider_account_configs
-                WHERE provider_id = 'library'
-                "#,
-                [],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
+        let existing_config_json = read_provider_config_json(&transaction, "library")?;
         let mut config = existing_config_json
             .as_deref()
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
@@ -2799,6 +3612,32 @@ mod storage {
             "preferredStoreId".to_string(),
             serde_json::Value::String(preferred_store_id.clone()),
         );
+        config.insert(
+            "localScanMode".to_string(),
+            serde_json::Value::String(local_scan_mode.clone()),
+        );
+        config.insert(
+            "localScanRoots".to_string(),
+            serde_json::Value::Array(
+                local_scan_roots
+                    .iter()
+                    .map(|root| serde_json::Value::String(root.clone()))
+                    .collect(),
+            ),
+        );
+        config.insert(
+            "localScanExcludedRoots".to_string(),
+            serde_json::Value::Array(
+                local_scan_excluded_roots
+                    .iter()
+                    .map(|root| serde_json::Value::String(root.clone()))
+                    .collect(),
+            ),
+        );
+        config.insert(
+            "microsoftClientId".to_string(),
+            serde_json::Value::String(microsoft_client_id.clone()),
+        );
 
         transaction.execute(
             r#"
@@ -2807,7 +3646,7 @@ mod storage {
               config_json,
               updated_at
             )
-            VALUES ('library', ?1, ?2)
+            VALUES ('xbox', ?1, ?2)
             ON CONFLICT(provider_id) DO UPDATE SET
               config_json = excluded.config_json,
               updated_at = excluded.updated_at
@@ -2816,7 +3655,13 @@ mod storage {
         )?;
         transaction.commit()?;
 
-        Ok(LibrarySettingsDto { preferred_store_id })
+        Ok(LibrarySettingsDto {
+            preferred_store_id,
+            local_scan_mode,
+            local_scan_roots,
+            local_scan_excluded_roots,
+            microsoft_client_id,
+        })
     }
 
     pub fn save_verified_steam_account_config(
@@ -2965,7 +3810,11 @@ mod storage {
               config_json = excluded.config_json,
               updated_at = excluded.updated_at
             "#,
-            params![xuid, serde_json::Value::Object(config).to_string(), now_iso()],
+            params![
+                xuid,
+                serde_json::Value::Object(config).to_string(),
+                now_iso()
+            ],
         )?;
         transaction.commit()?;
 
@@ -2988,9 +3837,24 @@ mod storage {
         }
     }
 
+    fn xbox_live_client_config_dto(client_id: Option<String>) -> XboxLiveClientConfigDto {
+        XboxLiveClientConfigDto {
+            provider_id: "xbox",
+            configured: client_id.is_some(),
+            client_id,
+        }
+    }
+
     fn steam_library_roots_dto(roots: Vec<String>) -> SteamLibraryRootsDto {
         SteamLibraryRootsDto {
             provider_id: "steam",
+            roots,
+        }
+    }
+
+    fn xbox_library_roots_dto(roots: Vec<String>) -> XboxLibraryRootsDto {
+        XboxLibraryRootsDto {
+            provider_id: "xbox",
             roots,
         }
     }
@@ -3002,25 +3866,43 @@ mod storage {
         }
     }
 
-    fn read_library_setting_value(
+    fn normalize_local_scan_mode(value: &str) -> String {
+        match value.trim().to_lowercase().as_str() {
+            "selected_only" => "selected_only".to_string(),
+            "automatic_plus_extra" => "automatic_plus_extra".to_string(),
+            _ => "automatic".to_string(),
+        }
+    }
+
+    fn read_library_settings_config(
         connection: &Connection,
-        key: &str,
-    ) -> rusqlite::Result<Option<String>> {
+    ) -> rusqlite::Result<Option<serde_json::Map<String, serde_json::Value>>> {
         let columns = table_columns(connection, "provider_account_configs")?;
         if columns.is_empty() {
             return Ok(None);
         }
 
-        let config_json = read_provider_config_json(connection, "library")?;
+        let config_json = read_provider_config_json(connection, "xbox")?
+            .or(read_provider_config_json(connection, "library")?);
 
-        let value = config_json
+        Ok(config_json
             .as_deref()
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-            .and_then(|json| json.as_object().cloned())
-            .and_then(|object| object.get(key).cloned())
-            .and_then(|value| value.as_str().map(|value| value.to_string()));
+            .and_then(|json| json.as_object().cloned()))
+    }
 
-        Ok(value)
+    fn read_library_settings_string_array(
+        config: &Option<serde_json::Map<String, serde_json::Value>>,
+        key: &str,
+    ) -> Vec<String> {
+        config
+            .as_ref()
+            .and_then(|object| object.get(key))
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect::<Vec<_>>()
     }
 
     fn read_provider_config_json(
@@ -3059,6 +3941,51 @@ mod storage {
             .collect::<Vec<_>>())
     }
 
+    pub(crate) fn read_xbox_library_roots(
+        connection: &Connection,
+    ) -> rusqlite::Result<Vec<String>> {
+        let columns = table_columns(connection, "provider_account_configs")?;
+        if columns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        Ok(read_provider_config_json(connection, "xbox")?
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .and_then(|object| object.get("additionalGameRoots").cloned())
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect::<Vec<_>>())
+    }
+
+    pub(crate) fn read_xbox_live_client_id(
+        connection: &Connection,
+    ) -> rusqlite::Result<Option<String>> {
+        let columns = table_columns(connection, "provider_account_configs")?;
+        if columns.is_empty() {
+            return Ok(None);
+        }
+
+        for column in ["config_json", "config"] {
+            if !columns.iter().any(|existing| existing == column) {
+                continue;
+            }
+
+            if let Some(value) =
+                read_provider_account_config_value(connection, &columns, "xbox", column)?
+            {
+                if let Some(client_id) = xbox_live_client_id_from_config_json(&value) {
+                    return Ok(Some(client_id));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     fn normalize_steam_library_roots(values: &[String]) -> rusqlite::Result<Vec<String>> {
         let mut roots = Vec::new();
 
@@ -3069,6 +3996,68 @@ mod storage {
             }
 
             let root = normalize_steam_library_root(value)
+                .ok_or_else(|| rusqlite::Error::InvalidPath(PathBuf::from(trimmed)))?;
+            let normalized = root.to_string_lossy().to_string();
+            let normalized_key = normalize_path_string(&root);
+
+            if !roots.iter().any(|existing: &String| {
+                normalize_path_string(Path::new(existing)) == normalized_key
+            }) {
+                roots.push(normalized);
+            }
+        }
+
+        Ok(roots)
+    }
+
+    fn normalize_library_scan_roots(values: &[String]) -> rusqlite::Result<Vec<String>> {
+        let mut roots = Vec::new();
+
+        for value in values {
+            let trimmed = value.trim().trim_matches('"');
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let root = normalize_local_scan_root(value)
+                .ok_or_else(|| rusqlite::Error::InvalidPath(PathBuf::from(trimmed)))?;
+            let normalized = root.to_string_lossy().to_string();
+            let normalized_key = normalize_path_string(&root);
+
+            if !roots.iter().any(|existing: &String| {
+                normalize_path_string(Path::new(existing)) == normalized_key
+            }) {
+                roots.push(normalized);
+            }
+        }
+
+        Ok(roots)
+    }
+
+    fn normalize_local_scan_root(value: &str) -> Option<PathBuf> {
+        let trimmed = value.trim().trim_matches('"');
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let path = PathBuf::from(trimmed);
+        if !path.is_dir() {
+            return None;
+        }
+
+        Some(path.canonicalize().unwrap_or(path))
+    }
+
+    fn normalize_xbox_library_roots(values: &[String]) -> rusqlite::Result<Vec<String>> {
+        let mut roots = Vec::new();
+
+        for value in values {
+            let trimmed = value.trim().trim_matches('"');
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let root = normalize_xbox_library_root(value)
                 .ok_or_else(|| rusqlite::Error::InvalidPath(PathBuf::from(trimmed)))?;
             let normalized = root.to_string_lossy().to_string();
             let normalized_key = normalize_path_string(&root);
@@ -3102,6 +4091,33 @@ mod storage {
         }
 
         None
+    }
+
+    fn normalize_xbox_library_root(value: &str) -> Option<PathBuf> {
+        let trimmed = value.trim().trim_matches('"');
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let path = PathBuf::from(trimmed);
+        let library_root = if is_xbox_games_path(&path) {
+            path.parent().map(Path::to_path_buf)?
+        } else {
+            path
+        };
+        let xbox_games_dir = library_root.join("XboxGames");
+
+        if xbox_games_dir.is_dir() {
+            return Some(library_root.canonicalize().unwrap_or(library_root));
+        }
+
+        None
+    }
+
+    fn is_xbox_games_path(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("xboxgames"))
     }
 
     fn is_steamapps_path(path: &Path) -> bool {
@@ -3214,10 +4230,7 @@ mod storage {
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
 
-        config.insert(
-            "xuid".to_string(),
-            serde_json::Value::String(xuid.clone()),
-        );
+        config.insert("xuid".to_string(), serde_json::Value::String(xuid.clone()));
         config.insert(
             "linkedBy".to_string(),
             serde_json::Value::String("xbox_manual_config".to_string()),
@@ -3237,7 +4250,60 @@ mod storage {
               config_json = excluded.config_json,
               updated_at = excluded.updated_at
             "#,
-            params![xuid, serde_json::Value::Object(config).to_string(), now_iso()],
+            params![
+                xuid,
+                serde_json::Value::Object(config).to_string(),
+                now_iso()
+            ],
+        )?;
+        transaction.commit()?;
+
+        Ok(())
+    }
+
+    pub fn save_xbox_live_client_id(
+        connection: &mut Connection,
+        client_id: &str,
+    ) -> rusqlite::Result<()> {
+        let client_id = normalize_xbox_live_client_id(client_id)
+            .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+        let transaction = connection.transaction()?;
+        let existing_config_json = transaction
+            .query_row(
+                r#"
+                SELECT config_json
+                FROM provider_account_configs
+                WHERE provider_id = 'xbox'
+                "#,
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        let mut config = existing_config_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+
+        config.insert(
+            "microsoftClientId".to_string(),
+            serde_json::Value::String(client_id.clone()),
+        );
+
+        transaction.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id,
+              config_json,
+              updated_at
+            )
+            VALUES ('xbox', ?1, ?2)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              config_json = excluded.config_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![serde_json::Value::Object(config).to_string(), now_iso()],
         )?;
         transaction.commit()?;
 
@@ -3293,6 +4359,9 @@ mod storage {
     #[serde(rename_all = "camelCase")]
     struct GameArtworkDto {
         accent_color: Option<String>,
+        cover_url: Option<String>,
+        hero_url: Option<String>,
+        source: Option<String>,
     }
 
     pub fn list_library_entries(connection: &Connection) -> rusqlite::Result<Vec<LibraryEntryDto>> {
@@ -3618,6 +4687,8 @@ mod storage {
             platforms.insert(0, row.primary_platform_id.clone());
         }
 
+        let artwork = game_artwork_from_sources(row.accent_color, &sources);
+
         Ok(LibraryEntryDto {
             id: row.entry_id,
             primary_platform_id: row.primary_platform_id.clone(),
@@ -3638,14 +4709,50 @@ mod storage {
                 playtime: PlaytimeDto {
                     total_minutes: row.playtime_total_minutes,
                 },
-                artwork: GameArtworkDto {
-                    accent_color: row.accent_color,
-                },
+                artwork,
                 genres,
                 tags: Vec::new(),
                 user_overrides: serde_json::json!({}),
             },
         })
+    }
+
+    fn game_artwork_from_sources(
+        accent_color: Option<String>,
+        sources: &[GameSourceDto],
+    ) -> GameArtworkDto {
+        sources
+            .iter()
+            .find_map(|source| steam_artwork_app_id(source).map(|app_id| (source, app_id)))
+            .map(|(_, app_id)| GameArtworkDto {
+                accent_color: accent_color.clone(),
+                cover_url: Some(format!(
+                    "https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg"
+                )),
+                hero_url: Some(format!(
+                    "https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"
+                )),
+                source: Some("steam".to_string()),
+            })
+            .unwrap_or(GameArtworkDto {
+                accent_color,
+                cover_url: None,
+                hero_url: None,
+                source: None,
+            })
+    }
+
+    fn steam_artwork_app_id(source: &GameSourceDto) -> Option<&str> {
+        let app_id = source.external_id.trim();
+
+        if source.platform_id == "steam"
+            && !app_id.is_empty()
+            && app_id.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            Some(app_id)
+        } else {
+            None
+        }
     }
 
     fn list_sources(
@@ -3928,6 +5035,41 @@ mod storage {
         .and_then(normalize_steam_id64)
     }
 
+    fn xbox_live_client_id_from_config_json(value: &str) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_str(value).ok()?;
+
+        [
+            "microsoftClientId",
+            "microsoft_client_id",
+            "clientId",
+            "client_id",
+        ]
+        .into_iter()
+        .find_map(|key| value.get(key).and_then(|value| value.as_str()))
+        .and_then(normalize_xbox_live_client_id)
+    }
+
+    fn normalize_xbox_live_client_id(value: &str) -> Option<String> {
+        let value = value.trim();
+        if value.len() != 36 {
+            return None;
+        }
+
+        let valid_format = value
+            .chars()
+            .enumerate()
+            .all(|(index, character)| match index {
+                8 | 13 | 18 | 23 => character == '-',
+                _ => character.is_ascii_hexdigit(),
+            });
+
+        if valid_format {
+            Some(value.to_string())
+        } else {
+            None
+        }
+    }
+
     fn table_has_column(
         connection: &Connection,
         table_name: &str,
@@ -4173,7 +5315,8 @@ mod storage {
     }
 
     pub fn sync_local_games(connection: &mut Connection) -> rusqlite::Result<SyncSummaryDto> {
-        let roots = collect_local_game_roots();
+        let settings = get_library_settings(connection)?;
+        let roots = collect_local_game_roots(&settings);
         sync_local_games_from_roots(connection, &roots)
     }
 
@@ -4372,52 +5515,118 @@ mod storage {
         Ok(summary)
     }
 
-    fn collect_local_game_roots() -> Vec<PathBuf> {
+    fn collect_local_game_roots(settings: &LibrarySettingsDto) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        let excluded_roots = normalize_local_scan_root_list(&settings.local_scan_excluded_roots);
+        let configured_roots = normalize_local_scan_root_list(&settings.local_scan_roots);
+
+        match settings.local_scan_mode.as_str() {
+            "selected_only" => {
+                for root in configured_roots {
+                    push_unique_path(&mut roots, root);
+                }
+            }
+            "automatic_plus_extra" => {
+                for root in collect_automatic_local_game_roots() {
+                    push_unique_path(&mut roots, root);
+                }
+                for root in configured_roots {
+                    push_unique_path(&mut roots, root);
+                }
+            }
+            _ => {
+                for root in collect_automatic_local_game_roots() {
+                    push_unique_path(&mut roots, root);
+                }
+            }
+        }
+
+        roots
+            .into_iter()
+            .filter(|root| root.exists())
+            .filter(|root| !is_path_excluded(root, &excluded_roots))
+            .collect()
+    }
+
+    fn collect_automatic_local_game_roots() -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+
         if let Some(raw_roots) = std::env::var_os("BIBLIOTECA_JOGOS_LOCAL_ROOTS") {
-            let roots = raw_roots
+            for root in raw_roots
                 .to_string_lossy()
                 .split(';')
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
-                .collect::<Vec<_>>();
-
-            if !roots.is_empty() {
-                return roots;
+                .filter(|root| root.exists())
+            {
+                push_unique_path(&mut roots, root);
             }
         }
 
-        let mut roots = Vec::new();
-
         if let Some(user_profile) = std::env::var_os("USERPROFILE") {
             let user_profile = PathBuf::from(user_profile);
-            roots.push(user_profile.join("Games"));
-            roots.push(user_profile.join("Desktop").join("Games"));
-            roots.push(user_profile.join("Documents").join("Games"));
-            roots.push(user_profile.join("AppData").join("Local").join("osu!"));
+            push_unique_path(&mut roots, user_profile.join("Games"));
+            push_unique_path(&mut roots, user_profile.join("Desktop").join("Games"));
+            push_unique_path(&mut roots, user_profile.join("Documents").join("Games"));
+            push_unique_path(
+                &mut roots,
+                user_profile.join("AppData").join("Local").join("osu!"),
+            );
         }
 
         if let Some(program_files) = std::env::var_os("PROGRAMFILES") {
             let program_files = PathBuf::from(program_files);
-            roots.push(program_files.join("GOG Games"));
-            roots.push(program_files.join("Epic Games"));
-            roots.push(program_files.join("EA Games"));
-            roots.push(program_files.join("Ubisoft"));
-            roots.push(program_files.join("Battle.net"));
+            push_unique_path(&mut roots, program_files.join("GOG Games"));
+            push_unique_path(&mut roots, program_files.join("Epic Games"));
+            push_unique_path(&mut roots, program_files.join("EA Games"));
+            push_unique_path(&mut roots, program_files.join("Ubisoft"));
+            push_unique_path(&mut roots, program_files.join("Battle.net"));
         }
 
         if let Some(program_files_x86) = std::env::var_os("PROGRAMFILES(X86)") {
             let program_files_x86 = PathBuf::from(program_files_x86);
-            roots.push(program_files_x86.join("GOG Games"));
-            roots.push(program_files_x86.join("Epic Games"));
-            roots.push(program_files_x86.join("Battle.net"));
+            push_unique_path(&mut roots, program_files_x86.join("GOG Games"));
+            push_unique_path(&mut roots, program_files_x86.join("Epic Games"));
+            push_unique_path(&mut roots, program_files_x86.join("Battle.net"));
         }
 
         if let Some(public) = std::env::var_os("PUBLIC") {
-            roots.push(PathBuf::from(public).join("Games"));
+            push_unique_path(&mut roots, PathBuf::from(public).join("Games"));
         }
 
-        roots.into_iter().filter(|root| root.exists()).collect()
+        for root in filesystem_roots() {
+            push_unique_path(&mut roots, root);
+        }
+
+        roots
+    }
+
+    fn filesystem_roots() -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+
+        for letter in b'A'..=b'Z' {
+            let root = format!("{}:\\", letter as char);
+            let path = PathBuf::from(root);
+            if path.exists() {
+                roots.push(path);
+            }
+        }
+
+        roots
+    }
+
+    fn normalize_local_scan_root_list(values: &[String]) -> Vec<PathBuf> {
+        values
+            .iter()
+            .filter_map(|value| normalize_local_scan_root(value))
+            .collect::<Vec<_>>()
+    }
+
+    fn is_path_excluded(path: &Path, exclusions: &[PathBuf]) -> bool {
+        exclusions
+            .iter()
+            .any(|exclusion| path.starts_with(exclusion))
     }
 
     fn collect_steam_roots(connection: &Connection) -> Vec<PathBuf> {
@@ -5899,6 +7108,22 @@ mod storage {
                     .as_deref(),
                 Some(common.to_string_lossy().as_ref())
             );
+            assert_eq!(
+                entries[0].game.artwork.cover_url.as_deref(),
+                Some("https://cdn.akamai.steamstatic.com/steam/apps/413150/library_600x900.jpg")
+            );
+            assert_eq!(
+                entries[0].game.artwork.hero_url.as_deref(),
+                Some("https://cdn.akamai.steamstatic.com/steam/apps/413150/header.jpg")
+            );
+            assert_eq!(entries[0].game.artwork.source.as_deref(), Some("steam"));
+            assert_eq!(
+                serde_json::to_value(&entries[0].game.artwork)
+                    .expect("serialize artwork")
+                    .get("coverUrl")
+                    .and_then(|value| value.as_str()),
+                Some("https://cdn.akamai.steamstatic.com/steam/apps/413150/library_600x900.jpg")
+            );
 
             let second_summary =
                 sync_steam_games_from_roots(&mut connection, std::slice::from_ref(&steam_root))
@@ -6427,6 +7652,141 @@ mod storage {
         }
 
         #[test]
+        fn save_library_settings_persists_local_scan_configuration() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+
+            let selected_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-selected-root-{}",
+                timestamp_millis()
+            ));
+            let excluded_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-excluded-root-{}",
+                timestamp_millis()
+            ));
+            std::fs::create_dir_all(&selected_root).expect("create selected root");
+            std::fs::create_dir_all(&excluded_root).expect("create excluded root");
+
+            let dto = save_library_settings(
+                &mut connection,
+                LibrarySettingsInput {
+                    preferred_store_id: "Xbox".to_string(),
+                    local_scan_mode: "selected_only".to_string(),
+                    local_scan_roots: vec![selected_root.to_string_lossy().to_string()],
+                    local_scan_excluded_roots: vec![excluded_root.to_string_lossy().to_string()],
+                    microsoft_client_id: "00000000-1111-2222-3333-444444444444".to_string(),
+                },
+            )
+            .expect("save library settings");
+            let loaded = get_library_settings(&connection).expect("load library settings");
+
+            assert_eq!(dto.preferred_store_id, "xbox");
+            assert_eq!(dto.local_scan_mode, "selected_only");
+            assert_eq!(dto.local_scan_roots.len(), 1);
+            assert_eq!(dto.local_scan_excluded_roots.len(), 1);
+            assert_eq!(loaded, dto);
+
+            let _ = std::fs::remove_dir_all(selected_root);
+            let _ = std::fs::remove_dir_all(excluded_root);
+        }
+
+        #[test]
+        fn sync_local_games_respects_selected_only_and_exclusions() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+
+            let selected_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-selected-scan-root-{}",
+                timestamp_millis()
+            ));
+            let excluded_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-excluded-scan-root-{}",
+                timestamp_millis()
+            ));
+            let selected_game_dir = selected_root.join("Nightfall");
+            let excluded_game_dir = excluded_root.join("IgnoredGame");
+            let selected_exe = selected_game_dir.join("Nightfall.exe");
+            let excluded_exe = excluded_game_dir.join("IgnoredGame.exe");
+
+            std::fs::create_dir_all(&selected_game_dir).expect("create selected game dir");
+            std::fs::create_dir_all(&excluded_game_dir).expect("create excluded game dir");
+            std::fs::write(&selected_exe, b"fake exe").expect("create selected exe");
+            std::fs::write(&excluded_exe, b"fake exe").expect("create excluded exe");
+
+            save_library_settings(
+                &mut connection,
+                LibrarySettingsInput {
+                    preferred_store_id: "steam".to_string(),
+                    local_scan_mode: "selected_only".to_string(),
+                    local_scan_roots: vec![
+                        selected_root.to_string_lossy().to_string(),
+                        excluded_root.to_string_lossy().to_string(),
+                    ],
+                    local_scan_excluded_roots: vec![excluded_root.to_string_lossy().to_string()],
+                    microsoft_client_id: "00000000-1111-2222-3333-444444444444".to_string(),
+                },
+            )
+            .expect("save selected-only scan settings");
+
+            let summary = sync_local_games(&mut connection).expect("sync local games");
+            let entries = list_library_entries(&connection).expect("list local entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].game.title, "Nightfall");
+
+            let _ = std::fs::remove_file(selected_exe);
+            let _ = std::fs::remove_file(excluded_exe);
+            let _ = std::fs::remove_dir_all(selected_root);
+            let _ = std::fs::remove_dir_all(excluded_root);
+        }
+
+        #[test]
+        fn artwork_falls_back_without_urls_for_non_steam_games() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-artwork-fallback-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            add_manual_game(
+                &mut connection,
+                ManualGameInput {
+                    title: "Sem Arte Remota".to_string(),
+                    genre: Some("Teste".to_string()),
+                    install_status: "not_installed".to_string(),
+                    launch_target: None,
+                },
+            )
+            .expect("add manual game");
+            let entries = list_library_entries(&connection).expect("list entries");
+            let manual_entry = entries
+                .iter()
+                .find(|entry| entry.game.title == "Sem Arte Remota")
+                .expect("manual entry");
+            let local_entry = entries
+                .iter()
+                .find(|entry| entry.primary_platform_id == "local")
+                .expect("local entry");
+
+            assert!(manual_entry.game.artwork.cover_url.is_none());
+            assert!(manual_entry.game.artwork.hero_url.is_none());
+            assert!(manual_entry.game.artwork.source.is_none());
+            assert!(local_entry.game.artwork.cover_url.is_none());
+            assert!(local_entry.game.artwork.hero_url.is_none());
+            assert!(local_entry.game.artwork.source.is_none());
+            assert_eq!(
+                serde_json::to_value(&manual_entry.game.artwork)
+                    .expect("serialize artwork")
+                    .get("coverUrl"),
+                Some(&serde_json::Value::Null)
+            );
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
         fn read_xbox_account_config_accepts_direct_column_and_json() {
             let connection = Connection::open_in_memory().expect("open in-memory database");
             migrate(&connection).expect("apply migration");
@@ -6466,6 +7826,71 @@ mod storage {
                 read_xbox_account_config(&connection).expect("read json xbox xuid"),
                 Some("2533274791234568".to_string())
             );
+        }
+
+        #[test]
+        fn save_xbox_live_client_config_persists_client_id_in_xbox_config_json() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+
+            save_xbox_live_client_id(&mut connection, "00000000-1111-2222-3333-444444444444")
+                .expect("save xbox client id");
+
+            assert_eq!(
+                read_xbox_live_client_id(&connection).expect("read xbox client id"),
+                Some("00000000-1111-2222-3333-444444444444".to_string())
+            );
+
+            let config_json: String = connection
+                .query_row(
+                    "SELECT config_json FROM provider_account_configs WHERE provider_id = 'xbox'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("read xbox config json");
+
+            assert!(config_json
+                .contains("\"microsoftClientId\":\"00000000-1111-2222-3333-444444444444\""));
+        }
+
+        #[test]
+        fn save_xbox_library_roots_accepts_xboxgames_path_and_preserves_account_config() {
+            let extra_library = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-xboxgames-input-{}",
+                timestamp_millis()
+            ));
+            let extra_xbox_games = extra_library.join("XboxGames");
+
+            std::fs::create_dir_all(&extra_xbox_games).expect("create xboxgames");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-xboxgames-input-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            save_verified_xbox_account_config(&mut connection, "2533274791234567")
+                .expect("save xbox account");
+            let dto = save_xbox_library_roots(
+                &mut connection,
+                XboxLibraryRootsInput {
+                    roots: vec![extra_xbox_games.to_string_lossy().to_string()],
+                },
+            )
+            .expect("save xboxgames path");
+
+            assert_eq!(dto.roots.len(), 1);
+            assert_eq!(
+                read_xbox_account_config(&connection).expect("read xbox account"),
+                Some("2533274791234567".to_string())
+            );
+            assert_eq!(
+                read_xbox_library_roots(&connection).expect("read xbox roots"),
+                dto.roots
+            );
+
+            let _ = std::fs::remove_dir_all(extra_library);
+            let _ = std::fs::remove_file(path);
         }
 
         #[test]

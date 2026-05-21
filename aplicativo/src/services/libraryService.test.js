@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { normalizeProviderErrorFeedback } from './libraryService.js'
+import { normalizeLibrarySettings, normalizeProviderErrorFeedback } from './libraryService.js'
 
 test('normalizeProviderErrorFeedback parses JSON error payloads returned as strings', () => {
   const payload = {
@@ -14,7 +14,7 @@ test('normalizeProviderErrorFeedback parses JSON error payloads returned as stri
 
   const feedback = normalizeProviderErrorFeedback(JSON.stringify(payload), 'Falha no Xbox.', 'Sincronizacao Xbox local')
 
-  assert.equal(feedback.message, 'Falha no Xbox.')
+  assert.equal(feedback.message, payload.message)
   assert.equal(feedback.details.length >= 3, true)
   assert.equal(feedback.details[0]?.label, 'Contexto')
   assert.equal(
@@ -43,6 +43,38 @@ test('normalizeProviderErrorFeedback parses JSON payloads returned inside error.
     'Sincronizacao Xbox local',
   )
 
+  assert.equal(feedback.message, payload.message)
   assert.equal(feedback.details.some((detail) => detail.label === 'Codigo' && detail.value === payload.code), true)
   assert.equal(feedback.details.some((detail) => detail.label === 'Etapa' && detail.value === payload.phase), true)
+})
+
+test('normalizeProviderErrorFeedback preserves structured message payloads', () => {
+  const payload = {
+    code: 'xbox_login_failed',
+    message: 'Falha ao concluir o login Xbox Live.',
+    recoverable: true,
+    providerId: 'xbox',
+    phase: 'token_exchange',
+    details: [{ label: 'HTTP', value: '400 Bad Request' }],
+  }
+
+  const feedback = normalizeProviderErrorFeedback(payload, 'Falha no Xbox.', 'Login oficial do Xbox Live')
+
+  assert.equal(feedback.message, payload.message)
+  assert.equal(feedback.details.some((detail) => detail.label === 'Codigo' && detail.value === payload.code), true)
+  assert.equal(feedback.details.some((detail) => detail.label === 'Etapa' && detail.value === payload.phase), true)
+})
+
+test('normalizeLibrarySettings preserves a trimmed Microsoft client id', () => {
+  const settings = normalizeLibrarySettings({
+    preferredStoreId: 'xbox',
+    localScanMode: 'selected_only',
+    localScanRoots: ['C:/Games'],
+    localScanExcludedRoots: ['D:/Temp'],
+    microsoftClientId: '  11111111-2222-3333-4444-555555555555  ',
+  })
+
+  assert.equal(settings.preferredStoreId, 'xbox')
+  assert.equal(settings.localScanMode, 'selected_only')
+  assert.equal(settings.microsoftClientId, '11111111-2222-3333-4444-555555555555')
 })

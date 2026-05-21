@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   buildMicrosoftStoreUri,
+  buildMicrosoftStoreSearchUri,
   getLaunchChoices,
   getLaunchActionState,
   getPreferredLaunchEntryId,
@@ -55,7 +56,7 @@ const xboxStoreEntry = {
   primaryPlatformId: 'xbox',
   installStatus: 'not_installed',
   game: {
-    sources: [{ platformId: 'xbox', externalId: '1234567890' }],
+    sources: [{ platformId: 'xbox', externalId: '9NBLGGH4R315' }],
     launchActions: [],
   },
 }
@@ -91,7 +92,7 @@ test('getLaunchActionState creates a Microsoft Store action for Xbox entries tha
 
   assert.equal(xboxStoreState.canLaunch, true)
   assert.equal(xboxStoreState.primaryLaunchAction?.label, 'Abrir Microsoft Store')
-  assert.equal(xboxStoreState.primaryLaunchAction?.target, 'ms-windows-store://pdp/?productid=1234567890')
+  assert.equal(xboxStoreState.primaryLaunchAction?.target, 'ms-windows-store://pdp/?productid=9NBLGGH4R315')
 })
 
 test('getLaunchActionState keeps Xbox installed entries executable', () => {
@@ -115,8 +116,27 @@ test('resolveMicrosoftStoreTarget keeps direct Microsoft Store links intact', ()
   assert.equal(resolveMicrosoftStoreTarget(directStoreEntry), 'ms-windows-store://pdp/?productid=abc123')
 })
 
+test('resolveMicrosoftStoreTarget ignores non store xbox external ids when building pdp links', () => {
+  const target = resolveMicrosoftStoreTarget({
+    primaryPlatformId: 'xbox',
+    game: {
+      sources: [{ platformId: 'xbox', externalId: '124321' }],
+      launchActions: [],
+    },
+  })
+
+  assert.equal(target, '')
+})
+
 test('buildMicrosoftStoreUri normalizes product ids', () => {
   assert.equal(buildMicrosoftStoreUri('  abc123  '), 'ms-windows-store://pdp/?productid=abc123')
+})
+
+test('buildMicrosoftStoreSearchUri trims generic launcher suffixes from the query', () => {
+  assert.equal(
+    buildMicrosoftStoreSearchUri('Minecraft Launcher'),
+    'ms-windows-store://search/?query=Minecraft',
+  )
 })
 
 test('getLaunchChoices returns one option per underlying platform entry', () => {
@@ -142,7 +162,7 @@ test('getLaunchChoices returns one option per underlying platform entry', () => 
         primaryPlatformId: 'xbox',
         installStatus: 'not_installed',
         game: {
-          sources: [{ platformId: 'xbox', externalId: '1234567890' }],
+          sources: [{ platformId: 'xbox', externalId: '9NBLGGH4R315' }],
           launchActions: [],
         },
       },
@@ -154,7 +174,26 @@ test('getLaunchChoices returns one option per underlying platform entry', () => 
   assert.equal(launchChoices.length, 2)
   assert.equal(launchChoices[0]?.platformLabel, 'Steam')
   assert.equal(launchChoices[1]?.platformLabel, 'Xbox')
-  assert.equal(launchChoices[1]?.launchAction?.target, 'ms-windows-store://pdp/?productid=1234567890')
+  assert.equal(launchChoices[1]?.launchAction?.target, 'ms-windows-store://pdp/?productid=9NBLGGH4R315')
+})
+
+test('getLaunchActionState falls back to store search when no product id is available', () => {
+  const xboxSearchState = getLaunchActionState({
+    id: 'entry-search',
+    primaryPlatformId: 'xbox',
+    installStatus: 'not_installed',
+    game: {
+      title: 'Minecraft Launcher',
+      sources: [{ platformId: 'xbox', externalId: '124321' }],
+      launchActions: [],
+    },
+  })
+
+  assert.equal(xboxSearchState.canLaunch, true)
+  assert.equal(
+    xboxSearchState.primaryLaunchAction?.target,
+    'ms-windows-store://search/?query=Minecraft',
+  )
 })
 
 test('getLaunchChoices prioritizes the preferred platform first', () => {
@@ -180,7 +219,7 @@ test('getLaunchChoices prioritizes the preferred platform first', () => {
         primaryPlatformId: 'xbox',
         installStatus: 'not_installed',
         game: {
-          sources: [{ platformId: 'xbox', externalId: '1234567890' }],
+          sources: [{ platformId: 'xbox', externalId: '9NBLGGH4R315' }],
           launchActions: [],
         },
       },
@@ -275,7 +314,7 @@ test('getPreferredLaunchEntryId picks the first launchable option from grouped e
         primaryPlatformId: 'xbox',
         installStatus: 'not_installed',
         game: {
-          sources: [{ platformId: 'xbox', externalId: '1234567890' }],
+          sources: [{ platformId: 'xbox', externalId: '9NBLGGH4R315' }],
           launchActions: [],
         },
       },
@@ -348,7 +387,7 @@ test('getLaunchActionState honors the preferred platform for grouped entries', (
         primaryPlatformId: 'xbox',
         installStatus: 'not_installed',
         game: {
-          sources: [{ platformId: 'xbox', externalId: '1234567890' }],
+          sources: [{ platformId: 'xbox', externalId: '9NBLGGH4R315' }],
           launchActions: [],
         },
       },
@@ -356,7 +395,16 @@ test('getLaunchActionState honors the preferred platform for grouped entries', (
   }
 
   const preferredXboxState = getLaunchActionState(groupedEntry, 'xbox')
+  const preferredSteamState = getLaunchActionState(groupedEntry, 'steam')
+
+  assert.equal(preferredSteamState.primaryLaunchAction?.platformId, 'steam')
+  assert.equal(preferredSteamState.primaryLaunchAction?.label, 'Jogar na Steam')
+  assert.equal(preferredSteamState.primaryLaunchAction?.target, 'steam://rungameid/10')
 
   assert.equal(preferredXboxState.primaryLaunchAction?.platformId, 'xbox')
   assert.equal(preferredXboxState.primaryLaunchAction?.label, 'Abrir Microsoft Store')
+  assert.equal(
+    preferredXboxState.primaryLaunchAction?.target,
+    'ms-windows-store://pdp/?productid=9NBLGGH4R315',
+  )
 })

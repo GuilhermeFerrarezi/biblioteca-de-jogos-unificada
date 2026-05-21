@@ -63,7 +63,13 @@ const pickLastPlayedLabel = (entries) =>
 
 const pickArchivedState = (entries) => entries.every((entry) => entry?.isArchived === true)
 
-const pickArtwork = (entries) => pickRepresentativeEntry(entries)?.game?.artwork ?? entries[0]?.game?.artwork ?? { accentColor: '#0d9488' }
+const hasArtworkImage = (artwork) => Boolean(artwork?.coverUrl || artwork?.heroUrl)
+
+const pickArtwork = (entries) =>
+  entries.find((entry) => hasArtworkImage(entry?.game?.artwork))?.game?.artwork ??
+  pickRepresentativeEntry(entries)?.game?.artwork ??
+  entries[0]?.game?.artwork ??
+  { accentColor: '#0d9488' }
 
 const pickGenres = (entries) => {
   const genres = uniqueBy(

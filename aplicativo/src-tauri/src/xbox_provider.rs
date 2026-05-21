@@ -1,4 +1,5 @@
 use crate::storage::SyncSummaryDto;
+use crate::{security, xbox_live_auth};
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Deserializer};
@@ -144,7 +145,7 @@ where
 }
 
 pub fn sync_xbox_games(connection: &mut Connection) -> Result<SyncSummaryDto, XboxProviderError> {
-    let discovered_records = collect_xbox_discovery_records()?;
+    let discovered_records = collect_xbox_discovery_records(connection)?;
     let candidates = discover_xbox_game_candidates_from_records(&discovered_records);
     let summary = sync_xbox_games_from_candidates(connection, &candidates).map_err(|error| {
         XboxProviderError::new(
@@ -165,26 +166,24 @@ pub fn sync_xbox_games(connection: &mut Connection) -> Result<SyncSummaryDto, Xb
 
 pub fn sync_xbox_achievement_games(
     connection: &mut Connection,
+    auth_vault: &security::AuthVault,
 ) -> Result<SyncSummaryDto, XboxProviderError> {
     let xuid = read_required_xbox_account_xuid(
         connection,
         "Configure o XUID da conta Xbox antes de sincronizar pelos achievements.",
     )?;
-    let achievement_titles = fetch_xbox_achievement_title_history(&xuid)?;
-    let summary = import_xbox_achievement_title_history_from_records(
-        connection,
-        &xuid,
-        &achievement_titles,
-    )
-        .map_err(|error| {
-            XboxProviderError::new(
-                "xbox_achievement_library_merge_failed",
-                "Nao foi possivel aplicar a sincronizacao Xbox baseada em achievements no banco local.",
-                false,
-                "merge",
-                Some(error.to_string()),
-            )
-        })?;
+    let achievement_titles = fetch_xbox_achievement_title_history(connection, auth_vault, &xuid)?;
+    let summary =
+        import_xbox_achievement_title_history_from_records(connection, &xuid, &achievement_titles)
+            .map_err(|error| {
+                XboxProviderError::new(
+            "xbox_achievement_library_merge_failed",
+            "Nao foi possivel aplicar a sincronizacao Xbox baseada em achievements no banco local.",
+            false,
+            "merge",
+            Some(error.to_string()),
+        )
+            })?;
 
     if let Err(error) = crate::storage::record_xbox_achievement_sync_metadata(
         connection,
@@ -200,26 +199,24 @@ pub fn sync_xbox_achievement_games(
 
 pub fn import_xbox_achievement_title_history(
     connection: &mut Connection,
+    auth_vault: &security::AuthVault,
 ) -> Result<SyncSummaryDto, XboxProviderError> {
     let xuid = read_required_xbox_account_xuid(
         connection,
         "Configure o XUID da conta Xbox antes de importar o historico de titulos.",
     )?;
-    let achievement_titles = fetch_xbox_achievement_title_history(&xuid)?;
-    let summary = import_xbox_achievement_title_history_from_records(
-        connection,
-        &xuid,
-        &achievement_titles,
-    )
-    .map_err(|error| {
-        XboxProviderError::new(
+    let achievement_titles = fetch_xbox_achievement_title_history(connection, auth_vault, &xuid)?;
+    let summary =
+        import_xbox_achievement_title_history_from_records(connection, &xuid, &achievement_titles)
+            .map_err(|error| {
+                XboxProviderError::new(
             "xbox_achievement_title_history_merge_failed",
             "Nao foi possivel aplicar a importacao do historico de titulos do Xbox no banco local.",
             false,
             "merge",
             Some(error.to_string()),
         )
-    })?;
+            })?;
 
     if let Err(error) = crate::storage::record_xbox_achievement_sync_metadata(
         connection,
@@ -263,6 +260,12 @@ fn sync_xbox_games_from_candidates(
     candidates: &[XboxGameCandidate],
 ) -> rusqlite::Result<SyncSummaryDto> {
     let existing_entries = list_xbox_entries_by_source(connection)?;
+    let active_titles = active_xbox_titles(&existing_entries, candidates);
+    let candidates = candidates
+        .iter()
+        .filter(|candidate| !is_contextual_candidate_short_alias(candidate, &active_titles))
+        .cloned()
+        .collect::<Vec<_>>();
     let mut summary = SyncSummaryDto {
         discovered: candidates.len(),
         inserted: 0,
@@ -277,7 +280,7 @@ fn sync_xbox_games_from_candidates(
         .map(|candidate| candidate.app_id.clone())
         .collect::<HashSet<_>>();
 
-    for candidate in candidates {
+    for candidate in &candidates {
         if let Some(existing_row) = existing_entries.get(&candidate.app_id) {
             if update_xbox_entry(&transaction, existing_row, candidate)? {
                 summary.updated += 1;
@@ -289,7 +292,10 @@ fn sync_xbox_games_from_candidates(
     }
 
     for (app_id, existing_row) in &existing_entries {
-        if !existing_row.is_archived && is_rejected_persisted_xbox_entry(app_id, existing_row) {
+        if !existing_row.is_archived
+            && (is_rejected_persisted_xbox_entry(app_id, existing_row)
+                || is_contextual_persisted_short_alias(existing_row, &active_titles))
+        {
             if archive_xbox_entry(&transaction, existing_row)? {
                 summary.archived += 1;
             }
@@ -309,15 +315,35 @@ fn sync_xbox_games_from_candidates(
 }
 
 fn fetch_xbox_achievement_title_history(
-    _xuid: &str,
+    connection: &Connection,
+    auth_vault: &security::AuthVault,
+    xuid: &str,
 ) -> Result<Vec<XboxAchievementHistoryRecord>, XboxProviderError> {
-    Err(XboxProviderError::new(
-        "xbox_achievement_auth_unavailable",
-        "A sincronizacao Xbox por achievements ainda depende de um fluxo de autenticacao Xbox Live nao implementado neste corte.",
-        false,
-        "preflight",
-        Some("nenhum token Xbox Live disponivel".to_string()),
-    ))
+    xbox_live_auth::fetch_xbox_achievement_title_history(connection, auth_vault, xuid)
+        .map(convert_xbox_live_history_records)
+        .map_err(|error| {
+            XboxProviderError::new(
+                "xbox_achievement_auth_unavailable",
+                "A sincronizacao Xbox por achievements nao conseguiu consultar o historico autenticado.",
+                true,
+                "preflight",
+                Some(error.to_string()),
+            )
+        })
+}
+
+fn convert_xbox_live_history_records(
+    records: Vec<xbox_live_auth::XboxAchievementHistoryRecord>,
+) -> Vec<XboxAchievementHistoryRecord> {
+    records
+        .into_iter()
+        .map(|record| XboxAchievementHistoryRecord {
+            title_id: record.title_id,
+            service_config_id: record.service_config_id,
+            name: record.name,
+            title_type: record.title_type,
+        })
+        .collect()
 }
 
 fn import_xbox_achievement_title_history_from_records(
@@ -327,8 +353,14 @@ fn import_xbox_achievement_title_history_from_records(
 ) -> rusqlite::Result<SyncSummaryDto> {
     let existing_entries_by_source = list_xbox_entries_by_source(connection)?;
     let existing_entries_by_title = list_xbox_entries_by_title(connection)?;
+    let candidates = xbox_achievement_candidates_from_records(titles);
+    let active_titles = active_xbox_titles(&existing_entries_by_source, &candidates);
+    let candidates = candidates
+        .into_iter()
+        .filter(|candidate| !is_contextual_candidate_short_alias(candidate, &active_titles))
+        .collect::<Vec<_>>();
     let mut summary = SyncSummaryDto {
-        discovered: titles.len(),
+        discovered: candidates.len(),
         inserted: 0,
         updated: 0,
         archived: 0,
@@ -336,9 +368,12 @@ fn import_xbox_achievement_title_history_from_records(
     };
 
     let transaction = connection.transaction()?;
+    let discovered_app_ids = candidates
+        .iter()
+        .map(|candidate| candidate.app_id.clone())
+        .collect::<HashSet<_>>();
 
-    for title in titles {
-        let candidate = xbox_achievement_candidate_from_record(title);
+    for candidate in candidates {
         let normalized_title = normalize_name(&candidate.title);
 
         if normalized_title.is_empty() {
@@ -366,21 +401,137 @@ fn import_xbox_achievement_title_history_from_records(
         summary.inserted += 1;
     }
 
+    for (app_id, existing_row) in &existing_entries_by_source {
+        if existing_row.is_archived || discovered_app_ids.contains(app_id) {
+            continue;
+        }
+
+        if is_rejected_persisted_xbox_entry(app_id, existing_row)
+            || is_contextual_persisted_short_alias(existing_row, &active_titles)
+        {
+            if archive_xbox_entry(&transaction, existing_row)? {
+                summary.archived += 1;
+            }
+        }
+    }
+
     transaction.commit()?;
     Ok(summary)
+}
+
+fn xbox_achievement_candidates_from_records(
+    titles: &[XboxAchievementHistoryRecord],
+) -> Vec<XboxGameCandidate> {
+    let candidates = titles
+        .iter()
+        .map(xbox_achievement_candidate_from_record)
+        .filter(|candidate| !is_rejected_xbox_candidate(candidate))
+        .collect::<Vec<_>>();
+
+    remove_achievement_short_aliases(candidates)
+}
+
+fn remove_achievement_short_aliases(candidates: Vec<XboxGameCandidate>) -> Vec<XboxGameCandidate> {
+    candidates
+        .iter()
+        .filter(|candidate| {
+            !candidates
+                .iter()
+                .any(|other| is_achievement_short_alias(candidate, other))
+        })
+        .cloned()
+        .collect()
+}
+
+fn is_achievement_short_alias(candidate: &XboxGameCandidate, other: &XboxGameCandidate) -> bool {
+    if candidate.app_id == other.app_id {
+        return false;
+    }
+
+    let candidate_title = normalize_name(&candidate.title);
+    let other_title = normalize_name(&other.title);
+
+    !candidate_title.is_empty()
+        && candidate_title.len() <= 3
+        && other_title.len() > candidate_title.len()
+        && other_title.starts_with(&candidate_title)
+}
+
+fn active_xbox_titles(
+    existing_entries_by_source: &HashMap<String, EntryRow>,
+    candidates: &[XboxGameCandidate],
+) -> Vec<String> {
+    existing_entries_by_source
+        .values()
+        .filter(|entry| !entry.is_archived)
+        .map(|entry| entry.title.clone())
+        .chain(candidates.iter().map(|candidate| candidate.title.clone()))
+        .collect()
 }
 
 fn is_rejected_persisted_xbox_entry(app_id: &str, existing_row: &EntryRow) -> bool {
     let package_family_name = app_id.split('!').next().unwrap_or(app_id);
 
-    is_known_non_game_xbox_record(&existing_row.title, None, package_family_name)
+    is_known_non_game_xbox_record(&existing_row.title, None, package_family_name, Some(app_id))
         || normalize_name(&existing_row.title).is_empty()
         || matches!(
             existing_row.primary_action_kind.as_deref(),
             Some("executable")
-        ) && existing_row.primary_action_target.as_deref().is_some_and(|target| {
-            is_probably_local_desktop_install_location(target, package_family_name)
-        })
+        ) && existing_row
+            .primary_action_target
+            .as_deref()
+            .is_some_and(|target| {
+                is_probably_local_desktop_install_location(target, package_family_name)
+            })
+}
+
+fn is_contextual_persisted_short_alias(existing_row: &EntryRow, active_titles: &[String]) -> bool {
+    if is_pal_alias_title(&existing_row.title) && has_palworld_title(active_titles) {
+        return true;
+    }
+
+    if existing_row.installed || existing_row.install_status == "installed" {
+        return false;
+    }
+
+    let title = normalize_name(&existing_row.title);
+    if title.is_empty() || title.len() > 3 {
+        return false;
+    }
+
+    active_titles.iter().any(|other| {
+        let other_title = normalize_name(other);
+        other_title.len() > title.len() && other_title.starts_with(&title)
+    })
+}
+
+fn is_contextual_candidate_short_alias(
+    candidate: &XboxGameCandidate,
+    active_titles: &[String],
+) -> bool {
+    if is_pal_alias_title(&candidate.title) && has_palworld_title(active_titles) {
+        return true;
+    }
+
+    let title = normalize_name(&candidate.title);
+    if title.is_empty() || title.len() > 3 {
+        return false;
+    }
+
+    active_titles.iter().any(|other| {
+        let other_title = normalize_name(other);
+        other_title.len() > title.len() && other_title.starts_with(&title)
+    })
+}
+
+fn is_pal_alias_title(title: &str) -> bool {
+    normalize_name(title) == "pal"
+}
+
+fn has_palworld_title(active_titles: &[String]) -> bool {
+    active_titles
+        .iter()
+        .any(|title| normalize_name(title) == "palworld")
 }
 
 fn archive_xbox_entry(
@@ -458,7 +609,62 @@ fn discover_xbox_game_candidates_from_records(
             .or_insert(candidate);
     }
 
-    candidates.into_values().collect()
+    remove_contextual_short_aliases(candidates.into_values().collect())
+}
+
+fn remove_contextual_short_aliases(candidates: Vec<XboxGameCandidate>) -> Vec<XboxGameCandidate> {
+    candidates
+        .iter()
+        .filter(|candidate| {
+            !candidates
+                .iter()
+                .any(|other| is_contextual_short_alias(candidate, other))
+        })
+        .cloned()
+        .collect()
+}
+
+fn is_contextual_short_alias(candidate: &XboxGameCandidate, other: &XboxGameCandidate) -> bool {
+    if candidate.app_id == other.app_id {
+        return false;
+    }
+
+    let candidate_title = normalize_name(&candidate.title);
+    let other_title = normalize_name(&other.title);
+
+    if candidate_title.is_empty()
+        || other_title.is_empty()
+        || candidate_title.len() > 3
+        || other_title.len() <= candidate_title.len()
+        || !other_title.starts_with(&candidate_title)
+    {
+        return false;
+    }
+
+    let shares_store_id = candidate
+        .store_id
+        .as_deref()
+        .zip(other.store_id.as_deref())
+        .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right));
+
+    if shares_store_id {
+        return true;
+    }
+
+    normalize_name(&format!(
+        "{} {}",
+        candidate.app_id, candidate.package_family_name
+    ))
+    .contains(&other_title)
+}
+
+fn is_rejected_xbox_candidate(candidate: &XboxGameCandidate) -> bool {
+    is_known_non_game_xbox_record(
+        &candidate.title,
+        None,
+        &candidate.package_family_name,
+        Some(&candidate.app_id),
+    ) || normalize_name(&candidate.title).is_empty()
 }
 
 fn should_replace_xbox_candidate(
@@ -483,7 +689,9 @@ fn is_registered_xbox_app_id(app_id: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn collect_xbox_discovery_records() -> Result<Vec<XboxDiscoveryRecord>, XboxProviderError> {
+fn collect_xbox_discovery_records(
+    connection: &Connection,
+) -> Result<Vec<XboxDiscoveryRecord>, XboxProviderError> {
     let script = r#"
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
@@ -534,20 +742,24 @@ try {
 "#;
     let output = run_powershell(script)?;
     let mut records = parse_discovery_output(&output)?;
-    records.extend(collect_xbox_games_folder_records());
+    records.extend(collect_xbox_games_folder_records(connection)?);
     Ok(records)
 }
 
 #[cfg(not(target_os = "windows"))]
-fn collect_xbox_discovery_records() -> Result<Vec<XboxDiscoveryRecord>, XboxProviderError> {
+fn collect_xbox_discovery_records(
+    _connection: &Connection,
+) -> Result<Vec<XboxDiscoveryRecord>, XboxProviderError> {
     Err(XboxProviderError::unsupported_platform())
 }
 
 #[cfg(target_os = "windows")]
-fn collect_xbox_games_folder_records() -> Vec<XboxDiscoveryRecord> {
+fn collect_xbox_games_folder_records(
+    connection: &Connection,
+) -> Result<Vec<XboxDiscoveryRecord>, XboxProviderError> {
     let mut records = Vec::new();
 
-    for root in filesystem_roots() {
+    for root in collect_xbox_library_roots(connection)? {
         let xbox_games_root = root.join("XboxGames");
         let Ok(entries) = fs::read_dir(&xbox_games_root) else {
             continue;
@@ -565,7 +777,85 @@ fn collect_xbox_games_folder_records() -> Vec<XboxDiscoveryRecord> {
         }
     }
 
-    records
+    Ok(records)
+}
+
+#[cfg(target_os = "windows")]
+fn collect_xbox_library_roots(connection: &Connection) -> Result<Vec<PathBuf>, XboxProviderError> {
+    let mut roots = Vec::new();
+
+    if let Ok(saved_roots) = crate::storage::read_xbox_library_roots(connection) {
+        for root in saved_roots {
+            if let Some(path) = normalize_xbox_root_candidate(&root) {
+                push_unique_xbox_root(&mut roots, path);
+            }
+        }
+    }
+
+    if let Ok(env_roots) = std::env::var("BIBLIOTECA_JOGOS_XBOX_ROOTS") {
+        for root in env_roots.split([';', '\n']) {
+            if let Some(path) = normalize_xbox_root_candidate(root) {
+                push_unique_xbox_root(&mut roots, path);
+            }
+        }
+    }
+
+    for root in filesystem_roots() {
+        push_unique_xbox_root(&mut roots, root);
+    }
+
+    Ok(roots)
+}
+
+#[cfg(target_os = "windows")]
+fn push_unique_xbox_root(roots: &mut Vec<PathBuf>, candidate: PathBuf) {
+    let candidate_key = normalize_xbox_root_key(&candidate);
+
+    if roots
+        .iter()
+        .any(|existing| normalize_xbox_root_key(existing) == candidate_key)
+    {
+        return;
+    }
+
+    roots.push(candidate);
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_xbox_root_candidate(value: &str) -> Option<PathBuf> {
+    let trimmed = value.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(trimmed);
+    let library_root = if is_xbox_games_path(&path) {
+        path.parent().map(Path::to_path_buf)?
+    } else {
+        path
+    };
+    let xbox_games_dir = library_root.join("XboxGames");
+
+    if xbox_games_dir.is_dir() {
+        Some(library_root.canonicalize().unwrap_or(library_root))
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_xbox_root_key(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_lowercase()
+}
+
+#[cfg(target_os = "windows")]
+fn is_xbox_games_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("xboxgames"))
 }
 
 #[cfg(target_os = "windows")]
@@ -893,6 +1183,15 @@ fn should_keep_xbox_record(record: &XboxDiscoveryRecord) -> bool {
         return false;
     }
 
+    if is_known_non_game_xbox_record(
+        &title,
+        record.package_name.as_deref(),
+        &record.package_family_name,
+        Some(&record.app_id),
+    ) {
+        return false;
+    }
+
     if record
         .install_location
         .as_deref()
@@ -956,10 +1255,16 @@ fn is_known_non_game_xbox_record(
     title: &str,
     package_name: Option<&str>,
     package_family_name: &str,
+    app_id: Option<&str>,
 ) -> bool {
     let normalized_title = normalize_name(title);
     let normalized_package_name = package_name.map(normalize_name).unwrap_or_default();
     let normalized_family = normalize_name(package_family_name);
+    let normalized_app_id = app_id.map(normalize_name).unwrap_or_default();
+    let haystack = format!(
+        "{} {} {} {}",
+        normalized_title, normalized_package_name, normalized_family, normalized_app_id
+    );
 
     const TITLE_DENYLIST: &[&str] = &[
         "calculator",
@@ -977,6 +1282,8 @@ fn is_known_non_game_xbox_record(
         "films and tv",
         "filmes e tv",
         "get help",
+        "app installer",
+        "desktop app installer",
         "hyperx ngenuity",
         "intel graphics software",
         "intel graphics experience",
@@ -1009,12 +1316,29 @@ fn is_known_non_game_xbox_record(
         "spotify",
         "teams",
         "terminal",
+        "youtube",
+        "youtube tv",
+        "prime video",
+        "amazon prime video",
+        "disney+",
+        "disney plus",
+        "hulu",
+        "paramount+",
+        "paramount plus",
+        "max",
+        "windows app runtime",
+        "windows app sdk",
+        "windows package manager",
+        "windows web experience pack",
         "weather",
         "windows backup",
         "vincular ao celular",
         "your phone",
         "xbox game bar",
+        "xbox game bar presence writer",
+        "xbox identity provider",
         "game bar",
+        "store purchase app",
         "settings",
         "supportassist",
         "dolby access",
@@ -1061,6 +1385,12 @@ fn is_known_non_game_xbox_record(
         "microsoftwindowscommunicationsapps",
         "microsoftwindows.client.cbs",
         "microsoftwindows.client.coreai",
+        "microsoftwindowsappruntime",
+        "microsoftwindowsappsdk",
+        "microsoftdesktopappinstaller",
+        "microsoftwindowspackagemanager",
+        "microsoftwindowswebexperiencepack",
+        "microsoftwindowsclientwebexperience",
         "microsoftcorporationii.quickassist",
         "microsoft.microsoftofficehub",
         "clipchamp.clipchamp",
@@ -1088,7 +1418,16 @@ fn is_known_non_game_xbox_record(
         "dellinc.dellupdate",
         "dolbylaboratories.dolbyaccess",
         "15ef7777.crunchyroll",
+        "googlellc.youtube",
+        "googleinc.youtube",
+        "youtube",
         "4df9e0f8.netflix",
+        "netflix",
+        "amazonvideo",
+        "disney",
+        "hulu",
+        "paramount",
+        "warnerbros.max",
         "nvidiacorp.nvidiacontrolpanel",
         "spotifyab.spotifymusic",
         "realteksemiconductorcorp.realtekaudiocontrol",
@@ -1096,10 +1435,10 @@ fn is_known_non_game_xbox_record(
 
     TITLE_DENYLIST.iter().any(|keyword| {
         let normalized_keyword = normalize_name(keyword);
-        normalized_title == normalized_keyword || normalized_package_name == normalized_keyword
+        haystack.contains(&normalized_keyword)
     }) || FAMILY_DENYLIST.iter().any(|keyword| {
         let normalized_keyword = normalize_name(keyword);
-        normalized_family.contains(&normalized_keyword)
+        haystack.contains(&normalized_keyword)
     })
 }
 
@@ -1307,7 +1646,12 @@ fn insert_xbox_achievement_entry(
         INSERT INTO game_sources (id, game_id, platform_id, external_id, account_id)
         VALUES (?1, ?2, 'xbox', ?3, ?4)
         "#,
-        params![candidate.source_id, candidate.game_id, candidate.app_id, xuid],
+        params![
+            candidate.source_id,
+            candidate.game_id,
+            candidate.app_id,
+            xuid
+        ],
     )?;
     upsert_xbox_primary_action(transaction, candidate, false, &candidate.launch_id)?;
     transaction.execute(
@@ -1858,6 +2202,25 @@ mod tests {
         }
     }
 
+    fn sample_xbox_record(title: &str, package_family_name: &str) -> XboxDiscoveryRecord {
+        XboxDiscoveryRecord {
+            app_id: format!("{package_family_name}!App"),
+            title: title.to_string(),
+            package_family_name: package_family_name.to_string(),
+            package_name: Some(title.to_string()),
+            package_full_name: Some(format!("{package_family_name}_1.0.0.0_x64__publisher")),
+            install_location: Some(format!(
+                r"C:\Program Files\WindowsApps\{package_family_name}"
+            )),
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: true,
+            is_framework: false,
+            non_removable: false,
+            signature_kind: Some("Store".to_string()),
+        }
+    }
+
     fn open_memory_database() -> Connection {
         let connection = Connection::open_in_memory().expect("open memory db");
         connection
@@ -1950,8 +2313,12 @@ mod tests {
     }
 
     #[test]
-    fn import_xbox_achievement_title_history_requires_configured_xuid_and_leaves_database_untouched() {
+    fn import_xbox_achievement_title_history_requires_configured_xuid_and_leaves_database_untouched(
+    ) {
         let mut connection = open_memory_database();
+        let auth_vault = crate::security::AuthVault::system(
+            std::env::temp_dir().join(format!("biblioteca-xbox-live-auth-{}", std::process::id())),
+        );
 
         let before_games = table_row_count(&connection, "games");
         let before_entries = table_row_count(&connection, "library_entries");
@@ -1959,15 +2326,21 @@ mod tests {
         let before_actions = table_row_count(&connection, "launch_actions");
         let before_provider_configs = table_row_count(&connection, "provider_account_configs");
 
-        let error = import_xbox_achievement_title_history(&mut connection)
+        let error = import_xbox_achievement_title_history(&mut connection, &auth_vault)
             .expect_err("import should require a configured xbox xuid");
 
         assert_eq!(error.code, "xbox_account_missing");
         assert!(error.recoverable);
         assert_eq!(table_row_count(&connection, "games"), before_games);
-        assert_eq!(table_row_count(&connection, "library_entries"), before_entries);
+        assert_eq!(
+            table_row_count(&connection, "library_entries"),
+            before_entries
+        );
         assert_eq!(table_row_count(&connection, "game_sources"), before_sources);
-        assert_eq!(table_row_count(&connection, "launch_actions"), before_actions);
+        assert_eq!(
+            table_row_count(&connection, "launch_actions"),
+            before_actions
+        );
         assert_eq!(
             table_row_count(&connection, "provider_account_configs"),
             before_provider_configs
@@ -1975,7 +2348,8 @@ mod tests {
     }
 
     #[test]
-    fn import_xbox_achievement_title_history_from_records_inserts_not_installed_entry_with_store_action() {
+    fn import_xbox_achievement_title_history_from_records_inserts_not_installed_entry_with_store_action(
+    ) {
         let mut connection = open_memory_database();
         let xuid = "2533274791234567";
         let record = XboxAchievementHistoryRecord {
@@ -2055,7 +2429,177 @@ mod tests {
     }
 
     #[test]
-    fn import_xbox_achievement_title_history_rolls_back_partial_changes_when_the_primary_action_insert_fails() {
+    fn import_xbox_achievement_title_history_from_records_filters_media_apps_and_short_aliases() {
+        let mut connection = open_memory_database();
+        let xuid = "2533274791234567";
+        let records = vec![
+            XboxAchievementHistoryRecord {
+                title_id: "pal-alias-title-id".to_string(),
+                service_config_id: Some("pal-service-config-id".to_string()),
+                name: "Pal".to_string(),
+                title_type: Some("Game".to_string()),
+            },
+            XboxAchievementHistoryRecord {
+                title_id: "palworld-title-id".to_string(),
+                service_config_id: Some("palworld-service-config-id".to_string()),
+                name: "Palworld".to_string(),
+                title_type: Some("Game".to_string()),
+            },
+            XboxAchievementHistoryRecord {
+                title_id: "youtube-title-id".to_string(),
+                service_config_id: Some("GoogleLLC.YouTube".to_string()),
+                name: "YouTube".to_string(),
+                title_type: Some("App".to_string()),
+            },
+            XboxAchievementHistoryRecord {
+                title_id: "netflix-title-id".to_string(),
+                service_config_id: Some("4DF9E0F8.Netflix".to_string()),
+                name: "Netflix".to_string(),
+                title_type: Some("App".to_string()),
+            },
+        ];
+
+        let summary =
+            import_xbox_achievement_title_history_from_records(&mut connection, xuid, &records)
+                .expect("import filtered xbox title history");
+
+        assert_eq!(summary.discovered, 1);
+        assert_eq!(summary.inserted, 1);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM games WHERE title IN ('Pal', 'YouTube', 'Netflix')",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("count rejected titles"),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT title FROM games", [], |row| row.get::<_, String>(0))
+                .expect("read imported title"),
+            "Palworld"
+        );
+    }
+
+    #[test]
+    fn import_xbox_achievement_title_history_from_records_archives_previous_bad_imports() {
+        let mut connection = open_memory_database();
+        let xuid = "2533274791234567";
+        let previous_records = vec![
+            XboxAchievementHistoryRecord {
+                title_id: "old-pal-alias-title-id".to_string(),
+                service_config_id: Some("old-pal-service-config-id".to_string()),
+                name: "Pal".to_string(),
+                title_type: Some("Game".to_string()),
+            },
+            XboxAchievementHistoryRecord {
+                title_id: "old-youtube-title-id".to_string(),
+                service_config_id: Some("GoogleLLC.YouTube".to_string()),
+                name: "YouTube".to_string(),
+                title_type: Some("App".to_string()),
+            },
+            XboxAchievementHistoryRecord {
+                title_id: "old-netflix-title-id".to_string(),
+                service_config_id: Some("4DF9E0F8.Netflix".to_string()),
+                name: "Netflix".to_string(),
+                title_type: Some("App".to_string()),
+            },
+        ];
+
+        {
+            let transaction = connection.transaction().expect("begin seed transaction");
+            for record in &previous_records {
+                let candidate = xbox_achievement_candidate_from_record(record);
+                insert_xbox_achievement_entry(&transaction, &candidate, xuid)
+                    .expect("seed previous bad import");
+            }
+            transaction.commit().expect("commit previous bad imports");
+        }
+
+        let current_records = vec![XboxAchievementHistoryRecord {
+            title_id: "palworld-title-id".to_string(),
+            service_config_id: Some("palworld-service-config-id".to_string()),
+            name: "Palworld".to_string(),
+            title_type: Some("Game".to_string()),
+        }];
+
+        let summary = import_xbox_achievement_title_history_from_records(
+            &mut connection,
+            xuid,
+            &current_records,
+        )
+        .expect("cleanup previous bad imports");
+
+        assert_eq!(summary.inserted, 1);
+        assert_eq!(summary.archived, 3);
+        assert_eq!(
+            connection
+                .query_row(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM library_entries
+                    JOIN games ON games.id = library_entries.game_id
+                    WHERE games.title IN ('Pal', 'YouTube', 'Netflix')
+                      AND library_entries.is_archived = 1
+                    "#,
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("count archived bad imports"),
+            3
+        );
+    }
+
+    #[test]
+    fn import_xbox_achievement_title_history_from_records_skips_pal_when_palworld_already_exists() {
+        let mut connection = open_memory_database();
+        let xuid = "2533274791234567";
+        let palworld = XboxAchievementHistoryRecord {
+            title_id: "palworld-title-id".to_string(),
+            service_config_id: Some("palworld-service-config-id".to_string()),
+            name: "Palworld".to_string(),
+            title_type: Some("Game".to_string()),
+        };
+
+        import_xbox_achievement_title_history_from_records(
+            &mut connection,
+            xuid,
+            std::slice::from_ref(&palworld),
+        )
+        .expect("seed palworld");
+
+        let pal = XboxAchievementHistoryRecord {
+            title_id: "pal-title-id".to_string(),
+            service_config_id: Some("pal-service-config-id".to_string()),
+            name: "Pal".to_string(),
+            title_type: Some("Game".to_string()),
+        };
+        let summary = import_xbox_achievement_title_history_from_records(
+            &mut connection,
+            xuid,
+            std::slice::from_ref(&pal),
+        )
+        .expect("sync pal alias after palworld");
+
+        assert_eq!(summary.discovered, 0);
+        assert_eq!(summary.inserted, 0);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM games WHERE title = 'Pal'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("count pal aliases"),
+            0
+        );
+    }
+
+    #[test]
+    fn import_xbox_achievement_title_history_rolls_back_partial_changes_when_the_primary_action_insert_fails(
+    ) {
         let mut connection = open_memory_database();
         let xuid = "2533274791234567";
         let record = XboxAchievementHistoryRecord {
@@ -2288,6 +2832,28 @@ mod tests {
     }
 
     #[test]
+    fn removes_short_alias_when_canonical_title_is_present_in_same_batch() {
+        let mut alias = sample_xbox_record("Pal", "PocketpairInc.Palworld_12345");
+        alias.app_id = "PocketpairInc.Palworld_12345!Pal".to_string();
+        let canonical = sample_xbox_record("Palworld", "PocketpairInc.Palworld_12345");
+
+        let candidates = discover_xbox_game_candidates_from_records(&[alias, canonical]);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].title, "Palworld");
+    }
+
+    #[test]
+    fn keeps_short_title_when_no_related_canonical_title_exists() {
+        let record = sample_xbox_record("Pal", "Example.Pal_12345");
+
+        let candidates = discover_xbox_game_candidates_from_records(&[record]);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].title, "Pal");
+    }
+
+    #[test]
     fn prefers_registered_aumid_over_folder_only_record_for_same_store_game() {
         let records = vec![
             XboxDiscoveryRecord {
@@ -2500,6 +3066,28 @@ mod tests {
     }
 
     #[test]
+    fn should_keep_xbox_record_rejects_windows_store_infrastructure_packages() {
+        let record = XboxDiscoveryRecord {
+            app_id: "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe!App".to_string(),
+            title: "App Installer".to_string(),
+            package_family_name: "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe".to_string(),
+            package_name: Some("App Installer".to_string()),
+            package_full_name: Some(
+                "Microsoft.DesktopAppInstaller_1.0.0.0_x64__8wekyb3d8bbwe".to_string(),
+            ),
+            install_location: Some("C:\\Program Files\\WindowsApps\\AppInstaller".to_string()),
+            launch_target: None,
+            store_id: None,
+            has_microsoft_game_config: true,
+            is_framework: false,
+            non_removable: true,
+            signature_kind: Some("Store".to_string()),
+        };
+
+        assert!(!should_keep_xbox_record(&record));
+    }
+
+    #[test]
     fn should_keep_xbox_record_rejects_filmes_e_tv_app() {
         let record = XboxDiscoveryRecord {
             app_id: "Microsoft.ZuneVideo_8wekyb3d8bbwe!App".to_string(),
@@ -2517,6 +3105,20 @@ mod tests {
             non_removable: false,
             signature_kind: Some("Store".to_string()),
         };
+
+        assert!(!should_keep_xbox_record(&record));
+    }
+
+    #[test]
+    fn should_keep_xbox_record_rejects_youtube_app() {
+        let record = sample_xbox_record("YouTube", "GoogleLLC.YouTube_1abc2def34567");
+
+        assert!(!should_keep_xbox_record(&record));
+    }
+
+    #[test]
+    fn should_keep_xbox_record_rejects_netflix_app() {
+        let record = sample_xbox_record("Netflix", "4DF9E0F8.Netflix_mcm4njqhnhss8");
 
         assert!(!should_keep_xbox_record(&record));
     }
@@ -2690,9 +3292,11 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn sync_xbox_games_with_live_windows_inventory() {
-        let records = collect_xbox_discovery_records().expect("collect live xbox records");
+        let connection = open_memory_database();
+        let records =
+            collect_xbox_discovery_records(&connection).expect("collect live xbox records");
         let candidates = discover_xbox_game_candidates_from_records(&records);
-        let mut connection = open_memory_database();
+        let mut connection = connection;
         let summary = sync_xbox_games_from_candidates(&mut connection, &candidates)
             .expect("sync live xbox inventory");
         let entries = crate::storage::list_library_entries(&connection)
@@ -2906,7 +3510,8 @@ mod tests {
         let mut candidate = sample_candidate();
         candidate.app_id = "Contoso.DesktopGame!App".to_string();
         candidate.package_family_name = "Contoso.DesktopGame".to_string();
-        candidate.launch_target = Some(r"C:\Users\Guiti\AppData\Local\Contoso\DesktopGame.exe".to_string());
+        candidate.launch_target =
+            Some(r"C:\Users\Guiti\AppData\Local\Contoso\DesktopGame.exe".to_string());
         candidate.store_id = None;
         candidate.source_id = "source-xbox-halo-local".to_string();
         candidate.game_id = "game-xbox-halo-local".to_string();
@@ -2987,8 +3592,8 @@ mod tests {
             r#"["shell:AppsFolder\\Microsoft.HaloInfinite_8wekyb3d8bbwe!App"]"#
         );
 
-        let summary = sync_xbox_games_from_candidates(&mut connection, &[])
-            .expect("resync real xbox entry");
+        let summary =
+            sync_xbox_games_from_candidates(&mut connection, &[]).expect("resync real xbox entry");
         let state = connection
             .query_row(
                 r#"

@@ -1,12 +1,13 @@
 import { listen } from '@tauri-apps/api/event'
+import { open } from '@tauri-apps/plugin-dialog'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addPersistedManualGame,
-  getXboxAccountConfig,
   launchLibraryEntry,
   listLibraryEntries,
   getLibrarySettings,
   normalizeProviderErrorFeedback,
+  normalizeLibrarySettings,
   setLibraryEntryArchived,
   saveLibrarySettings,
   syncSteamAccountGames,
@@ -37,6 +38,7 @@ import { useLibraryFiltering } from './useLibraryFiltering'
 const LIBRARY_BOOTSTRAP_COMPLETE_EVENT = 'library-bootstrap-complete'
 const XBOX_SYNC_FAILED_EVENT = 'xbox-sync-failed'
 const XBOX_ACHIEVEMENTS_SYNC_FAILED_EVENT = 'xbox-achievements-sync-failed'
+let bootstrapLibraryEntriesPromise = null
 
 const hasTauriRuntime = () =>
   typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
@@ -50,16 +52,15 @@ export function useLibraryPageState() {
   const [launchMessage, setLaunchMessage] = useState('')
   const [launchFeedback, setLaunchFeedback] = useState(null)
   const [isLibraryLoading, setIsLibraryLoading] = useState(true)
-  const [isBootstrapping, setIsBootstrapping] = useState(true)
   const [isLocalSyncing, setIsLocalSyncing] = useState(false)
   const [isSteamSyncing, setIsSteamSyncing] = useState(false)
   const [isXboxSyncing, setIsXboxSyncing] = useState(false)
   const [isSteamAccountSyncing, setIsSteamAccountSyncing] = useState(false)
-  const [xboxIdentityStatus, setXboxIdentityStatus] = useState({
-    connected: false,
-    xuid: null,
-  })
   const [preferredStoreId, setPreferredStoreId] = useState('steam')
+  const [localScanMode, setLocalScanMode] = useState('automatic')
+  const [localScanRootsText, setLocalScanRootsText] = useState('')
+  const [localScanExcludedRootsText, setLocalScanExcludedRootsText] = useState('')
+  const [microsoftClientId, setMicrosoftClientId] = useState('')
   const [selectedLaunchPlatformByEntryId, setSelectedLaunchPlatformByEntryId] = useState({})
   const [isLibrarySettingsLoading, setIsLibrarySettingsLoading] = useState(true)
   const [isLibrarySettingsSaving, setIsLibrarySettingsSaving] = useState(false)
@@ -69,7 +70,7 @@ export function useLibraryPageState() {
   const [manualGameErrors, setManualGameErrors] = useState({})
   const xboxSyncFailureHandledRef = useRef(false)
   const isEditingManualGame = editingEntryId !== ''
-  const showLibraryLoading = isLibraryLoading || isBootstrapping
+  const showLibraryLoading = isLibraryLoading
   const groupedEntries = useMemo(() => groupLibraryEntries(entries), [entries])
   const { filteredEntries, installedCount, totalHours } = useLibraryFiltering(groupedEntries, searchTerm, quickFilters)
   const selectedEntry = getVisibleSelectedEntry(filteredEntries, selectedEntryId)
@@ -89,11 +90,19 @@ export function useLibraryPageState() {
           return
         }
 
-        const nextPreferredStoreId = String(settings?.preferredStoreId ?? '').trim().toLowerCase() === 'xbox' ? 'xbox' : 'steam'
-        setPreferredStoreId(nextPreferredStoreId)
+        const normalizedSettings = normalizeLibrarySettings(settings)
+        setPreferredStoreId(normalizedSettings.preferredStoreId)
+        setLocalScanMode(normalizedSettings.localScanMode)
+        setLocalScanRootsText(normalizedSettings.localScanRoots.join('\n'))
+        setLocalScanExcludedRootsText(normalizedSettings.localScanExcludedRoots.join('\n'))
+        setMicrosoftClientId(normalizedSettings.microsoftClientId ?? '')
       } catch {
         if (isMounted) {
           setPreferredStoreId('steam')
+          setLocalScanMode('automatic')
+          setLocalScanRootsText('')
+          setLocalScanExcludedRootsText('')
+          setMicrosoftClientId('')
         }
       } finally {
         if (isMounted) {
@@ -103,38 +112,6 @@ export function useLibraryPageState() {
     }
 
     void loadLibrarySettings()
-
-    return () => {
-      isMounted = false
-    }
-  }, [])
-
-  useEffect(() => {
-    let isMounted = true
-
-    const loadXboxIdentityStatus = async () => {
-      try {
-        const status = await getXboxAccountConfig()
-
-        if (!isMounted) {
-          return
-        }
-
-        setXboxIdentityStatus({
-          connected: Boolean(status?.connected),
-          xuid: typeof status?.xuid === 'string' && status.xuid.trim() ? status.xuid.trim() : null,
-        })
-      } catch {
-        if (isMounted) {
-          setXboxIdentityStatus({
-            connected: false,
-            xuid: null,
-          })
-        }
-      }
-    }
-
-    void loadXboxIdentityStatus()
 
     return () => {
       isMounted = false
@@ -154,17 +131,18 @@ export function useLibraryPageState() {
                 setLaunchMessage('Nao foi possivel recarregar a biblioteca local.')
                 setLaunchFeedback(null)
               })
-              .finally(() => {
-                if (isMounted) {
-                  setIsBootstrapping(false)
-                }
-              })
           }
-        }, 4000)
+      }, 4000)
       : null
 
     const syncLibraryEntries = async () => {
-      const libraryEntries = await listLibraryEntries()
+      if (!bootstrapLibraryEntriesPromise) {
+        bootstrapLibraryEntriesPromise = listLibraryEntries().finally(() => {
+          bootstrapLibraryEntriesPromise = null
+        })
+      }
+
+      const libraryEntries = await bootstrapLibraryEntriesPromise
 
       if (!isMounted) {
         return
@@ -175,17 +153,10 @@ export function useLibraryPageState() {
       setSelectedEntryId((currentSelectedEntryId) =>
         getSelectedEntryIdForEntries(groupedLibraryEntries, currentSelectedEntryId),
       )
-
-      if (!hasTauriRuntime() || libraryEntries.length > 0) {
-        setIsBootstrapping(false)
-      }
     }
 
     const registerBootstrapListener = async () => {
       if (!hasTauriRuntime()) {
-        if (isMounted) {
-          setIsBootstrapping(false)
-        }
         return
       }
 
@@ -195,7 +166,6 @@ export function useLibraryPageState() {
             return
           }
 
-          setIsBootstrapping(false)
           if (bootstrapTimeoutId !== null) {
             clearTimeout(bootstrapTimeoutId)
             bootstrapTimeoutId = null
@@ -207,10 +177,8 @@ export function useLibraryPageState() {
             }
           })
         })
-      } catch {
-        if (isMounted) {
-          setIsBootstrapping(false)
-        }
+      } catch (error) {
+        void error
       }
     }
 
@@ -769,39 +737,126 @@ export function useLibraryPageState() {
     setLaunchFeedback(null)
   }, [selectedEntry?.id])
 
-  const handlePreferredStoreChange = useCallback(async (nextPreferredStoreId) => {
+  const handlePreferredStoreChange = useCallback((nextPreferredStoreId) => {
     const normalizedPreferredStoreId = String(nextPreferredStoreId ?? '').trim().toLowerCase() === 'xbox' ? 'xbox' : 'steam'
 
     setPreferredStoreId(normalizedPreferredStoreId)
+  }, [])
+
+  const handleLocalScanModeChange = useCallback((nextLocalScanMode) => {
+    const normalizedMode = String(nextLocalScanMode ?? '').trim().toLowerCase()
+
+    if (['automatic', 'selected_only', 'automatic_plus_extra'].includes(normalizedMode)) {
+      setLocalScanMode(normalizedMode)
+      return
+    }
+
+    setLocalScanMode('automatic')
+  }, [])
+
+  const handleLocalScanRootsChange = useCallback((value) => {
+    setLocalScanRootsText(value)
+  }, [])
+
+  const handleLocalScanExcludedRootsChange = useCallback((value) => {
+    setLocalScanExcludedRootsText(value)
+  }, [])
+
+  const handleMicrosoftClientIdChange = useCallback((value) => {
+    setMicrosoftClientId(value)
+  }, [])
+
+  const handleLocalScanRootsSelect = useCallback(async () => {
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+      title: 'Selecionar pasta do scan local',
+    })
+
+    if (typeof selectedPath !== 'string' || !selectedPath.trim()) {
+      return
+    }
+
+    setLocalScanRootsText((currentValue) => {
+      const roots = String(currentValue ?? '')
+        .split(/\r?\n|;/)
+        .map((root) => root.trim())
+        .filter(Boolean)
+
+      if (roots.some((root) => root.toLowerCase() === selectedPath.trim().toLowerCase())) {
+        return roots.join('\n')
+      }
+
+      return [...roots, selectedPath.trim()].join('\n')
+    })
+  }, [])
+
+  const handleLocalScanExcludedRootsSelect = useCallback(async () => {
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+      title: 'Selecionar pasta excluida do scan local',
+    })
+
+    if (typeof selectedPath !== 'string' || !selectedPath.trim()) {
+      return
+    }
+
+    setLocalScanExcludedRootsText((currentValue) => {
+      const roots = String(currentValue ?? '')
+        .split(/\r?\n|;/)
+        .map((root) => root.trim())
+        .filter(Boolean)
+
+      if (roots.some((root) => root.toLowerCase() === selectedPath.trim().toLowerCase())) {
+        return roots.join('\n')
+      }
+
+      return [...roots, selectedPath.trim()].join('\n')
+    })
+  }, [])
+
+  const handleSaveLibrarySettings = useCallback(async () => {
     setIsLibrarySettingsSaving(true)
 
     try {
-      await saveLibrarySettings(normalizedPreferredStoreId)
-      setLaunchMessage(
-        normalizedPreferredStoreId === 'xbox'
-          ? 'Loja principal definida como Xbox.'
-          : 'Loja principal definida como Steam.',
-      )
+      const savedSettings = await saveLibrarySettings({
+        preferredStoreId,
+        localScanMode,
+        localScanRoots: localScanRootsText.split(/\r?\n|;/),
+        localScanExcludedRoots: localScanExcludedRootsText.split(/\r?\n|;/),
+        microsoftClientId,
+      })
+
+      setPreferredStoreId(savedSettings.preferredStoreId)
+      setLocalScanMode(savedSettings.localScanMode)
+      setLocalScanRootsText(savedSettings.localScanRoots.join('\n'))
+      setLocalScanExcludedRootsText(savedSettings.localScanExcludedRoots.join('\n'))
+      setMicrosoftClientId(savedSettings.microsoftClientId ?? '')
+      setLaunchMessage('Configuracoes da biblioteca salvas.')
       setLaunchFeedback(null)
     } catch (error) {
       const feedback = normalizeProviderErrorFeedback(
         error,
-        'Nao foi possivel salvar a loja principal.',
-        'Salvar loja principal',
+        'Nao foi possivel salvar as configuracoes da biblioteca.',
+        'Salvar configuracoes da biblioteca',
       )
       setLaunchMessage(feedback.message)
       setLaunchFeedback(feedback)
-      setPreferredStoreId('steam')
     } finally {
       setIsLibrarySettingsSaving(false)
     }
-  }, [])
+  }, [localScanExcludedRootsText, localScanMode, localScanRootsText, microsoftClientId, preferredStoreId])
 
   return {
     entries,
     groupedEntries,
     filteredEntries,
     preferredStoreId,
+    localScanMode,
+    localScanRootsText,
+    localScanExcludedRootsText,
+    microsoftClientId,
     selectedLaunchPlatformId,
     isLibrarySettingsLoading,
     isLibrarySettingsSaving,
@@ -839,6 +894,13 @@ export function useLibraryPageState() {
     handleLaunchPlatformChange,
     handleClearLibraryFilters,
     handlePreferredStoreChange,
+    handleLocalScanModeChange,
+    handleLocalScanRootsChange,
+    handleLocalScanRootsSelect,
+    handleLocalScanExcludedRootsChange,
+    handleLocalScanExcludedRootsSelect,
+    handleMicrosoftClientIdChange,
+    handleSaveLibrarySettings,
     handleManualGameSubmit,
     handleNavigationFilter: handleQuickFilterChange,
     handleSelectEntry,
@@ -847,6 +909,5 @@ export function useLibraryPageState() {
     handleSyncXboxTitleHistory,
     handleSyncXboxGames,
     handleSyncSteamAccountGames,
-    xboxIdentityStatus,
   }
 }

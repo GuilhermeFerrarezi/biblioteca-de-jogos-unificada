@@ -1,6 +1,13 @@
 import { INSTALL_STATUS, PLATFORM_LABELS } from '../constants/libraryConstants.js'
 
 const MICROSOFT_STORE_URI_PREFIX = 'ms-windows-store://pdp/?productid='
+const MICROSOFT_STORE_SEARCH_URI_PREFIX = 'ms-windows-store://search/?query='
+const MICROSOFT_STORE_PRODUCT_ID_PATTERN = /^[0-9a-z]{12}$/i
+const MICROSOFT_STORE_SEARCH_SUFFIX_PATTERNS = [
+  /\s*[-–—:]\s*(?:deluxe|ultimate|standard|game of the year|goty|anniversary|special|collector'?s|definitive|enhanced|remastered|reloaded|complete|bundle|edition)\s*$/i,
+  /\s*\((?:deluxe|ultimate|standard|game of the year|goty|anniversary|special|collector'?s|definitive|enhanced|remastered|reloaded|complete|bundle|edition|launcher|app|demo|beta|trial)\)\s*$/i,
+  /\s*(?:launcher|app|demo|beta|trial)\s*$/i,
+]
 
 export function buildMicrosoftStoreUri(productId) {
   const normalizedProductId = String(productId ?? '').trim()
@@ -10,6 +17,43 @@ export function buildMicrosoftStoreUri(productId) {
   }
 
   return `${MICROSOFT_STORE_URI_PREFIX}${encodeURIComponent(normalizedProductId)}`
+}
+
+export function buildMicrosoftStoreSearchUri(title) {
+  const normalizedTitle = normalizeMicrosoftStoreSearchTitle(title)
+
+  if (!normalizedTitle) {
+    return ''
+  }
+
+  return `${MICROSOFT_STORE_SEARCH_URI_PREFIX}${encodeURIComponent(normalizedTitle)}`
+}
+
+function isLikelyMicrosoftStoreProductId(value) {
+  return MICROSOFT_STORE_PRODUCT_ID_PATTERN.test(String(value ?? '').trim())
+}
+
+function normalizeMicrosoftStoreSearchTitle(title) {
+  let normalizedTitle = String(title ?? '').replace(/\s+/g, ' ').replace(/[™®©]/g, '').trim()
+
+  if (!normalizedTitle) {
+    return ''
+  }
+
+  for (let index = 0; index < 3; index += 1) {
+    const reducedTitle = MICROSOFT_STORE_SEARCH_SUFFIX_PATTERNS.reduce(
+      (currentTitle, pattern) => currentTitle.replace(pattern, '').trim(),
+      normalizedTitle,
+    )
+
+    if (reducedTitle === normalizedTitle) {
+      break
+    }
+
+    normalizedTitle = reducedTitle
+  }
+
+  return normalizedTitle.length >= 3 ? normalizedTitle : String(title ?? '').replace(/\s+/g, ' ').trim()
 }
 
 export function isMicrosoftStoreUri(target) {
@@ -54,10 +98,13 @@ export function resolveMicrosoftStoreTarget(selectedEntry) {
   const productId =
     selectedEntry?.game?.microsoftStoreProductId ??
     selectedEntry?.game?.storeProductId ??
-    xboxSource?.externalId ??
-    ''
+    (isLikelyMicrosoftStoreProductId(xboxSource?.externalId) ? xboxSource.externalId : '')
 
-  return buildMicrosoftStoreUri(productId)
+  if (productId) {
+    return buildMicrosoftStoreUri(productId)
+  }
+
+  return buildMicrosoftStoreSearchUri(selectedEntry?.game?.title ?? '')
 }
 
 export function getVisibleSelectedEntry(filteredEntries, selectedEntryId) {
@@ -161,7 +208,10 @@ export function getLaunchChoices(selectedEntry, preferredPlatformId = 'steam') {
         platformId: entry.primaryPlatformId,
         platformLabel: PLATFORM_LABELS[entry.primaryPlatformId] ?? entry.primaryPlatformId,
         actionLabel: primaryLaunchAction.label,
-        launchAction: primaryLaunchAction,
+        launchAction: {
+          ...primaryLaunchAction,
+          platformId: primaryLaunchAction.platformId ?? entry.primaryPlatformId,
+        },
         canLaunch: launchState.canLaunch,
       }
     })

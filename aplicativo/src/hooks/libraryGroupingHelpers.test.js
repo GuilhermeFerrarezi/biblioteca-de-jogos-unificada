@@ -119,3 +119,36 @@ test('groupLibraryEntries merges Steam and Xbox records even when casing differs
   assert.equal(groupedEntries[0].isGroupedCrossPlatform, true)
   assert.deepEqual(groupedEntries[0].memberEntryIds, ['steam-entry', 'xbox-entry'])
 })
+
+test('groupLibraryEntries prefers artwork with image URLs for merged entries', () => {
+  const steamWithArtwork = {
+    ...steamEntry,
+    installStatus: 'not_installed',
+    game: {
+      ...steamEntry.game,
+      artwork: {
+        accentColor: '#123456',
+        coverUrl: 'https://cdn.akamai.steamstatic.com/steam/apps/10/library_600x900.jpg',
+        heroUrl: 'https://cdn.akamai.steamstatic.com/steam/apps/10/header.jpg',
+        source: 'steam',
+      },
+    },
+  }
+  const installedXboxWithoutArtwork = {
+    ...xboxEntry,
+    installStatus: 'installed',
+    game: {
+      ...xboxEntry.game,
+      artwork: { accentColor: '#654321' },
+    },
+  }
+
+  const groupedEntries = groupLibraryEntries([installedXboxWithoutArtwork, steamWithArtwork])
+
+  assert.equal(groupedEntries.length, 1)
+  assert.equal(groupedEntries[0].game.artwork.source, 'steam')
+  assert.equal(
+    groupedEntries[0].game.artwork.coverUrl,
+    'https://cdn.akamai.steamstatic.com/steam/apps/10/library_600x900.jpg',
+  )
+})

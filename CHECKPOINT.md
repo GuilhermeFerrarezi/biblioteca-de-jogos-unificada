@@ -1,6 +1,6 @@
 ﻿# Checkpoint - Biblioteca de Jogos Unificada
 
-Data: 2026-05-18
+Data: 2026-05-20
 
 ## Objetivo do projeto
 
@@ -120,6 +120,32 @@ Atualizacao em 2026-05-19: o scanner local foi ajustado para tratar `staging` co
 
 Atualizacao em 2026-05-19: a limpeza do Xbox passou a considerar o alvo de lancamento persistido para arquivar falsos positivos antigos que ainda tinham acao executavel de desktop local. O provider continua aceitando Appx/Xbox reais, mas agora consegue remover entradas persistidas claramente ligadas a binarios locais quando a descoberta volta a rodar. Foram adicionados testes Rust para arquivamento de falso positivo desktop local e preservacao de um alvo Appx real. Validacao passada: `cargo test` com 92 testes.
 
+Atualizacao em 2026-05-20: o corte de refinamento do Xbox local foi endurecido para bloquear infraestruturas do Windows/Store como `App Installer`, `Windows App Runtime`, `Windows App SDK` e pacotes correlatos antes que entrem como jogos. A heuristica de rejeicao agora cruza `title`, `package_name`, `package_family_name` e `app_id` de forma mais ampla, mantendo o caso legitimo de jogos de desktop como `osu!` no fluxo `local`. Em paralelo, o boot percebido do app foi reduzido ao mover a tela `Contas e integracoes` para carregamento sob demanda com `React.lazy`/`Suspense` e ao adiar a consulta de identidade Xbox para quando a tela de contas e aberta, tirando essa leitura do caminho inicial da biblioteca.
+
+Atualizacao em 2026-05-20: o Xbox/Game Pass local passou a aceitar pastas adicionais configuraveis, seguindo o mesmo padrao de persistencia ja usado pela Steam. O backend Tauri ganhou `get_xbox_library_roots` e `save_xbox_library_roots`, com armazenamento em `provider_account_configs.config_json` sob `provider_id = 'xbox'` e chave `additionalGameRoots`. A descoberta Xbox agora combina roots salvas, a variavel `BIBLIOTECA_JOGOS_XBOX_ROOTS` e o fallback de drives locais, varrendo `XboxGames` nessas origens. A tela de `Contas e integracoes` ganhou painel proprio para selecionar e salvar pastas Xbox adicionais. Validacoes executadas neste corte: `npm run lint`, `npm run build` e `cargo test` (99 testes).
+
+Atualizacao em 2026-05-20: a busca local generica tambem foi ampliada para varrer todos os armazenamentos disponiveis em vez de ficar limitada ao conjunto padrao de pastas conhecidas. O coletor local agora agrega `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, pastas usuais do usuario e de instaladores, e todas as letras de drive existentes, mantendo a deduplicacao e os filtros de rejeicao de runtimes/helper apps. Isso faz o `sync_local_games` enxergar instalacoes fora do disco principal sem depender de bibliotecas Steam ou Xbox.
+
+Atualizacao em 2026-05-20: a busca local ficou configuravel no menu de `Padroes da biblioteca`. O backend agora persiste `localScanMode`, `localScanRoots` e `localScanExcludedRoots` no objeto `library` de `provider_account_configs`, com modos `automatic`, `selected_only` e `automatic_plus_extra`. O modo `automatic` mantém a varredura atual; `selected_only` usa apenas as pastas escolhidas; `automatic_plus_extra` combina o scan automatico com pastas extras; e as exclusoes valem em todos os modos. A interface ganhou select de modo, campos para pastas extras e pastas excluidas, com picker e salvamento proprio.
+
+Atualizacao em 2026-05-20: a UX da area de Xbox em `Contas e integracoes` foi corrigida depois do corte de scan local. O painel de pastas adicionais voltou a ser disclosure inline, separado dos controles rapidos de sincronizacao e importacao, para evitar que a configuracao ficasse sempre exposta e quebrasse a leitura visual da pagina.
+
+Atualizacao em 2026-05-20: a capability `default` do Tauri foi corrigida para incluir os comandos Xbox de leitura e gravacao (`get_xbox_account_config`, `save_xbox_account_config`, `get_xbox_library_roots`, `save_xbox_library_roots`). Essa permissao faltante era a causa do erro `Command not found / not allowed` exibido ao abrir as configuracoes do Xbox.
+
+Atualizacao em 2026-05-20: o card `Padroes da biblioteca` foi refinado para ficar mais leve e legivel. Agora ele mostra o estado atual da loja padrao e do scan em chips resumidos, separa melhor as raizes do scan e as exclusoes, e reduz a densidade visual sem alterar o comportamento funcional.
+
+Atualizacao em 2026-05-20: o login Xbox Live foi corrigido para seguir o fluxo desktop suportado pela Microsoft. Em vez de callback local em `127.0.0.1`, o aplicativo agora abre uma janela webview controlada pelo proprio Tauri e usa `https://login.live.com/oauth20_desktop.srf` como redirect oficial, capturando o `code` pela navegacao da janela. O `client_id` passou a ser configuravel nas padroes da biblioteca, porque o client first-party da Microsoft usado antes nao era consentivel para o nosso caso; o usuario precisa informar o `Application (client) ID` do proprio app registration Microsoft. O backend continua modularizado: o modulo de auth cuida apenas do login e da sessao, enquanto o provider segue responsavel pelo merge e pela importacao de title history. Validacoes executadas neste corte: `npm run lint`, `npm run build` e `cargo test` (103 testes).
+
+Atualizacao em 2026-05-20: o Xbox Live ganhou o campo de `client secret` no painel de contas e o backend passou a salvá-lo com seguranca no AuthVault, separado do `client_id` que continua nas configuracoes da biblioteca. O fluxo de login e o refresh de token agora leem tanto o `Application (client) ID` quanto o `client secret` antes de concluir o exchange, mantendo o segredo fora do SQLite e sem expor o valor na interface depois do salvamento. Validacoes executadas neste corte: `npm run lint`, `npm run build` e `cargo test` (104 testes).
+
+Atualizacao em 2026-05-20: o fluxo Xbox Live foi alinhado com os endpoints oficiais da Microsoft para `consumers/oauth2/v2.0`, e a troca de token passou a expor a resposta real do provedor quando a autorizacao falha. Isso ajuda a diagnosticar problemas de app registration sem depender de erro generico no popup. Validacao executada neste corte: `cargo test` (104 testes).
+
+Atualizacao em 2026-05-20: o modulo de auth Xbox Live foi instrumentado para incluir status HTTP e corpo bruto das respostas quando o token exchange ou as chamadas posteriores falham. Isso torna o erro visivel no frontend muito mais util para depurar consentimento, client secret, redirect URI e respostas de XSTS sem precisar adivinhar a causa. Validacao executada neste corte: `cargo test` (104 testes).
+
+Atualizacao em 2026-05-20: o redirect do login Xbox Live foi ajustado para o URI desktop recomendado pela Microsoft, `https://login.microsoftonline.com/common/oauth2/nativeclient`. O app registration precisa usar esse redirect para que o callback seja reconhecido pelo fluxo novo. Validacao executada neste corte: `cargo test` (104 testes).
+
+Atualizacao em 2026-05-20: ficou definido como prioridade do proximo ciclo remover a dependencia de `client secret` local no fluxo Xbox Live para viabilizar distribuicao a terceiros com uma arquitetura mais adequada para desktop/public client. O estado atual serve para validacao local, mas o corte seguinte deve revisar essa arquitetura antes de qualquer novo refinamento de UI ou importacao. O `client secret` nao deve permanecer como requisito de uso final no caminho de entrega do aplicativo.
+
 ## Prioridade de plataformas
 
 1. Steam - plataforma principal e primeira integracao real do MVP.
@@ -218,12 +244,16 @@ A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco
 4. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento anterior, mas ainda e uma margem apertada.
 5. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
 6. Xbox/Game Pass local ja entrou como provider experimental no Windows: o app descobre jogos instalados via inventario local, abre o jogo com `explorer.exe` + `shell:AppsFolder` quando instalado e usa Microsoft Store quando nao instalado. A heuristica foi refinada para cobrir melhor pacotes reais sem reabrir helpers do Windows/Xbox. Achievements/title history continuam apenas como sinal auxiliar, nunca ownership.
-7. Implementar o fluxo real de autenticacao Xbox Live/XUID para destravar a importacao de title history por achievements, mantendo o contrato de seguranca e sem expor credenciais.
-8. Se o fluxo de autenticacao ainda nao for prioridade, melhorar a UX do erro de importacao Xbox para deixar mais claro ao usuario por que a operacao esta indisponivel e o que ele precisa configurar.
+7. Validar e refinar a importacao de title history do Xbox agora que o fluxo Xbox Live autenticado ja esta integrado, mantendo o contrato de seguranca e sem expor credenciais.
+8. Se a importacao de title history ainda nao for prioridade, melhorar a UX do erro de importacao Xbox para deixar mais claro ao usuario por que a operacao esta indisponivel e o que ele precisa configurar.
    A descoberta local tambem recebe explicitamente jogos de desktop populares como `osu!`, que aparecem como `local` e nao como `xbox`.
 7. Em paralelo ou logo depois, fazer o corte inicial de Epic Games com foco em viabilidade e limites de API/compliance antes de qualquer fluxo de conta.
 8. Depois das novas plataformas, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e ajustar a UI para suportar listas mais longas.
 9. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch, usando a base de contratos ja existente.
 10. Manter a tela de contas e a Steam em modo de manutenção incremental, priorizando regressao e pequenos refinamentos apenas quando surgirem gaps claros.
 11. O proximo ajuste do projeto e reduzir o tempo de abertura do aplicativo, porque o Tauri esta demorando demais para mostrar a interface completa.
+
+Atualizacao em 2026-05-21: o login Xbox Live foi convertido para fluxo de `public client` desktop com `authorization code + PKCE`, sem dependencia de `client_secret` no caminho critico. O usuario final agora apenas autentica com a conta Microsoft/Xbox; o `client_id` ficou como configuracao interna ou de build para a instancia do projeto, e o refresh token continua persistido no AuthVault do backend. Validacoes do corte: `npm run lint`, `npm run build` e `cargo test` passaram.
+
+Atualizacao em 2026-05-21: ficou registrado para a build final que o `client_id` do Xbox Live nao deve permanecer como campo editavel para o usuario final na tela de configuracoes. O valor deve vir de configuracao interna da instancia ou de variavel de build/env, e a UI final deve apenas exibir estado/erro se essa configuracao faltar.
 

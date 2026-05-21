@@ -6,6 +6,18 @@ const hasTauriRuntime = () =>
 
 const hasLocalStorage = () => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
 const LIBRARY_SETTINGS_KEY = 'biblioteca-jogos-unificada.library-settings'
+const LIBRARY_SCAN_MODE_AUTOMATIC = 'automatic'
+const LIBRARY_SCAN_MODE_SELECTED_ONLY = 'selected_only'
+const LIBRARY_SCAN_MODE_AUTOMATIC_PLUS_EXTRA = 'automatic_plus_extra'
+const DEFAULT_MICROSOFT_CLIENT_ID = String(import.meta.env?.VITE_XBOX_CLIENT_ID ?? '').trim()
+
+const defaultLibrarySettings = Object.freeze({
+  preferredStoreId: 'steam',
+  localScanMode: LIBRARY_SCAN_MODE_AUTOMATIC,
+  localScanRoots: [],
+  localScanExcludedRoots: [],
+  microsoftClientId: DEFAULT_MICROSOFT_CLIENT_ID,
+})
 
 const sanitizeFeedbackText = (value, maxLength = 180) => {
   if (value === null || value === undefined) {
@@ -88,6 +100,7 @@ export const normalizeProviderErrorFeedback = (error, fallbackMessage, contextLa
         (typeof error === 'string' ? error : error?.message),
     )
   const normalizedStructuredSource = parsedStringSource ?? structuredSource
+  const structuredMessage = sanitizeFeedbackText(normalizedStructuredSource?.message ?? '', 180)
 
   const existingDetails = Array.isArray(normalizedStructuredSource?.details)
     ? normalizedStructuredSource.details
@@ -101,15 +114,31 @@ export const normalizeProviderErrorFeedback = (error, fallbackMessage, contextLa
       .filter(Boolean)
       .slice(0, 3)
 
-    if (normalizedDetails.length > 0) {
-      if (contextLabel) {
-        normalizedDetails.unshift({ label: 'Contexto', value: sanitizeFeedbackText(contextLabel, 96) })
-      }
+    const details = []
+    const pushDetail = (label, value, maxLength = 180) => {
+      const normalizedValue = sanitizeFeedbackText(value, maxLength)
 
-      return {
-        message: fallbackSummary,
-        details: normalizedDetails.slice(0, 3),
+      if (normalizedValue && details.length < 3) {
+        details.push({ label, value: normalizedValue })
       }
+    }
+
+    if (contextLabel) {
+      pushDetail('Contexto', contextLabel, 96)
+    }
+
+    pushDetail('Codigo', normalizedStructuredSource?.code ?? error.code ?? '', 64)
+    pushDetail('Etapa', normalizedStructuredSource?.phase ?? error.phase ?? '', 64)
+
+    normalizedDetails.forEach((detail) => {
+      if (details.length < 3) {
+        details.push(detail)
+      }
+    })
+
+    return {
+      message: structuredMessage || fallbackSummary,
+      details: details.slice(0, 3),
     }
   }
 
@@ -158,7 +187,7 @@ export const normalizeProviderErrorFeedback = (error, fallbackMessage, contextLa
   }
 
   return {
-    message: fallbackSummary,
+    message: structuredMessage || fallbackSummary,
     details: details.slice(0, 3),
   }
 }
@@ -170,6 +199,28 @@ const loadDevelopmentLibraryEntries = async () => {
 
   const { libraryEntries } = await import('../data/mockLibrary')
   return libraryEntries
+}
+
+export const normalizeLibrarySettings = (settings) => {
+  if (!settings || typeof settings !== 'object') {
+    return { ...defaultLibrarySettings }
+  }
+
+  const preferredStoreId = normalizePreferredStoreId(settings.preferredStoreId)
+  const localScanMode = normalizeLocalScanMode(settings.localScanMode)
+  const localScanRoots = normalizePathList(settings.localScanRoots)
+  const localScanExcludedRoots = normalizePathList(settings.localScanExcludedRoots)
+  const microsoftClientId = normalizeMicrosoftClientId(
+    settings.microsoftClientId ?? settings.microsoftClientID ?? settings.xboxLiveClientId,
+  )
+
+  return {
+    preferredStoreId,
+    localScanMode,
+    localScanRoots,
+    localScanExcludedRoots,
+    microsoftClientId,
+  }
 }
 
 const validateManualInputOrThrow = (input) => {
@@ -276,6 +327,14 @@ export const getSteamLibraryRoots = async () => {
   return invoke('get_steam_library_roots')
 }
 
+export const getXboxLibraryRoots = async () => {
+  if (!hasTauriRuntime()) {
+    return { providerId: 'xbox', roots: [] }
+  }
+
+  return invoke('get_xbox_library_roots')
+}
+
 export const saveSteamAccountConfig = async (steamId64) => {
   const normalizedSteamId64 = String(steamId64 ?? '').trim()
 
@@ -302,12 +361,32 @@ export const saveSteamLibraryRoots = async (roots) => {
   return invoke('save_steam_library_roots', { input: { roots: normalizedRoots } })
 }
 
+export const saveXboxLibraryRoots = async (roots) => {
+  const normalizedRoots = Array.isArray(roots)
+    ? roots.map((root) => String(root ?? '').trim()).filter(Boolean)
+    : []
+
+  if (!hasTauriRuntime()) {
+    return { providerId: 'xbox', roots: normalizedRoots }
+  }
+
+  return invoke('save_xbox_library_roots', { input: { roots: normalizedRoots } })
+}
+
 export const startSteamLogin = async () => {
   if (!hasTauriRuntime()) {
     return { pending: false, providerId: 'steam' }
   }
 
   return invoke('start_steam_openid_login')
+}
+
+export const startXboxLiveLogin = async () => {
+  if (!hasTauriRuntime()) {
+    return { pending: false, providerId: 'xbox' }
+  }
+
+  return invoke('start_xbox_live_login')
 }
 
 export const getSteamApiKeyStatus = async () => {
@@ -318,6 +397,14 @@ export const getSteamApiKeyStatus = async () => {
   return invoke('get_steam_web_api_key_state')
 }
 
+export const getXboxLiveAuthState = async () => {
+  if (!hasTauriRuntime()) {
+    return { configured: false, providerId: 'xbox', storage: 'dev' }
+  }
+
+  return invoke('get_xbox_live_auth_state')
+}
+
 export const getLibrarySettings = async () => {
   const cachedSettings = readCachedLibrarySettings()
 
@@ -326,38 +413,81 @@ export const getLibrarySettings = async () => {
   }
 
   if (!hasTauriRuntime()) {
-    return { preferredStoreId: 'steam' }
+    return { ...defaultLibrarySettings }
   }
 
   try {
     const settings = await invoke('get_library_settings')
-    const preferredStoreId = normalizePreferredStoreId(settings?.preferredStoreId)
-    cacheLibrarySettings(preferredStoreId)
-    return { preferredStoreId }
+    const normalizedSettings = normalizeLibrarySettings(settings)
+    cacheLibrarySettings(normalizedSettings)
+    return normalizedSettings
   } catch {
-    return { preferredStoreId: 'steam' }
+    return { ...defaultLibrarySettings }
   }
 }
 
-export const saveLibrarySettings = async (preferredStoreId) => {
-  const normalizedPreferredStoreId = normalizePreferredStoreId(preferredStoreId)
-  cacheLibrarySettings(normalizedPreferredStoreId)
+export const saveLibrarySettings = async (settingsOrPreferredStoreId) => {
+  const normalizedSettings =
+    typeof settingsOrPreferredStoreId === 'string'
+      ? normalizeLibrarySettings({ preferredStoreId: settingsOrPreferredStoreId })
+      : normalizeLibrarySettings(settingsOrPreferredStoreId)
+
+  cacheLibrarySettings(normalizedSettings)
 
   if (!hasTauriRuntime()) {
-    return { preferredStoreId: normalizedPreferredStoreId }
+    return normalizedSettings
   }
 
-  try {
-    await invoke('save_library_settings', { input: { preferredStoreId: normalizedPreferredStoreId } })
-  } catch {
-    // Keep the local preference working even if the native persistence layer is temporarily unavailable.
-  }
+  await invoke('save_library_settings', { input: normalizedSettings })
 
-  return { preferredStoreId: normalizedPreferredStoreId }
+  return normalizedSettings
 }
 
 const normalizePreferredStoreId = (value) =>
   String(value ?? '').trim().toLowerCase() === 'xbox' ? 'xbox' : 'steam'
+
+const normalizeLocalScanMode = (value) => {
+  switch (String(value ?? '').trim().toLowerCase()) {
+    case LIBRARY_SCAN_MODE_SELECTED_ONLY:
+      return LIBRARY_SCAN_MODE_SELECTED_ONLY
+    case LIBRARY_SCAN_MODE_AUTOMATIC_PLUS_EXTRA:
+      return LIBRARY_SCAN_MODE_AUTOMATIC_PLUS_EXTRA
+    default:
+      return LIBRARY_SCAN_MODE_AUTOMATIC
+  }
+}
+
+const normalizePathList = (values) => {
+  if (!Array.isArray(values)) {
+    return []
+  }
+
+  const roots = []
+
+  for (const value of values) {
+    const normalizedValue = String(value ?? '').trim()
+
+    if (!normalizedValue) {
+      continue
+    }
+
+    if (!roots.some((root) => root.toLowerCase() === normalizedValue.toLowerCase())) {
+      roots.push(normalizedValue)
+    }
+  }
+
+  return roots
+}
+
+const normalizeMicrosoftClientId = (value) => {
+  const normalizedValue = String(value ?? '').trim()
+
+  if (!normalizedValue) {
+    return DEFAULT_MICROSOFT_CLIENT_ID
+  }
+
+  return normalizedValue
+}
 
 const readCachedLibrarySettings = () => {
   if (!hasLocalStorage()) {
@@ -372,23 +502,19 @@ const readCachedLibrarySettings = () => {
     }
 
     const parsedSettings = JSON.parse(rawSettings)
-    const preferredStoreId = normalizePreferredStoreId(parsedSettings?.preferredStoreId)
-    return { preferredStoreId }
+    return normalizeLibrarySettings(parsedSettings)
   } catch {
     return null
   }
 }
 
-const cacheLibrarySettings = (preferredStoreId) => {
+const cacheLibrarySettings = (settings) => {
   if (!hasLocalStorage()) {
     return
   }
 
   try {
-    window.localStorage.setItem(
-      LIBRARY_SETTINGS_KEY,
-      JSON.stringify({ preferredStoreId: normalizePreferredStoreId(preferredStoreId) }),
-    )
+    window.localStorage.setItem(LIBRARY_SETTINGS_KEY, JSON.stringify(normalizeLibrarySettings(settings)))
   } catch {
     // Ignore cache write failures.
   }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Suspense, lazy, useState } from 'react'
 import GameDetailsPanel from '../components/GameDetailsPanel'
 import LibraryBrowser from '../components/LibraryBrowser'
 import ManualGameModal from '../components/ManualGameModal'
@@ -6,8 +6,9 @@ import Sidebar from '../components/Sidebar'
 import StatsGrid from '../components/StatsGrid'
 import Topbar from '../components/Topbar'
 import { useLibraryPageState } from '../hooks/useLibraryPageState'
-import AccountsSettingsPage from './AccountsSettingsPage'
 import '../styles/library.css'
+
+const AccountsSettingsPage = lazy(() => import('./AccountsSettingsPage'))
 
 function LibraryPage() {
   const library = useLibraryPageState()
@@ -29,23 +30,42 @@ function LibraryPage() {
 
       <section className="workspace">
         {activeSection === 'accounts' ? (
-          <AccountsSettingsPage
-            feedbackMessage={library.launchMessage}
-            feedbackDetails={library.launchFeedback}
-            isLibrarySettingsLoading={library.isLibrarySettingsLoading}
-            isLibrarySettingsSaving={library.isLibrarySettingsSaving}
-            isSteamAccountSyncing={library.isSteamAccountSyncing}
-            isSteamSyncing={library.isSteamSyncing}
-            isXboxSyncing={library.isXboxSyncing}
-            preferredStoreId={library.preferredStoreId}
-            xboxIdentityStatus={library.xboxIdentityStatus}
-            onBackToLibrary={() => setActiveSection('library')}
-            onPreferredStoreChange={library.handlePreferredStoreChange}
-            onSyncSteamAccountGames={library.handleSyncSteamAccountGames}
-            onSyncSteamGames={library.handleSyncSteamGames}
-            onSyncXboxTitleHistory={library.handleSyncXboxTitleHistory}
-            onSyncXboxGames={library.handleSyncXboxGames}
-          />
+          <Suspense
+            fallback={
+              <div className="empty-state">
+                <strong>Carregando configuracoes de conta</strong>
+                <span>Preparando Steam, Xbox e AuthVault sob demanda.</span>
+              </div>
+            }
+          >
+              <AccountsSettingsPage
+                feedbackMessage={library.launchMessage}
+                feedbackDetails={library.launchFeedback}
+                isLibrarySettingsLoading={library.isLibrarySettingsLoading}
+                isLibrarySettingsSaving={library.isLibrarySettingsSaving}
+                isSteamAccountSyncing={library.isSteamAccountSyncing}
+                isSteamSyncing={library.isSteamSyncing}
+                isXboxSyncing={library.isXboxSyncing}
+                preferredStoreId={library.preferredStoreId}
+                localScanMode={library.localScanMode}
+                localScanRootsText={library.localScanRootsText}
+                localScanExcludedRootsText={library.localScanExcludedRootsText}
+                microsoftClientId={library.microsoftClientId}
+                onBackToLibrary={() => setActiveSection('library')}
+                onPreferredStoreChange={library.handlePreferredStoreChange}
+                onLocalScanModeChange={library.handleLocalScanModeChange}
+                onLocalScanRootsChange={library.handleLocalScanRootsChange}
+                onLocalScanRootsSelect={library.handleLocalScanRootsSelect}
+                onLocalScanExcludedRootsChange={library.handleLocalScanExcludedRootsChange}
+                onLocalScanExcludedRootsSelect={library.handleLocalScanExcludedRootsSelect}
+                onMicrosoftClientIdChange={library.handleMicrosoftClientIdChange}
+                onSaveLibrarySettings={library.handleSaveLibrarySettings}
+                onSyncSteamAccountGames={library.handleSyncSteamAccountGames}
+                onSyncSteamGames={library.handleSyncSteamGames}
+                onSyncXboxTitleHistory={library.handleSyncXboxTitleHistory}
+              onSyncXboxGames={library.handleSyncXboxGames}
+            />
+          </Suspense>
         ) : (
           <>
             <Topbar

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-xbox-live-login"
+description = "Enables the start_xbox_live_login command without any pre-configured scope."
+commands.allow = ["start_xbox_live_login"]
+
+[[permission]]
+identifier = "deny-start-xbox-live-login"
+description = "Denies the start_xbox_live_login command without any pre-configured scope."
+commands.deny = ["start_xbox_live_login"]
