@@ -63,7 +63,7 @@ const pickLastPlayedLabel = (entries) =>
 
 const pickArchivedState = (entries) => entries.every((entry) => entry?.isArchived === true)
 
-const hasArtworkImage = (artwork) => Boolean(artwork?.coverUrl || artwork?.heroUrl)
+const hasArtworkImage = (artwork) => Boolean(artwork?.coverUrl || artwork?.heroUrl || artwork?.fallbackUrl)
 
 const pickArtwork = (entries) =>
   entries.find((entry) => hasArtworkImage(entry?.game?.artwork))?.game?.artwork ??

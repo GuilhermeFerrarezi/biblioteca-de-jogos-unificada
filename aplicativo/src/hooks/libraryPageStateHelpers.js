@@ -226,6 +226,31 @@ export function getLaunchChoices(selectedEntry, preferredPlatformId = 'steam') {
   return Array.from(choicesByPlatform.values())
 }
 
+export function getDetailsEntryForSelectedPlatform(selectedEntry, preferredPlatformId = 'steam') {
+  if (!selectedEntry) {
+    return null
+  }
+
+  if (!Array.isArray(selectedEntry.memberEntries) || selectedEntry.memberEntries.length === 0) {
+    return selectedEntry
+  }
+
+  const preferredChoice = getLaunchChoices(selectedEntry, preferredPlatformId)[0] ?? null
+  const preferredChoiceEntry = preferredChoice
+    ? selectedEntry.memberEntries.find((entry) => entry.id === preferredChoice.entryId)
+    : null
+
+  if (preferredChoiceEntry) {
+    return preferredChoiceEntry
+  }
+
+  return (
+    selectedEntry.memberEntries.find((entry) => entry.primaryPlatformId === preferredPlatformId) ??
+    selectedEntry.memberEntries[0] ??
+    selectedEntry
+  )
+}
+
 export function getPreferredLaunchEntryId(selectedEntry, preferredPlatformId = 'steam') {
   const launchChoices = getLaunchChoices(selectedEntry, preferredPlatformId)
 

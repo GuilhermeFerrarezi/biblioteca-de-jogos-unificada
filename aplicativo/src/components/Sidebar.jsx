@@ -45,6 +45,9 @@ function Sidebar({ activeSection, quickFilters, onFilterChange, onAccountsClick 
             </button>
           )
         })}
+      </nav>
+
+      <nav className="nav-list nav-list-bottom" aria-label="Configuracoes" role="navigation">
         <button
           className={isAccountsActive ? 'nav-item active' : 'nav-item'}
           type="button"

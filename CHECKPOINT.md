@@ -1,6 +1,6 @@
 ﻿# Checkpoint - Biblioteca de Jogos Unificada
 
-Data: 2026-05-20
+Data: 2026-05-22
 
 ## Objetivo do projeto
 
@@ -256,4 +256,8 @@ A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco
 Atualizacao em 2026-05-21: o login Xbox Live foi convertido para fluxo de `public client` desktop com `authorization code + PKCE`, sem dependencia de `client_secret` no caminho critico. O usuario final agora apenas autentica com a conta Microsoft/Xbox; o `client_id` ficou como configuracao interna ou de build para a instancia do projeto, e o refresh token continua persistido no AuthVault do backend. Validacoes do corte: `npm run lint`, `npm run build` e `cargo test` passaram.
 
 Atualizacao em 2026-05-21: ficou registrado para a build final que o `client_id` do Xbox Live nao deve permanecer como campo editavel para o usuario final na tela de configuracoes. O valor deve vir de configuracao interna da instancia ou de variavel de build/env, e a UI final deve apenas exibir estado/erro se essa configuracao faltar.
+
+Atualizacao em 2026-05-22: o fluxo Xbox Live publico foi refinado ate concluir login e importacao por title history/achievements com paginacao mais ampla, deduplicacao de aliases curtos e filtros para apps de midia como YouTube/Netflix. A sincronizacao Steam por conta ganhou protecao contra execucoes concorrentes, timeout/retry mais seguro no `GetOwnedGames`, aquecimento de cache de artwork em background sem sobrepor sincronizacoes e limpeza de falsos positivos locais como `Program Files`, `Python312`, drivers, `XboxGames`, Dell/NVIDIA/AMD/Intel. A integracao de capas Steam foi separada em `coverUrl`, `heroUrl` e `fallbackUrl`: cards usam capa vertical com fallback para imagem antiga, o painel lateral usa banner Steam com fallback, e a CSP do Tauri aceita os CDNs Steam necessarios. O painel de detalhes passou a trocar status, caminho, tempo, ultima vez e acao conforme o launcher selecionado em jogos agrupados Steam + Xbox, mantendo a artwork preferencialmente da Steam. Tambem foram refinados o tamanho do banner do painel para a proporcao Steam `1920x620`, o texto/botao de lancamento por plataforma, a posicao do menu `Contas` no rodape da sidebar e a porta fixa `5173` do Vite com `strictPort` para evitar tela branca por servidor dev em porta diferente. Validacoes executadas durante o corte: `cargo test`, `npm run lint`, `npm run test:smoke` e `npm run build`.
+
+Proxima prioridade sugerida em 2026-05-22: testar manualmente uma biblioteca agrupada Steam + Xbox grande, conferindo se `Caminho`, tempo jogado, status e acao mudam corretamente ao alternar launcher; depois iniciar a persistencia/edicao manual de artwork para jogos que ainda dependem de fallback ou imagem incorreta.
 

@@ -256,7 +256,7 @@ function GameRow({ entry, isSelected, onSelectEntry }) {
     >
       <ArtworkFrame
         className="cover"
-        imageUrls={[artwork.coverUrl, artwork.heroUrl]}
+        imageUrls={[artwork.coverUrl, artwork.fallbackUrl]}
         accentColor={artwork.accentColor}
         fallbackText={entry.game.title.slice(0, 1)}
         imageAlt=""
@@ -291,7 +291,7 @@ function GameCoverCard({ entry, isSelected, onSelectEntry }) {
     >
       <ArtworkFrame
         className="poster"
-        imageUrls={[artwork.coverUrl, artwork.heroUrl]}
+        imageUrls={[artwork.coverUrl, artwork.fallbackUrl]}
         accentColor={artwork.accentColor}
         fallbackText={entry.game.title}
         imageAlt=""
@@ -316,13 +316,16 @@ function ArtworkFrame({ className, imageUrls, accentColor, fallbackText, imageAl
   return (
     <div className={className} style={{ background: accentColor ?? DEFAULT_ACCENT_COLOR }}>
       {shouldShowImage ? (
-        <img
-          className="artwork-image"
-          src={imageUrl}
-          alt={imageAlt}
-          loading="lazy"
-          onError={() => setImageIndex((currentIndex) => currentIndex + 1)}
-        />
+        <>
+          <img className="artwork-backdrop" src={imageUrl} alt="" loading="lazy" aria-hidden="true" />
+          <img
+            className="artwork-image"
+            src={imageUrl}
+            alt={imageAlt}
+            loading="lazy"
+            onError={() => setImageIndex((currentIndex) => currentIndex + 1)}
+          />
+        </>
       ) : (
         <span className="artwork-fallback-text">{fallbackText}</span>
       )}

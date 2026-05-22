@@ -30,6 +30,9 @@ pub fn run() {
             app.manage(AppState {
                 connection: std::sync::Arc::clone(&connection),
                 auth_vault,
+                steam_account_sync_in_progress: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(false),
+                ),
             });
             bootstrap_library(app.handle().clone(), connection);
 
@@ -81,6 +84,7 @@ pub fn run() {
 struct AppState {
     connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
     auth_vault: std::sync::Arc<security::AuthVault>,
+    steam_account_sync_in_progress: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -162,6 +166,7 @@ mod commands {
         AppState,
     };
     use crate::ProviderErrorDto;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tauri::{AppHandle, Emitter, State};
 
     #[tauri::command]
@@ -213,12 +218,25 @@ mod commands {
 
     #[tauri::command]
     pub fn sync_steam_games(state: State<'_, AppState>) -> Result<storage::SyncSummaryDto, String> {
-        let mut connection = state
-            .connection
-            .lock()
-            .map_err(|_| "failed to lock local database".to_string())?;
+        let shared_connection = state.connection.clone();
+        let (summary, steam_app_ids) = {
+            let mut connection = state
+                .connection
+                .lock()
+                .map_err(|_| "failed to lock local database".to_string())?;
+            let summary =
+                storage::sync_steam_games(&mut connection).map_err(|error| error.to_string())?;
+            let steam_app_ids = storage::list_steam_app_ids(&connection).unwrap_or_else(|error| {
+                log::warn!("failed to list steam app ids for artwork cache: {error}");
+                Vec::new()
+            });
 
-        storage::sync_steam_games(&mut connection).map_err(|error| error.to_string())
+            (summary, steam_app_ids)
+        };
+
+        warm_steam_artwork_cache_best_effort(shared_connection, steam_app_ids);
+
+        Ok(summary)
     }
 
     #[tauri::command]
@@ -591,9 +609,101 @@ mod commands {
         Ok((steam_id, api_key))
     }
 
+    fn warm_steam_artwork_cache_best_effort(
+        connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+        app_ids: Vec<String>,
+    ) {
+        static ARTWORK_CACHE_WARMING: std::sync::OnceLock<AtomicBool> = std::sync::OnceLock::new();
+        let warming = ARTWORK_CACHE_WARMING.get_or_init(|| AtomicBool::new(false));
+        if warming
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            log::debug!("steam artwork cache warm already running; skipping duplicate request");
+            return;
+        }
+
+        let app_ids = app_ids
+            .into_iter()
+            .filter(|app_id| steam_web_api::is_valid_steam_app_id(app_id))
+            .take(512)
+            .collect::<Vec<_>>();
+
+        if app_ids.is_empty() {
+            warming.store(false, Ordering::Release);
+            return;
+        }
+
+        if let Err(error) = std::thread::Builder::new()
+            .name("steam-artwork-cache".to_string())
+            .spawn(move || {
+                struct WarmFlagGuard(&'static AtomicBool);
+
+                impl Drop for WarmFlagGuard {
+                    fn drop(&mut self) {
+                        self.0.store(false, Ordering::Release);
+                    }
+                }
+
+                let _guard = WarmFlagGuard(warming);
+                let client = steam_web_api::ReqwestSteamWebApiClient::default();
+
+                for app_id in app_ids {
+                    let already_cached = connection
+                        .lock()
+                        .ok()
+                        .and_then(|connection| {
+                            storage::read_steam_artwork_header_image(&connection, &app_id).ok()
+                        })
+                        .flatten()
+                        .or_else(|| steam_web_api::cached_appdetails_header_image(&app_id))
+                        .is_some();
+
+                    if already_cached {
+                        continue;
+                    }
+
+                    match steam_web_api::fetch_appdetails_header_image(&client, &app_id) {
+                        Ok(Some(header_image)) => {
+                            steam_web_api::cache_appdetails_header_image(
+                                &app_id,
+                                header_image.clone(),
+                            );
+
+                            if let Ok(connection) = connection.lock() {
+                                if let Err(error) = storage::save_steam_artwork_header_image(
+                                    &connection,
+                                    &app_id,
+                                    &header_image,
+                                ) {
+                                    log::debug!(
+                                        "failed to persist steam artwork cache: app_id={} error={error}",
+                                        app_id
+                                    );
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => log::debug!(
+                            "steam appdetails artwork fetch failed: app_id={} code={} phase={} details_sanitized={:?}",
+                            app_id,
+                            error.code(),
+                            error.phase(),
+                            error.details_sanitized()
+                        ),
+                    }
+                }
+            })
+        {
+            warming.store(false, Ordering::Release);
+            log::debug!("failed to start steam artwork cache thread: {error}");
+        }
+    }
+
     fn sync_steam_account_games_impl(
         state: &AppState,
     ) -> Result<storage::SyncSummaryDto, ProviderErrorDto> {
+        let _sync_guard = SteamAccountSyncGuard::acquire(&state.steam_account_sync_in_progress)?;
         let steam_id = {
             let connection = state.connection.lock().map_err(|_| {
                 ProviderErrorDto::steam(
@@ -622,6 +732,10 @@ mod commands {
         let client = steam_web_api::ReqwestSteamWebApiClient::default();
         let remote_games = steam_web_api::fetch_owned_games(&client, &api_key, &steam_id)
             .map_err(|error| error.into_provider_error())?;
+        let artwork_app_ids = remote_games
+            .iter()
+            .map(|game| game.app_id.clone())
+            .collect::<Vec<_>>();
 
         let mut connection = state.connection.lock().map_err(|_| {
             ProviderErrorDto::steam(
@@ -660,7 +774,37 @@ mod commands {
             )
         })?;
 
+        drop(connection);
+        warm_steam_artwork_cache_best_effort(state.connection.clone(), artwork_app_ids);
+
         Ok(summary)
+    }
+
+    #[derive(Debug)]
+    struct SteamAccountSyncGuard<'a> {
+        flag: &'a AtomicBool,
+    }
+
+    impl<'a> SteamAccountSyncGuard<'a> {
+        fn acquire(flag: &'a AtomicBool) -> Result<Self, ProviderErrorDto> {
+            flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .map(|_| Self { flag })
+                .map_err(|_| {
+                    ProviderErrorDto::steam(
+                        "steam_sync_already_running",
+                        "A sincronizacao da conta Steam ja esta em andamento. Aguarde terminar antes de iniciar novamente.",
+                        true,
+                        "preflight",
+                        Some("tentativa duplicada de sincronizacao Steam".to_string()),
+                    )
+                })
+        }
+    }
+
+    impl Drop for SteamAccountSyncGuard<'_> {
+        fn drop(&mut self) {
+            self.flag.store(false, Ordering::Release);
+        }
     }
 
     #[tauri::command]
@@ -758,6 +902,82 @@ mod commands {
                 .as_deref()
                 .expect("details")
                 .is_empty());
+        }
+
+        #[test]
+        fn steam_account_sync_guard_rejects_duplicate_and_releases_on_drop() {
+            let flag = AtomicBool::new(false);
+            let guard = SteamAccountSyncGuard::acquire(&flag).expect("acquire first sync guard");
+            let duplicate =
+                SteamAccountSyncGuard::acquire(&flag).expect_err("reject duplicate sync guard");
+
+            assert_eq!(duplicate.code, "steam_sync_already_running");
+            assert_eq!(duplicate.phase, "preflight");
+            assert!(flag.load(Ordering::Acquire));
+
+            drop(guard);
+
+            assert!(!flag.load(Ordering::Acquire));
+            assert!(SteamAccountSyncGuard::acquire(&flag).is_ok());
+        }
+
+        #[test]
+        fn sync_steam_account_games_impl_rejects_duplicate_sync() {
+            let state = test_app_state_with_database(
+                std::env::temp_dir().join(format!(
+                    "biblioteca-jogos-steam-duplicate-sync-{}.sqlite3",
+                    test_timestamp_millis()
+                )),
+                true,
+            );
+
+            let error =
+                sync_steam_account_games_impl(&state).expect_err("reject duplicate steam sync");
+
+            assert_eq!(error.code, "steam_sync_already_running");
+            assert_eq!(error.phase, "preflight");
+            assert!(error.recoverable);
+        }
+
+        #[test]
+        fn sync_steam_account_games_impl_releases_guard_after_preflight_error() {
+            let state = test_app_state_with_database(
+                std::env::temp_dir().join(format!(
+                    "biblioteca-jogos-steam-preflight-sync-{}.sqlite3",
+                    test_timestamp_millis()
+                )),
+                false,
+            );
+
+            let first_error =
+                sync_steam_account_games_impl(&state).expect_err("missing steam account");
+            let second_error =
+                sync_steam_account_games_impl(&state).expect_err("missing steam account again");
+
+            assert_eq!(first_error.code, "steam_account_missing");
+            assert_eq!(second_error.code, "steam_account_missing");
+            assert!(!state.steam_account_sync_in_progress.load(Ordering::Acquire));
+        }
+
+        fn test_app_state_with_database(path: std::path::PathBuf, sync_running: bool) -> AppState {
+            let connection = storage::open_database(&path).expect("open test database");
+            AppState {
+                connection: std::sync::Arc::new(std::sync::Mutex::new(connection)),
+                auth_vault: std::sync::Arc::new(security::AuthVault::system(
+                    std::env::temp_dir().join(format!(
+                        "biblioteca-jogos-auth-vault-{}",
+                        test_timestamp_millis()
+                    )),
+                )),
+                steam_account_sync_in_progress: std::sync::Arc::new(AtomicBool::new(sync_running)),
+            }
+        }
+
+        fn test_timestamp_millis() -> u128 {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time after unix epoch")
+                .as_millis()
         }
     }
 }
@@ -2377,28 +2597,63 @@ mod launcher {
 mod steam_web_api {
     use super::ProviderErrorDto;
     use serde::Deserialize;
+    use std::collections::HashMap;
     use std::fmt;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
     use url::Url;
 
     const STEAM_OWNED_GAMES_ENDPOINT: &str =
         "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
+    const STEAM_APPDETAILS_ENDPOINT: &str = "https://store.steampowered.com/api/appdetails";
+    const STEAM_OWNED_GAMES_TIMEOUT: Duration = Duration::from_secs(15);
+    const STEAM_APPDETAILS_TIMEOUT: Duration = Duration::from_millis(1200);
 
     pub trait SteamWebApiClient {
         fn get_owned_games(&self, url: &Url) -> Result<String, SteamWebApiError>;
+        fn get_appdetails(&self, url: &Url) -> Result<String, SteamWebApiError>;
     }
 
-    #[derive(Default)]
     pub struct ReqwestSteamWebApiClient {
         client: reqwest::blocking::Client,
     }
 
+    impl Default for ReqwestSteamWebApiClient {
+        fn default() -> Self {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(STEAM_OWNED_GAMES_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| reqwest::blocking::Client::new());
+
+            Self { client }
+        }
+    }
+
     impl SteamWebApiClient for ReqwestSteamWebApiClient {
         fn get_owned_games(&self, url: &Url) -> Result<String, SteamWebApiError> {
-            let response = self
+            let response = match self
                 .client
                 .get(url.clone())
+                .timeout(STEAM_OWNED_GAMES_TIMEOUT)
                 .send()
-                .map_err(|_| SteamWebApiError::network_unavailable())?;
+            {
+                Ok(response) => response,
+                Err(error) if error.is_timeout() => {
+                    std::thread::sleep(Duration::from_millis(350));
+                    self.client
+                        .get(url.clone())
+                        .timeout(STEAM_OWNED_GAMES_TIMEOUT)
+                        .send()
+                        .map_err(|error| {
+                            SteamWebApiError::network_unavailable_from_reqwest(Some(&error))
+                        })?
+                }
+                Err(error) => {
+                    return Err(SteamWebApiError::network_unavailable_from_reqwest(Some(
+                        &error,
+                    )));
+                }
+            };
             let status = response.status();
 
             if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
@@ -2425,6 +2680,31 @@ mod steam_web_api {
             response.text().map_err(|_| {
                 SteamWebApiError::platform_unavailable(Some(
                     "nao foi possivel ler o corpo da resposta".to_string(),
+                ))
+            })
+        }
+
+        fn get_appdetails(&self, url: &Url) -> Result<String, SteamWebApiError> {
+            let response = self
+                .client
+                .get(url.clone())
+                .timeout(STEAM_APPDETAILS_TIMEOUT)
+                .send()
+                .map_err(|error| {
+                    SteamWebApiError::network_unavailable_from_reqwest(Some(&error))
+                })?;
+            let status = response.status();
+
+            if !status.is_success() {
+                return Err(SteamWebApiError::platform_unavailable(Some(format!(
+                    "resposta HTTP {} da Steam Store API",
+                    status.as_u16()
+                ))));
+            }
+
+            response.text().map_err(|_| {
+                SteamWebApiError::platform_unavailable(Some(
+                    "nao foi possivel ler o corpo da resposta da Steam Store API".to_string(),
                 ))
             })
         }
@@ -2472,13 +2752,28 @@ mod steam_web_api {
             )
         }
 
-        fn network_unavailable() -> Self {
+        fn network_unavailable_from_reqwest(error: Option<&reqwest::Error>) -> Self {
+            let detail = error
+                .map(|error| {
+                    if error.is_timeout() {
+                        "timeout ao consultar a Steam Web API"
+                    } else if error.is_connect() {
+                        "falha de conexao ao consultar a Steam Web API"
+                    } else if error.is_request() {
+                        "falha ao montar requisicao para a Steam Web API"
+                    } else {
+                        "falha de rede ao consultar a Steam Web API"
+                    }
+                })
+                .unwrap_or("falha de rede ao consultar a Steam Web API")
+                .to_string();
+
             Self::new(
                 "steam_web_api_network_unavailable",
                 "Nao foi possivel conectar a Steam Web API. Verifique a conexao e tente novamente.",
                 true,
                 "request",
-                Some("falha de rede ao consultar a Steam Web API".to_string()),
+                Some(detail),
             )
         }
 
@@ -2562,6 +2857,89 @@ mod steam_web_api {
 
         let body = client.get_owned_games(&url)?;
         parse_owned_games_response(&body)
+    }
+
+    pub fn cached_appdetails_header_image(app_id: &str) -> Option<String> {
+        appdetails_header_image_cache()
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(app_id).cloned())
+    }
+
+    pub fn fetch_appdetails_header_image(
+        client: &impl SteamWebApiClient,
+        app_id: &str,
+    ) -> Result<Option<String>, SteamWebApiError> {
+        if !is_valid_steam_app_id(app_id) {
+            return Ok(None);
+        }
+
+        let mut url = Url::parse(STEAM_APPDETAILS_ENDPOINT)
+            .map_err(|_| SteamWebApiError::parse_failed(Some("endpoint invalido".to_string())))?;
+        url.query_pairs_mut()
+            .append_pair("appids", app_id)
+            .append_pair("filters", "basic");
+
+        let body = client.get_appdetails(&url)?;
+        parse_appdetails_header_image(app_id, &body)
+    }
+
+    fn parse_appdetails_header_image(
+        app_id: &str,
+        body: &str,
+    ) -> Result<Option<String>, SteamWebApiError> {
+        let payload: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+            SteamWebApiError::parse_failed(Some(
+                "payload JSON invalido da Steam Store API".to_string(),
+            ))
+        })?;
+        let header_image = payload
+            .get(app_id)
+            .and_then(|entry| entry.get("success"))
+            .and_then(|success| success.as_bool())
+            .filter(|success| *success)
+            .and_then(|_| payload.get(app_id))
+            .and_then(|entry| entry.get("data"))
+            .and_then(|data| data.get("header_image"))
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| is_safe_image_url(value))
+            .map(str::to_string);
+
+        Ok(header_image)
+    }
+
+    pub(crate) fn cache_appdetails_header_image(app_id: &str, header_image: String) {
+        if let Ok(mut cache) = appdetails_header_image_cache().lock() {
+            cache.insert(app_id.to_string(), header_image);
+        }
+    }
+
+    fn appdetails_header_image_cache() -> &'static Mutex<HashMap<String, String>> {
+        static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+        CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    pub fn is_valid_steam_app_id(app_id: &str) -> bool {
+        !app_id.is_empty() && app_id.bytes().all(|byte| byte.is_ascii_digit())
+    }
+
+    fn is_safe_image_url(value: &str) -> bool {
+        Url::parse(value)
+            .ok()
+            .filter(|url| url.scheme() == "https")
+            .and_then(|url| {
+                url.host_str().map(str::to_ascii_lowercase).filter(|host| {
+                    matches!(
+                        host.as_str(),
+                        "cdn.akamai.steamstatic.com"
+                            | "shared.akamai.steamstatic.com"
+                            | "steamcdn-a.akamaihd.net"
+                    )
+                })
+            })
+            .is_some()
     }
 
     fn parse_owned_games_response(body: &str) -> Result<Vec<RemoteSteamGame>, SteamWebApiError> {
@@ -2756,27 +3134,110 @@ mod steam_web_api {
             assert!(games.is_empty());
         }
 
+        #[test]
+        fn fetch_appdetails_header_image_reads_store_header_image() {
+            let client = FakeSteamWebApiClient::with_appdetails_body(
+                r#"{"413150":{"success":true,"data":{"header_image":"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/413150/header.jpg"}}}"#,
+            );
+
+            let header_image = fetch_appdetails_header_image(&client, "413150")
+                .expect("fetch appdetails header image");
+            let url = client.last_appdetails_url();
+
+            assert_eq!(
+                header_image.as_deref(),
+                Some("https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/413150/header.jpg")
+            );
+            assert_eq!(url.path(), "/api/appdetails");
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "appids")
+                    .unwrap()
+                    .1,
+                "413150"
+            );
+            assert_eq!(
+                url.query_pairs()
+                    .find(|(key, _)| key == "filters")
+                    .unwrap()
+                    .1,
+                "basic"
+            );
+        }
+
+        #[test]
+        fn parse_appdetails_header_image_ignores_failed_or_unsafe_payloads() {
+            assert_eq!(
+                parse_appdetails_header_image(
+                    "413150",
+                    r#"{"413150":{"success":false,"data":{"header_image":"https://example.test/header.jpg"}}}"#,
+                )
+                .expect("parse failed appdetails"),
+                None
+            );
+            assert_eq!(
+                parse_appdetails_header_image(
+                    "413150",
+                    r#"{"413150":{"success":true,"data":{"header_image":"javascript:alert(1)"}}}"#,
+                )
+                .expect("parse unsafe appdetails"),
+                None
+            );
+            assert_eq!(
+                parse_appdetails_header_image(
+                    "413150",
+                    r#"{"413150":{"success":true,"data":{"header_image":"http://shared.akamai.steamstatic.com/store_item_assets/steam/apps/413150/header.jpg"}}}"#,
+                )
+                .expect("parse insecure appdetails"),
+                None
+            );
+            assert_eq!(
+                parse_appdetails_header_image(
+                    "413150",
+                    r#"{"413150":{"success":true,"data":{"header_image":"https://example.test/header.jpg"}}}"#,
+                )
+                .expect("parse non-steam appdetails"),
+                None
+            );
+        }
+
         #[derive(Default)]
         struct FakeSteamWebApiClient {
             body: Option<String>,
+            appdetails_body: Option<String>,
             error: Option<SteamWebApiError>,
             last_url: Mutex<Option<Url>>,
+            last_appdetails_url: Mutex<Option<Url>>,
         }
 
         impl FakeSteamWebApiClient {
             fn with_body(body: &str) -> Self {
                 Self {
                     body: Some(body.to_string()),
+                    appdetails_body: None,
                     error: None,
                     last_url: Mutex::new(None),
+                    last_appdetails_url: Mutex::new(None),
+                }
+            }
+
+            fn with_appdetails_body(body: &str) -> Self {
+                Self {
+                    body: None,
+                    appdetails_body: Some(body.to_string()),
+                    error: None,
+                    last_url: Mutex::new(None),
+                    last_appdetails_url: Mutex::new(None),
                 }
             }
 
             fn with_error(error: SteamWebApiError) -> Self {
                 Self {
                     body: None,
+                    appdetails_body: None,
                     error: Some(error),
                     last_url: Mutex::new(None),
+                    last_appdetails_url: Mutex::new(None),
                 }
             }
 
@@ -2786,6 +3247,14 @@ mod steam_web_api {
                     .expect("lock url")
                     .clone()
                     .expect("url captured")
+            }
+
+            fn last_appdetails_url(&self) -> Url {
+                self.last_appdetails_url
+                    .lock()
+                    .expect("lock appdetails url")
+                    .clone()
+                    .expect("appdetails url captured")
             }
         }
 
@@ -2798,6 +3267,19 @@ mod steam_web_api {
                 }
 
                 Ok(self.body.clone().unwrap_or_default())
+            }
+
+            fn get_appdetails(&self, url: &Url) -> Result<String, SteamWebApiError> {
+                *self
+                    .last_appdetails_url
+                    .lock()
+                    .expect("lock appdetails url") = Some(url.clone());
+
+                if let Some(error) = &self.error {
+                    return Err(error.clone());
+                }
+
+                Ok(self.appdetails_body.clone().unwrap_or_default())
             }
         }
     }
@@ -3260,6 +3742,13 @@ mod storage {
         steam_id64 TEXT,
         steam_web_api_key_configured INTEGER NOT NULL DEFAULT 0,
         config_json TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS steam_artwork_cache (
+        app_id TEXT PRIMARY KEY,
+        header_image_url TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
 
@@ -4361,6 +4850,7 @@ mod storage {
         accent_color: Option<String>,
         cover_url: Option<String>,
         hero_url: Option<String>,
+        fallback_url: Option<String>,
         source: Option<String>,
     }
 
@@ -4687,7 +5177,7 @@ mod storage {
             platforms.insert(0, row.primary_platform_id.clone());
         }
 
-        let artwork = game_artwork_from_sources(row.accent_color, &sources);
+        let artwork = game_artwork_from_sources(connection, row.accent_color, &sources);
 
         Ok(LibraryEntryDto {
             id: row.entry_id,
@@ -4718,6 +5208,7 @@ mod storage {
     }
 
     fn game_artwork_from_sources(
+        connection: &Connection,
         accent_color: Option<String>,
         sources: &[GameSourceDto],
     ) -> GameArtworkDto {
@@ -4730,14 +5221,24 @@ mod storage {
                     "https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg"
                 )),
                 hero_url: Some(format!(
-                    "https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"
+                    "https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/library_hero.jpg"
                 )),
+                fallback_url: read_steam_artwork_header_image(connection, app_id)
+                    .ok()
+                    .flatten()
+                    .or_else(|| steam_web_api::cached_appdetails_header_image(app_id))
+                    .or_else(|| {
+                        Some(format!(
+                            "https://cdn.akamai.steamstatic.com/steam/apps/{app_id}/header.jpg"
+                        ))
+                    }),
                 source: Some("steam".to_string()),
             })
             .unwrap_or(GameArtworkDto {
                 accent_color,
                 cover_url: None,
                 hero_url: None,
+                fallback_url: None,
                 source: None,
             })
     }
@@ -5362,6 +5863,73 @@ mod storage {
         Ok(summary)
     }
 
+    pub fn list_steam_app_ids(connection: &Connection) -> rusqlite::Result<Vec<String>> {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT DISTINCT game_sources.external_id
+            FROM game_sources
+            LEFT JOIN steam_artwork_cache
+              ON steam_artwork_cache.app_id = game_sources.external_id
+            WHERE game_sources.platform_id = 'steam'
+              AND steam_artwork_cache.header_image_url IS NULL
+            ORDER BY game_sources.external_id
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+
+        rows.filter_map(|row| match row {
+            Ok(app_id) if steam_web_api::cached_appdetails_header_image(&app_id).is_none() => {
+                Some(Ok(app_id))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+    }
+
+    pub fn read_steam_artwork_header_image(
+        connection: &Connection,
+        app_id: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        connection
+            .query_row(
+                r#"
+                SELECT header_image_url
+                FROM steam_artwork_cache
+                WHERE app_id = ?1
+                "#,
+                params![app_id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    pub fn save_steam_artwork_header_image(
+        connection: &Connection,
+        app_id: &str,
+        header_image_url: &str,
+    ) -> rusqlite::Result<()> {
+        let now = now_iso();
+        connection.execute(
+            r#"
+            INSERT INTO steam_artwork_cache (
+              app_id,
+              header_image_url,
+              fetched_at,
+              updated_at
+            )
+            VALUES (?1, ?2, ?3, ?3)
+            ON CONFLICT(app_id) DO UPDATE SET
+              header_image_url = excluded.header_image_url,
+              fetched_at = excluded.fetched_at,
+              updated_at = excluded.updated_at
+            "#,
+            params![app_id, header_image_url, now],
+        )?;
+
+        Ok(())
+    }
+
     pub fn record_steam_account_sync_metadata(
         connection: &mut Connection,
         steam_id: &str,
@@ -5595,21 +6163,36 @@ mod storage {
             push_unique_path(&mut roots, PathBuf::from(public).join("Games"));
         }
 
-        for root in filesystem_roots() {
+        for root in automatic_drive_game_roots() {
             push_unique_path(&mut roots, root);
         }
 
         roots
     }
 
-    fn filesystem_roots() -> Vec<PathBuf> {
+    fn automatic_drive_game_roots() -> Vec<PathBuf> {
         let mut roots = Vec::new();
 
         for letter in b'A'..=b'Z' {
             let root = format!("{}:\\", letter as char);
             let path = PathBuf::from(root);
-            if path.exists() {
-                roots.push(path);
+            if !path.exists() {
+                continue;
+            }
+
+            for child in [
+                "Games",
+                "Jogos",
+                "GOG Games",
+                "Epic Games",
+                "EA Games",
+                "Ubisoft",
+                "Battle.net",
+            ] {
+                let candidate = path.join(child);
+                if candidate.exists() {
+                    roots.push(candidate);
+                }
             }
         }
 
@@ -5883,14 +6466,20 @@ mod storage {
         let mut directories = Vec::new();
 
         if root.is_dir() {
-            if !is_helper_directory(root) && has_direct_executable(root) {
+            if !is_ignored_local_candidate_directory(root)
+                && !is_helper_directory(root)
+                && has_direct_executable(root)
+            {
                 directories.push(root.to_path_buf());
             }
 
             if let Ok(children) = fs::read_dir(root) {
                 for child in children.flatten().take(256) {
                     let path = child.path();
-                    if path.is_dir() && !is_helper_directory(&path) {
+                    if path.is_dir()
+                        && !is_ignored_local_candidate_directory(&path)
+                        && !is_helper_directory(&path)
+                    {
                         directories.push(path);
                     }
                 }
@@ -5912,7 +6501,8 @@ mod storage {
     }
 
     fn find_local_executable(candidate_dir: &Path) -> Option<PathBuf> {
-        if is_helper_directory(candidate_dir) {
+        if is_ignored_local_candidate_directory(candidate_dir) || is_helper_directory(candidate_dir)
+        {
             return None;
         }
 
@@ -6098,6 +6688,38 @@ mod storage {
         .any(|keyword| normalized_path.contains(keyword))
     }
 
+    fn is_ignored_local_candidate_directory(path: &Path) -> bool {
+        let normalized_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(normalize_name)
+            .unwrap_or_default();
+
+        matches!(
+            normalized_name.as_str(),
+            "programfiles"
+                | "programfilesx86"
+                | "programdata"
+                | "windows"
+                | "users"
+                | "documentsandsettings"
+                | "systemvolumeinformation"
+                | "recyclebin"
+                | "python"
+                | "python312"
+                | "python311"
+                | "python310"
+                | "drivers"
+                | "driver"
+                | "xboxgames"
+                | "dell"
+                | "nvidia"
+                | "amd"
+                | "intel"
+                | "perflogs"
+        )
+    }
+
     fn path_contains_helper_component(path: &Path) -> bool {
         path.parent().is_some_and(is_helper_directory)
     }
@@ -6129,6 +6751,29 @@ mod storage {
         let normalized_title = normalize_name(title);
 
         normalized_title.ends_with("launcher")
+            || matches!(
+                normalized_title.as_str(),
+                "programfiles"
+                    | "programfilesx86"
+                    | "programdata"
+                    | "windows"
+                    | "users"
+                    | "documentsandsettings"
+                    | "systemvolumeinformation"
+                    | "recyclebin"
+                    | "python"
+                    | "python312"
+                    | "python311"
+                    | "python310"
+                    | "drivers"
+                    | "driver"
+                    | "xboxgames"
+                    | "dell"
+                    | "nvidia"
+                    | "amd"
+                    | "intel"
+                    | "perflogs"
+            )
     }
 
     fn normalize_game_executable_name(value: &str) -> String {
@@ -6864,10 +7509,36 @@ mod storage {
                     OR lower(target) LIKE '%redist%'
                     OR lower(target) LIKE '%prereq%'
                     OR lower(target) LIKE '%installer%'
+                    OR lower(target) LIKE '%python%'
+                    OR lower(target) LIKE '%drivers%'
+                    OR lower(target) LIKE '%xboxgames%'
+                    OR lower(target) LIKE '%dell%'
                     OR lower(label) LIKE '%directx%'
                     OR lower(label) LIKE '%dxsetup%'
                     OR lower(label) LIKE '%epiconlineservices%'
                     OR lower(label) LIKE '%installer%'
+                    OR lower(replace(replace(label, ' ', ''), '(', '')) LIKE 'programfiles%'
+                    OR lower(label) IN (
+                      'programdata',
+                      'windows',
+                      'users',
+                      'documents and settings',
+                      'system volume information',
+                      '$recycle.bin',
+                      'python',
+                      'python312',
+                      'python311',
+                      'python310',
+                      'drivers',
+                      'driver',
+                      'xboxgames',
+                      'xbox games',
+                      'dell',
+                      'nvidia',
+                      'amd',
+                      'intel',
+                      'perflogs'
+                    )
                   )
               )
             "#,
@@ -7114,7 +7785,7 @@ mod storage {
             );
             assert_eq!(
                 entries[0].game.artwork.hero_url.as_deref(),
-                Some("https://cdn.akamai.steamstatic.com/steam/apps/413150/header.jpg")
+                Some("https://cdn.akamai.steamstatic.com/steam/apps/413150/library_hero.jpg")
             );
             assert_eq!(entries[0].game.artwork.source.as_deref(), Some("steam"));
             assert_eq!(
@@ -7123,6 +7794,13 @@ mod storage {
                     .get("coverUrl")
                     .and_then(|value| value.as_str()),
                 Some("https://cdn.akamai.steamstatic.com/steam/apps/413150/library_600x900.jpg")
+            );
+            assert_eq!(
+                serde_json::to_value(&entries[0].game.artwork)
+                    .expect("serialize artwork")
+                    .get("fallbackUrl")
+                    .and_then(|value| value.as_str()),
+                Some("https://cdn.akamai.steamstatic.com/steam/apps/413150/header.jpg")
             );
 
             let second_summary =
@@ -7787,6 +8465,73 @@ mod storage {
         }
 
         #[test]
+        fn steam_artwork_uses_library_hero_for_hero_url() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let app_id = "987654321";
+            let header_image =
+                "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/987654321/header.jpg";
+            steam_web_api::cache_appdetails_header_image(app_id, header_image.to_string());
+            let remote_games = vec![steam_web_api::RemoteSteamGame {
+                app_id: app_id.to_string(),
+                title: "Cached Header".to_string(),
+                playtime_forever: None,
+            }];
+
+            sync_steam_account_games(&mut connection, "76561198000000000", &remote_games)
+                .expect("sync remote steam account");
+            let entries = list_library_entries(&connection).expect("list entries");
+
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                entries[0].game.artwork.cover_url.as_deref(),
+                Some("https://cdn.akamai.steamstatic.com/steam/apps/987654321/library_600x900.jpg")
+            );
+            assert_eq!(
+                entries[0].game.artwork.hero_url.as_deref(),
+                Some("https://cdn.akamai.steamstatic.com/steam/apps/987654321/library_hero.jpg")
+            );
+            assert_eq!(
+                entries[0].game.artwork.fallback_url.as_deref(),
+                Some(header_image)
+            );
+            assert_eq!(entries[0].game.artwork.source.as_deref(), Some("steam"));
+        }
+
+        #[test]
+        fn steam_artwork_uses_library_hero_before_persisted_header_cache() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let app_id = "3925760";
+            let header_image = "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3925760/7b56098b0204dd2957d2437f932baf5dae91e353/header.jpg?t=1761941592";
+            let remote_games = vec![steam_web_api::RemoteSteamGame {
+                app_id: app_id.to_string(),
+                title: "Unfair Flips".to_string(),
+                playtime_forever: None,
+            }];
+
+            save_steam_artwork_header_image(&connection, app_id, header_image)
+                .expect("persist steam artwork cache");
+            sync_steam_account_games(&mut connection, "76561198000000000", &remote_games)
+                .expect("sync remote steam account");
+            let entries = list_library_entries(&connection).expect("list entries");
+
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                entries[0].game.artwork.cover_url.as_deref(),
+                Some("https://cdn.akamai.steamstatic.com/steam/apps/3925760/library_600x900.jpg")
+            );
+            assert_eq!(
+                entries[0].game.artwork.hero_url.as_deref(),
+                Some("https://cdn.akamai.steamstatic.com/steam/apps/3925760/library_hero.jpg")
+            );
+            assert_eq!(
+                entries[0].game.artwork.fallback_url.as_deref(),
+                Some(header_image)
+            );
+        }
+
+        #[test]
         fn read_xbox_account_config_accepts_direct_column_and_json() {
             let connection = Connection::open_in_memory().expect("open in-memory database");
             migrate(&connection).expect("apply migration");
@@ -8146,6 +8891,102 @@ mod storage {
             assert!(entries.is_empty());
 
             let _ = std::fs::remove_file(executable);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_skips_system_candidate_directories() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-system-root-{}",
+                timestamp_millis()
+            ));
+            let program_files_dir = root.join("Program Files");
+            let nested_tool_dir = program_files_dir.join("Vendor").join("Tool");
+            let nested_tool_executable = nested_tool_dir.join("Tool.exe");
+            let python_dir = root.join("Python312");
+            let python_executable = python_dir.join("python.exe");
+            let drivers_dir = root.join("Drivers");
+            let driver_executable = drivers_dir.join("driver.exe");
+            let xbox_games_dir = root.join("XboxGames");
+            let xbox_executable = xbox_games_dir.join("GamingServices.exe");
+            let dell_dir = root.join("Dell");
+            let dell_executable = dell_dir.join("SupportAssist.exe");
+            let game_dir = root.join("Nightfall");
+            let game_executable = game_dir.join("Nightfall.exe");
+
+            std::fs::create_dir_all(&nested_tool_dir).expect("create nested system tool dir");
+            std::fs::write(&nested_tool_executable, b"fake exe").expect("create tool exe");
+            std::fs::create_dir_all(&python_dir).expect("create python dir");
+            std::fs::write(&python_executable, b"fake exe").expect("create python exe");
+            std::fs::create_dir_all(&drivers_dir).expect("create drivers dir");
+            std::fs::write(&driver_executable, b"fake exe").expect("create driver exe");
+            std::fs::create_dir_all(&xbox_games_dir).expect("create xboxgames dir");
+            std::fs::write(&xbox_executable, b"fake exe").expect("create xboxgames exe");
+            std::fs::create_dir_all(&dell_dir).expect("create dell dir");
+            std::fs::write(&dell_executable, b"fake exe").expect("create dell exe");
+            std::fs::create_dir_all(&game_dir).expect("create game dir");
+            std::fs::write(&game_executable, b"fake exe").expect("create game exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-system-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            let summary = sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+            let entries = list_library_entries(&connection).expect("list local entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].game.title, "Nightfall");
+
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_archives_previously_imported_system_directories() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-archive-system-root-{}",
+                timestamp_millis()
+            ));
+            std::fs::create_dir_all(&root).expect("create empty root");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-archive-system-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+            let candidate = LocalGameCandidate {
+                source_external_id: normalize_path_string(Path::new(
+                    "C:\\Program Files\\Vendor\\Tool\\Tool.exe",
+                )),
+                title: "Program Files".to_string(),
+                launch_target: "C:\\Program Files\\Vendor\\Tool\\Tool.exe".to_string(),
+                source_id: "source-local-program-files".to_string(),
+                game_id: "game-local-program-files".to_string(),
+                entry_id: "entry-local-program-files".to_string(),
+                launch_id: "launch-local-program-files".to_string(),
+                accent_color: "#123456",
+            };
+
+            {
+                let transaction = connection.transaction().expect("start transaction");
+                insert_local_entry(&transaction, &candidate).expect("insert system entry");
+                transaction.commit().expect("commit system entry");
+            }
+
+            let summary = sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+            let entries = list_library_entries(&connection).expect("list local entries");
+
+            assert_eq!(summary.discovered, 0);
+            assert_eq!(summary.archived, 1);
+            assert!(entries.is_empty());
+
             let _ = std::fs::remove_dir_all(root);
             let _ = std::fs::remove_file(path);
         }

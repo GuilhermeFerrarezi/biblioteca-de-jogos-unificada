@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   buildMicrosoftStoreUri,
   buildMicrosoftStoreSearchUri,
+  getDetailsEntryForSelectedPlatform,
   getLaunchChoices,
   getLaunchActionState,
   getPreferredLaunchEntryId,
@@ -407,4 +408,57 @@ test('getLaunchActionState honors the preferred platform for grouped entries', (
     preferredXboxState.primaryLaunchAction?.target,
     'ms-windows-store://pdp/?productid=9NBLGGH4R315',
   )
+})
+
+test('getDetailsEntryForSelectedPlatform returns the member entry matching the selected launcher', () => {
+  const groupedEntry = {
+    installStatus: 'installed',
+    game: {
+      playtime: { totalMinutes: 999 },
+    },
+    memberEntries: [
+      {
+        id: 'steam-entry',
+        primaryPlatformId: 'steam',
+        installStatus: 'installed',
+        lastPlayedLabel: 'Ontem',
+        game: {
+          playtime: { totalMinutes: 300 },
+          launchActions: [
+            {
+              isPrimary: true,
+              platformId: 'steam',
+              kind: 'uri',
+              target: 'steam://rungameid/10',
+              label: 'Jogar na Steam',
+              workingDirectory: 'D:\\SteamLibrary\\steamapps\\common\\Hollow Knight',
+            },
+          ],
+        },
+      },
+      {
+        id: 'xbox-entry',
+        primaryPlatformId: 'xbox',
+        installStatus: 'not_installed',
+        lastPlayedLabel: 'Nunca',
+        game: {
+          title: 'Hollow Knight',
+          sources: [{ platformId: 'xbox', externalId: '9NBLGGH4R315' }],
+          playtime: { totalMinutes: 60 },
+          launchActions: [],
+        },
+      },
+    ],
+  }
+
+  const steamDetailsEntry = getDetailsEntryForSelectedPlatform(groupedEntry, 'steam')
+  const xboxDetailsEntry = getDetailsEntryForSelectedPlatform(groupedEntry, 'xbox')
+
+  assert.equal(steamDetailsEntry.id, 'steam-entry')
+  assert.equal(steamDetailsEntry.game.playtime.totalMinutes, 300)
+  assert.equal(steamDetailsEntry.lastPlayedLabel, 'Ontem')
+
+  assert.equal(xboxDetailsEntry.id, 'xbox-entry')
+  assert.equal(xboxDetailsEntry.game.playtime.totalMinutes, 60)
+  assert.equal(xboxDetailsEntry.installStatus, 'not_installed')
 })

@@ -5,6 +5,10 @@ import process from 'node:process'
 // https://vite.dev/config/
 export default defineConfig({
   cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite',
+  server: {
+    port: 5173,
+    strictPort: true,
+  },
   optimizeDeps: {
     exclude: ['@tauri-apps/api/core'],
   },

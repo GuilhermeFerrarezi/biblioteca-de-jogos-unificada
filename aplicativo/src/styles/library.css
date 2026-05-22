@@ -78,6 +78,12 @@
   gap: 6px;
 }
 
+.nav-list-bottom {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid #1a242c;
+}
+
 .nav-item {
   width: 100%;
   min-height: 40px;
@@ -431,7 +437,7 @@ button:disabled {
 
 .detail-cover {
   position: relative;
-  min-height: 160px;
+  aspect-ratio: 96 / 31;
   display: flex;
   align-items: flex-end;
   overflow: hidden;
@@ -705,6 +711,20 @@ button:disabled {
   height: 100%;
   display: block;
   object-fit: cover;
+  object-position: center;
+}
+
+.artwork-backdrop {
+  position: absolute;
+  inset: -12%;
+  width: 124%;
+  height: 124%;
+  display: block;
+  object-fit: cover;
+  object-position: center;
+  opacity: 0.34;
+  filter: blur(18px) saturate(1.12);
+  transform: scale(1.02);
 }
 
 .artwork-fallback-text {

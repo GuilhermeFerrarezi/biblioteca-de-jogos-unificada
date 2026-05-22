@@ -1,9 +1,54 @@
 import { Archive, Clock3, Download, Pencil, Play, Store } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
-import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, PLATFORM_LABELS } from '../constants/libraryConstants'
-import { getLaunchActionState, getLaunchChoices, isMicrosoftStoreUri } from '../hooks/libraryPageStateHelpers'
+import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, LAUNCH_ACTION_KIND, PLATFORM_LABELS } from '../constants/libraryConstants'
+import { getDetailsEntryForSelectedPlatform, getLaunchActionState, getLaunchChoices, isMicrosoftStoreUri } from '../hooks/libraryPageStateHelpers'
 import StatusDisclosure from './StatusDisclosure'
+
+const WINDOWS_EXECUTABLE_PATH_PATTERN = /^[a-zA-Z]:[\\/].+\.exe$/i
+const WINDOWS_EXPLORER_PATH_PATTERN = /(?:^|[\\/])explorer\.exe$/i
+
+function getParentDirectory(path) {
+  const normalizedPath = String(path ?? '').trim()
+
+  if (!WINDOWS_EXECUTABLE_PATH_PATTERN.test(normalizedPath)) {
+    return ''
+  }
+
+  const lastSeparatorIndex = Math.max(normalizedPath.lastIndexOf('\\'), normalizedPath.lastIndexOf('/'))
+
+  return lastSeparatorIndex > 0 ? normalizedPath.slice(0, lastSeparatorIndex) : ''
+}
+
+function resolveInstalledGamePath(selectedEntry, primaryLaunchAction) {
+  if (selectedEntry?.installStatus !== INSTALL_STATUS.INSTALLED) {
+    return ''
+  }
+
+  const workingDirectory = String(primaryLaunchAction?.workingDirectory ?? '').trim()
+
+  if (workingDirectory) {
+    return workingDirectory
+  }
+
+  if (primaryLaunchAction?.kind === LAUNCH_ACTION_KIND.EXECUTABLE) {
+    if (WINDOWS_EXPLORER_PATH_PATTERN.test(String(primaryLaunchAction.target ?? ''))) {
+      return ''
+    }
+
+    return getParentDirectory(primaryLaunchAction.target)
+  }
+
+  return String(selectedEntry?.game?.installLocations?.[0] ?? '').trim()
+}
+
+function resolveDisplayArtwork(selectedEntry, detailsEntry) {
+  const steamEntry = Array.isArray(selectedEntry?.memberEntries)
+    ? selectedEntry.memberEntries.find((entry) => entry.primaryPlatformId === 'steam')
+    : null
+
+  return steamEntry?.game?.artwork ?? detailsEntry?.game?.artwork ?? selectedEntry?.game?.artwork
+}
 
 function GameDetailsPanel({
   launchFeedback,
@@ -20,7 +65,8 @@ function GameDetailsPanel({
   const [isLaunchChooserOpen, setIsLaunchChooserOpen] = useState(false)
   const launchChooserButtonRef = useRef(null)
   const launchChooserRef = useRef(null)
-  const artwork = selectedEntry?.game.artwork
+  const detailsEntry = getDetailsEntryForSelectedPlatform(selectedEntry, selectedLaunchPlatformId)
+  const artwork = resolveDisplayArtwork(selectedEntry, detailsEntry)
   const launchChoices = getLaunchChoices(selectedEntry, selectedLaunchPlatformId).slice().sort((left, right) => {
     const platformComparison = (left.platformLabel ?? '').localeCompare(right.platformLabel ?? '', 'pt-BR', {
       sensitivity: 'base',
@@ -43,6 +89,11 @@ function GameDetailsPanel({
     primaryLaunchAction?.label === 'Abrir Microsoft Store' || isMicrosoftStoreUri(primaryLaunchAction?.target)
   const primaryActionLabel = isMicrosoftStoreAction ? 'Abrir Microsoft Store' : 'Jogar'
   const PrimaryActionIcon = isMicrosoftStoreAction ? Store : Play
+  const installedGamePath = resolveInstalledGamePath(detailsEntry, primaryLaunchAction)
+  const displayedPlatformLabel =
+    detailsEntry && hasMultipleLaunchChoices
+      ? PLATFORM_LABELS[detailsEntry.primaryPlatformId] ?? detailsEntry.primaryPlatformId
+      : selectedEntry?.platformSummary ?? PLATFORM_LABELS[selectedEntry?.primaryPlatformId] ?? selectedEntry?.primaryPlatformId
 
   useEffect(() => {
     setIsLaunchChooserOpen(false)
@@ -92,15 +143,13 @@ function GameDetailsPanel({
       {selectedEntry ? (
         <>
           <DetailArtworkFrame
-            imageUrls={[artwork?.coverUrl, artwork?.heroUrl]}
+            imageUrls={[artwork?.heroUrl, artwork?.fallbackUrl, artwork?.coverUrl]}
             accentColor={artwork?.accentColor}
             fallbackText={selectedEntry.game.title}
             imageAlt=""
           />
           <div className="detail-content">
-            <span className="platform-label">
-              {selectedEntry.platformSummary ?? PLATFORM_LABELS[selectedEntry.primaryPlatformId] ?? selectedEntry.primaryPlatformId}
-            </span>
+            <span className="platform-label">{displayedPlatformLabel}</span>
             <h2>{selectedEntry.game.title}</h2>
             {hasMultipleLaunchChoices ? (
               <div className="timeline-note launch-selection-note">
@@ -185,23 +234,29 @@ function GameDetailsPanel({
             <dl className="detail-list">
               <div>
                 <dt>Status</dt>
-                <dd>{selectedEntry.installStatus === INSTALL_STATUS.INSTALLED ? 'Instalado' : 'Nao instalado'}</dd>
+                <dd>{detailsEntry?.installStatus === INSTALL_STATUS.INSTALLED ? 'Instalado' : 'Nao instalado'}</dd>
               </div>
               <div>
                 <dt>Arquivo</dt>
-                <dd>{selectedEntry.isArchived ? 'Arquivado' : 'Ativo'}</dd>
+                <dd>{detailsEntry?.isArchived ? 'Arquivado' : 'Ativo'}</dd>
               </div>
+              {installedGamePath ? (
+                <div>
+                  <dt>Caminho</dt>
+                  <dd title={installedGamePath}>{installedGamePath}</dd>
+                </div>
+              ) : null}
               <div>
                 <dt>Tempo</dt>
-                <dd>{getPlaytimeHours(selectedEntry.game.playtime.totalMinutes)}h</dd>
+                <dd>{getPlaytimeHours(detailsEntry?.game.playtime.totalMinutes ?? 0)}h</dd>
               </div>
               <div>
                 <dt>Ultima vez</dt>
-                <dd>{selectedEntry.lastPlayedLabel}</dd>
+                <dd>{detailsEntry?.lastPlayedLabel ?? 'Nunca'}</dd>
               </div>
               <div>
                 <dt>Acao</dt>
-                <dd>{hasMultipleLaunchChoices ? 'Escolher plataforma' : primaryLaunchAction?.label ?? 'Sem acao configurada'}</dd>
+                <dd>{primaryLaunchAction?.label ?? 'Sem acao configurada'}</dd>
               </div>
             </dl>
             {!canLaunchSelectedEntry && launchActionHint ? (
@@ -209,10 +264,10 @@ function GameDetailsPanel({
                 {launchActionHint}
               </p>
             ) : null}
-            {selectedEntry.platformIds?.includes('xbox') || selectedEntry.primaryPlatformId === 'xbox' ? (
+            {detailsEntry?.primaryPlatformId === 'xbox' ? (
               <div className="timeline-note">
                 <Store size={16} aria-hidden="true" />
-                {selectedEntry.installStatus === INSTALL_STATUS.INSTALLED
+                {detailsEntry.installStatus === INSTALL_STATUS.INSTALLED
                   ? 'Xbox descoberto no Windows.'
                   : 'Xbox nao instalado: abrir Microsoft Store.'}
               </div>
@@ -257,7 +312,10 @@ function DetailArtworkFrame({ imageUrls, accentColor, fallbackText, imageAlt }) 
   return (
     <div className="detail-cover" style={{ background: accentColor ?? DEFAULT_ACCENT_COLOR }}>
       {shouldShowImage ? (
-        <img className="artwork-image" src={imageUrl} alt={imageAlt} onError={() => setImageIndex((currentIndex) => currentIndex + 1)} />
+        <>
+          <img className="artwork-backdrop" src={imageUrl} alt="" aria-hidden="true" />
+          <img className="artwork-image" src={imageUrl} alt={imageAlt} onError={() => setImageIndex((currentIndex) => currentIndex + 1)} />
+        </>
       ) : (
         <span className="artwork-fallback-text">{fallbackText}</span>
       )}
