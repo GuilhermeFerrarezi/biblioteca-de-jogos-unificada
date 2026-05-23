@@ -53,6 +53,7 @@ No estado atual deste guia, o ultimo corte salvo e `78b9374` (`docs: checkpoint 
 - O `LocalGamesProvider` inicial ja existe como comando `sync_local_games`, com importacao incremental e acionamento manual pela interface.
 - A sincronizacao local nao roda mais no boot para preservar tempo de abertura.
 - O scanner local evita bibliotecas Steam por padrao, ignora instaladores/runtimes/servicos como EpicOnlineServices, encontra executaveis em subpastas comuns como `Binaries\Win64` e arquiva falsos positivos locais antigos no boot ou na sincronizacao.
+- O scanner local tambem rejeita componentes do launcher Battle.net/Blizzard, como `Battle.net.exe`, `Agent`, `BlizzardBrowser`, `BlizzardError` e `BlizzardUpdateAgent`, arquivando falsos positivos antigos desse tipo sem bloquear subpastas de jogos legitimos na raiz Battle.net.
 - O primeiro corte do `SteamProvider` local ja existe como comando `sync_steam_games`, lendo `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos Steam instalados sem credenciais.
 - O provider Xbox local experimental ja existe no Windows. Ele usa o inventario local para trazer jogos instalados, abre o jogo via `explorer.exe` + `shell:AppsFolder` quando instalado e abre a Microsoft Store quando nao esta instalado.
 - A heuristica do Xbox foi endurecida para excluir apps comuns do Windows/Store como Skype, Filmes e TV, Noticias, IntelliGo Neptune, Calculadora e outros utilitarios, enquanto jogos desktop populares como `osu!` entram como `local`, nao como `xbox`.

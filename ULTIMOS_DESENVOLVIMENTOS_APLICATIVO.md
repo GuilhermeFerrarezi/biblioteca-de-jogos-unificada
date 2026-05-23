@@ -133,6 +133,14 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - Itens sob `_staging` nao entram mais como jogos locais, reduzindo ruido de build/infra.
 - Foi adicionado teste Rust dedicado para garantir que um executavel em `_staging` nao seja promovido a `local`.
 
+## Battle.net local hardening
+
+- O scanner local passou a rejeitar componentes do launcher Battle.net/Blizzard que estavam entrando como jogos.
+- A regra cobre `Battle.net.exe`, pastas versionadas como `Battle.net.14542`, `Agent`, `BlizzardBrowser`, `BlizzardError` e `BlizzardUpdateAgent`.
+- A rejeicao foi limitada aos componentes do launcher para preservar subpastas de jogos legitimos dentro da raiz Battle.net.
+- Entradas locais antigas que apontem para esses componentes agora sao arquivadas pela limpeza local.
+- Foram adicionados testes Rust para importacao e limpeza regressiva desses falsos positivos.
+
 ## Validacoes recentes
 
 Ultima validacao confirmada:
@@ -179,6 +187,22 @@ cargo test
 ```
 
 Resultado validado do corte: Xbox local mais conservador contra apps/infrastrutura do Windows Store e boot inicial mais leve com a tela de contas carregada sob demanda.
+
+Validacao do corte em 2026-05-23:
+
+```powershell
+npm run lint
+npm run test:smoke
+npm run build
+```
+
+```powershell
+cd aplicativo\src-tauri
+$env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\BibliotecaJogosUnificada\cargo-target"
+cargo test
+```
+
+Resultado validado: lint/build aprovados, smoke frontend com 29 testes passando e suite Rust com 132 testes passando apos o hardening Battle.net do scan local.
 
 ## Commits recentes relevantes
 

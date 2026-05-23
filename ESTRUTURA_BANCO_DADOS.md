@@ -225,12 +225,12 @@ O estado `is_archived` e preservado.
 
 ### Sincronizacao local
 
-`sync_local_games` descobre executaveis locais, cria/atualiza entradas `local` e arquiva falsos positivos antigos como DirectX, `_CommonRedist`, EpicOnlineServices, redistribuiveis e instaladores.
+`sync_local_games` descobre executaveis locais, cria/atualiza entradas `local` e arquiva falsos positivos antigos como DirectX, `_CommonRedist`, EpicOnlineServices, redistribuiveis, instaladores e componentes auxiliares do Battle.net/Blizzard.
 
 Heuristica de limpeza local:
 
 - agir apenas sobre entradas `local` ativas;
-- arquivar, nao deletar, quando a acao primaria apontar para um executavel e o alvo/rotulo baterem com redistribuiveis ou instaladores conhecidos;
+- arquivar, nao deletar, quando a acao primaria apontar para um executavel e o alvo/rotulo baterem com redistribuiveis, instaladores conhecidos ou componentes de launcher como `Battle.net.exe`, `Agent`, `BlizzardBrowser`, `BlizzardError` e `BlizzardUpdateAgent`;
 - manter conservadorismo: a regra existe para reduzir ruido, nao para remover instalacoes validas;
 - usar os indices `idx_library_entries_local_active_game` e `idx_launch_actions_platform_kind_game` para evitar varreduras completas.
 

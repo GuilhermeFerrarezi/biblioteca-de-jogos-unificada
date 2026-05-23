@@ -56,6 +56,7 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - O frontend tem acoes separadas para sincronizar Steam local, conectar conta Steam e sincronizar biblioteca da conta. A sincronizacao Steam local cobre instalacoes locais e cria acoes `steam://rungameid/<appid>`.
 - A integracao Web API por conta usa SteamID64 salvo no SQLite e Steam Web API key legivel no AuthVault/keyring do sistema operacional. Marcadores SQLite nao liberam sincronizacao sem o segredo no cofre. Senha, Steam Guard, cookies e sessoes de navegador nao sao capturados nem persistidos.
 - O comando `launch_library_entry` abre executaveis locais para jogos manuais e locais persistidos, validando caminho absoluto, arquivo existente, extensao `.exe` e sem usar shell.
+- O scanner local rejeita componentes auxiliares de launchers e runtimes, incluindo Battle.net/Blizzard (`Battle.net.exe`, `Agent`, `BlizzardBrowser`, `BlizzardError`, `BlizzardUpdateAgent`), e arquiva falsos positivos antigos quando a limpeza local roda.
 - O banco local e criado em `%APPDATA%\\com.bibliotecajogos.unificada\\library.sqlite3`.
 - No Tauri, o frontend carrega a biblioteca pelo comando `list_library_entries`; no navegador comum, usa os mocks como fallback de desenvolvimento.
 

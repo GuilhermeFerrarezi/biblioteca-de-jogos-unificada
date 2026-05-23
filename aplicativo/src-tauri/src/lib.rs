@@ -6622,6 +6622,11 @@ mod storage {
             .and_then(|name| name.to_str())
             .unwrap_or_default()
             .to_lowercase();
+        let normalized_stem = normalize_name(&stem);
+
+        if is_battlenet_launcher_component(&normalized_stem) {
+            return true;
+        }
 
         [
             "setup",
@@ -6641,9 +6646,12 @@ mod storage {
             "repair",
             "crash",
             "helper",
+            "blizzardbrowser",
+            "blizzarderror",
+            "blizzardupdateagent",
         ]
         .iter()
-        .any(|keyword| stem.contains(keyword))
+        .any(|keyword| stem.contains(keyword) || normalized_stem.contains(keyword))
     }
 
     fn is_helper_directory(path: &Path) -> bool {
@@ -6653,10 +6661,20 @@ mod storage {
             .map(normalize_name)
             .collect::<Vec<_>>();
 
+        let normalized_file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(normalize_name)
+            .unwrap_or_default();
+
+        if is_battlenet_launcher_component(&normalized_file_name) {
+            return true;
+        }
+
         if normalized_components.iter().any(|component| {
             matches!(
                 component.as_str(),
-                "staging" | "build" | "helper" | "helpers"
+                "staging" | "build" | "helper" | "helpers" | "agent"
             )
         }) {
             return true;
@@ -6683,9 +6701,22 @@ mod storage {
             "extras",
             "supportfiles",
             "thirdparty",
+            "blizzardbrowser",
+            "blizzarderror",
+            "blizzardupdateagent",
         ]
         .iter()
         .any(|keyword| normalized_path.contains(keyword))
+    }
+
+    fn is_battlenet_launcher_component(normalized_name: &str) -> bool {
+        normalized_name == "battlenet"
+            || normalized_name == "battlenetlauncher"
+            || normalized_name
+                .strip_prefix("battlenet")
+                .is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
+                })
     }
 
     fn is_ignored_local_candidate_directory(path: &Path) -> bool {
@@ -6716,6 +6747,11 @@ mod storage {
                 | "nvidia"
                 | "amd"
                 | "intel"
+                | "battlenet"
+                | "battlenetlauncher"
+                | "blizzardbrowser"
+                | "blizzarderror"
+                | "blizzardupdateagent"
                 | "perflogs"
         )
     }
@@ -6772,6 +6808,11 @@ mod storage {
                     | "nvidia"
                     | "amd"
                     | "intel"
+                    | "battlenet"
+                    | "battlenetlauncher"
+                    | "blizzardbrowser"
+                    | "blizzarderror"
+                    | "blizzardupdateagent"
                     | "perflogs"
             )
     }
@@ -7513,10 +7554,20 @@ mod storage {
                     OR lower(target) LIKE '%drivers%'
                     OR lower(target) LIKE '%xboxgames%'
                     OR lower(target) LIKE '%dell%'
+                    OR lower(target) LIKE '%battle.net%'
+                    OR lower(target) LIKE '%battlenet%'
+                    OR lower(target) LIKE '%blizzardbrowser%'
+                    OR lower(target) LIKE '%blizzarderror%'
+                    OR lower(target) LIKE '%blizzardupdateagent%'
                     OR lower(label) LIKE '%directx%'
                     OR lower(label) LIKE '%dxsetup%'
                     OR lower(label) LIKE '%epiconlineservices%'
                     OR lower(label) LIKE '%installer%'
+                    OR lower(label) LIKE '%battle.net%'
+                    OR lower(replace(label, ' ', '')) LIKE '%battlenet%'
+                    OR lower(label) LIKE '%blizzard browser%'
+                    OR lower(label) LIKE '%blizzard error%'
+                    OR lower(replace(label, ' ', '')) LIKE '%blizzardupdateagent%'
                     OR lower(replace(replace(label, ' ', ''), '(', '')) LIKE 'programfiles%'
                     OR lower(label) IN (
                       'programdata',
@@ -7537,6 +7588,12 @@ mod storage {
                       'nvidia',
                       'amd',
                       'intel',
+                      'battlenet',
+                      'battle.net',
+                      'battle.net launcher',
+                      'blizzard browser',
+                      'blizzard error',
+                      'blizzard update agent',
                       'perflogs'
                     )
                   )
@@ -9117,6 +9174,59 @@ mod storage {
         }
 
         #[test]
+        fn sync_local_games_skips_battlenet_launcher_components() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-battlenet-root-{}",
+                timestamp_millis()
+            ));
+            let battlenet_root = root.join("Battle.net");
+            let versioned_dir = battlenet_root.join("Battle.net.14542");
+            let agent_dir = battlenet_root.join("Agent");
+            let browser_dir = battlenet_root.join("BlizzardBrowser");
+            let game_dir = battlenet_root.join("Skybound");
+            let root_exe = battlenet_root.join("Battle.net.exe");
+            let versioned_exe = versioned_dir.join("Battle.net Launcher.exe");
+            let agent_exe = agent_dir.join("Agent.exe");
+            let browser_exe = browser_dir.join("BlizzardBrowser.exe");
+            let game_exe = game_dir.join("Skybound.exe");
+
+            std::fs::create_dir_all(&versioned_dir).expect("create battle.net version dir");
+            std::fs::create_dir_all(&agent_dir).expect("create battle.net agent dir");
+            std::fs::create_dir_all(&browser_dir).expect("create battle.net browser dir");
+            std::fs::create_dir_all(&game_dir).expect("create game dir");
+            std::fs::write(&root_exe, b"fake exe").expect("create battle.net exe");
+            std::fs::write(&versioned_exe, b"fake exe").expect("create launcher exe");
+            std::fs::write(&agent_exe, b"fake exe").expect("create agent exe");
+            std::fs::write(&browser_exe, b"fake exe").expect("create browser exe");
+            std::fs::write(&game_exe, b"fake exe").expect("create game exe");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-battlenet-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+
+            let summary =
+                sync_local_games_from_roots(&mut connection, std::slice::from_ref(&battlenet_root))
+                    .expect("sync local games");
+            let entries = list_library_entries(&connection).expect("list local entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].game.title, "Skybound");
+            assert_eq!(
+                entries[0].game.launch_actions[0].target,
+                game_exe.to_string_lossy()
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
         fn sync_local_games_does_not_import_only_runtime_helpers() {
             let root = std::env::temp_dir().join(format!(
                 "biblioteca-jogos-local-only-helpers-root-{}",
@@ -9150,6 +9260,55 @@ mod storage {
 
             let _ = std::fs::remove_file(directx_exe);
             let _ = std::fs::remove_file(eos_exe);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_local_games_archives_previously_imported_battlenet_launcher_components() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-archive-battlenet-root-{}",
+                timestamp_millis()
+            ));
+            std::fs::create_dir_all(&root).expect("create empty root");
+
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-local-archive-battlenet-db-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_database(&path).expect("open empty database");
+            let launcher_target = "C:\\Program Files (x86)\\Battle.net\\Battle.net.exe";
+            let helper_candidate = LocalGameCandidate {
+                source_external_id: normalize_path_string(Path::new(launcher_target)),
+                title: "Battle.net".to_string(),
+                launch_target: launcher_target.to_string(),
+                source_id: "source-local-battlenet-test".to_string(),
+                game_id: "game-local-battlenet-test".to_string(),
+                entry_id: "entry-local-battlenet-test".to_string(),
+                launch_id: "launch-local-battlenet-test".to_string(),
+                accent_color: "#0d9488",
+            };
+
+            {
+                let transaction = connection.transaction().expect("start transaction");
+                insert_local_entry(&transaction, &helper_candidate).expect("insert helper entry");
+                transaction.commit().expect("commit helper entry");
+            }
+
+            let entries_before =
+                list_library_entries(&connection).expect("list helper entry before cleanup");
+            let summary = sync_local_games_from_roots(&mut connection, std::slice::from_ref(&root))
+                .expect("sync local games");
+            let entries_after =
+                list_library_entries(&connection).expect("list helper entry after cleanup");
+
+            assert_eq!(entries_before.len(), 1);
+            assert_eq!(summary.discovered, 0);
+            assert_eq!(summary.inserted, 0);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(summary.archived, 1);
+            assert!(entries_after.is_empty());
+
             let _ = std::fs::remove_dir_all(root);
             let _ = std::fs::remove_file(path);
         }
