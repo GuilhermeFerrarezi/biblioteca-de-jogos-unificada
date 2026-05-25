@@ -19,10 +19,12 @@ Ao abrir o banco, o backend executa:
 1. `PRAGMA foreign_keys = ON`.
 2. `migrate()`, que cria as tabelas e indices base se ainda nao existirem.
 3. `ensure_archived_column()`, compatibilidade para bancos antigos sem `library_entries.is_archived`.
-4. `ensure_active_entries_index()`, indice parcial para entradas ativas.
-5. `ensure_local_cleanup_indexes()`, indices de limpeza de jogos locais.
-6. `archive_rejected_local_entries()`, limpeza leve de falsos positivos locais antigos.
-7. `ensure_provider_account_configs_table()`, compatibilidade para contas/provedor e metadados de Steam.
+4. `ensure_favorite_column()`, compatibilidade para bancos antigos sem `library_entries.is_favorite`.
+5. `ensure_active_entries_index()`, indice parcial para entradas ativas.
+6. `ensure_favorite_entries_index()`, indice parcial para favoritos ativos.
+7. `ensure_local_cleanup_indexes()`, indices de limpeza de jogos locais.
+8. `archive_rejected_local_entries()`, limpeza leve de falsos positivos locais antigos.
+9. `ensure_provider_account_configs_table()`, compatibilidade para contas/provedor, metadados de Steam, configuracoes Xbox e padroes da biblioteca.
 
 O seed dos 4 mocks nao roda no caminho critico do boot. Ele e executado em background por `bootstrap_library`, com `seed_mock_library`, e emite o evento `library-bootstrap-complete` para o frontend recarregar a lista.
 
@@ -82,6 +84,7 @@ Representa a presenca de um jogo na biblioteca unificada. Hoje ha uma entrada po
 | `install_status` | `TEXT` | `NOT NULL` | Status como `installed` ou `not_installed`. |
 | `last_played_label` | `TEXT` | `NOT NULL` | Texto de ultima execucao exibido na UI. |
 | `is_archived` | `INTEGER` | `NOT NULL DEFAULT 0` | Booleano SQLite para arquivado. Entradas arquivadas nao aparecem na listagem principal. |
+| `is_favorite` | `INTEGER` | `NOT NULL DEFAULT 0` | Booleano SQLite para favorito. Usado pelo filtro Favoritos e pela ordenacao de favoritos primeiro. |
 | `added_at` | `TEXT` | `NOT NULL` | Timestamp ISO de entrada na biblioteca. |
 | `updated_at` | `TEXT` | `NOT NULL` | Timestamp ISO de atualizacao. |
 
@@ -143,11 +146,11 @@ Guarda configuracoes nao secretas de conta por provider. Segredos como Steam Web
 
 | Coluna | Tipo | Regra | Uso |
 | --- | --- | --- | --- |
-| `provider_id` | `TEXT` | `PRIMARY KEY` | Provider configurado, hoje `steam`. |
+| `provider_id` | `TEXT` | `PRIMARY KEY` | Provider/configuracao, como `steam`, `xbox` ou `library`. |
 | `account_id` | `TEXT` | Opcional | ID publico/nao secreto da conta; para Steam, o SteamID64. |
 | `steam_id64` | `TEXT` | Opcional | SteamID64 verificado via OpenID ou salvo manualmente. |
 | `steam_web_api_key_configured` | `INTEGER` | `NOT NULL DEFAULT 0` | Marcador nao secreto atualizado apos salvar/remover a chave no AuthVault. Nao prova sozinho que o segredo esta legivel. |
-| `config_json` | `TEXT` | Opcional | JSON auxiliar nao secreto, hoje com `steamId64` e origem do vinculo. |
+| `config_json` | `TEXT` | Opcional | JSON auxiliar nao secreto, usado para metadados de sync Steam, raizes Xbox e padroes da biblioteca. |
 | `updated_at` | `TEXT` | `NOT NULL` | Timestamp ISO da ultima atualizacao. |
 
 O fluxo `Entrar com Steam` usa OpenID no navegador externo, valida a resposta com a Steam e persiste apenas o SteamID64. O app nao grava senha, Steam Guard, cookies, sessao de navegador, OpenID assertion ou URL completa de callback.
@@ -160,6 +163,7 @@ Compatibilidade atual:
 - Se o banco legado nao tiver `steam_id64`, `config_json` ou `steam_web_api_key_configured`, o backend faz `ALTER TABLE` para completar o schema.
 - O registro Steam e tratado como upsert em `provider_id = 'steam'`; isso preserva o `account_id`/`steam_id64` e os metadados de sync mesmo quando a configuracao da chave muda.
 - `config_json` e o ponto de persistencia dos metadados de sync da Steam, incluindo `steamId64`, `linkedBy`, `lastOwnedGamesSyncAt`, `lastOwnedGamesCount` e `lastOwnedGamesSummary`.
+- Configuracoes Xbox e padroes de scan local tambem podem usar `provider_account_configs.config_json`, desde que continuem sem segredos e preservem chaves existentes no merge.
 - Futuras migracoes nao devem reintroduzir segredo em SQLite nem sobrescrever `config_json` sem preservar os campos existentes.
 
 ## AuthVault e segredos locais
@@ -189,6 +193,7 @@ Indices adicionais de compatibilidade/otimizacao:
 | Indice | Tabela/colunas | Objetivo |
 | --- | --- | --- |
 | `idx_library_entries_active_added_at` | `library_entries(added_at DESC) WHERE is_archived = 0` | Listagem principal de entradas ativas. |
+| `idx_library_entries_active_favorites` | `library_entries(added_at DESC) WHERE is_archived = 0 AND is_favorite = 1` | Consulta e evolucao de filtros sobre favoritos ativos. |
 | `idx_library_entries_local_active_game` | `library_entries(primary_platform_id, is_archived, game_id)` | Atalho para detectar/limpar entradas locais ativas. |
 | `idx_launch_actions_platform_kind_game` | `launch_actions(platform_id, kind, game_id)` | `EXISTS` usado na limpeza de falsos positivos locais. |
 
@@ -222,6 +227,10 @@ O estado `is_archived` e preservado.
 ### Arquivamento
 
 `set_library_entry_archived` altera `library_entries.is_archived` e `updated_at`. A listagem principal oculta arquivados.
+
+### Favoritos
+
+`set_library_entry_favorite` altera `library_entries.is_favorite` e `updated_at`. A listagem principal continua retornando favoritos e nao favoritos; o frontend usa `isFavorite` para marcar jogos, filtrar favoritos e ordenar favoritos primeiro.
 
 ### Sincronizacao local
 
@@ -260,6 +269,51 @@ Os metadados de sync da Steam devem ser preservados como complementos do registr
 
 O comando de login `start_steam_openid_login` apenas vincula a identidade Steam. Ele nao retorna token OAuth nem permissao para biblioteca privada; a consulta de jogos continua sujeita a chave Web API valida e visibilidade da biblioteca Steam.
 
+### Steam enrichment e achievements
+
+O enrichment/achievements da Steam roda best-effort em background apos `sync_steam_account_games`: metadados, artwork e sinais de achievements podem complementar registros ja sincronizados, mas nao devem bloquear boot, listagem, sincronizacao principal ou lancamento.
+
+O processamento deixou de ser um limite unico de 50 jogos. A fila pode continuar em lotes sucessivos em background, usando um lote interno conservador para controlar pressao no provedor. Entre chamadas, o job deve respeitar pausa/backoff; se a Steam Web API responder com rate limit, a rodada para, o erro emitido ao frontend fica sanitizado e o progresso ja salvo no cache permanece disponivel para retomada posterior.
+
+O schema registra a versao `3` para cache Steam e marcadores de tentativa de enrichment:
+
+```text
+steam_achievement_schema_cache
+  app_id TEXT PRIMARY KEY
+  schema_json TEXT NOT NULL
+  achievement_count INTEGER NOT NULL DEFAULT 0
+  fetched_at TEXT NOT NULL
+  expires_at TEXT NOT NULL
+  updated_at TEXT NOT NULL
+
+steam_player_achievement_cache
+  steam_id64 TEXT NOT NULL
+  app_id TEXT NOT NULL
+  achievements_json TEXT NOT NULL
+  unlocked_count INTEGER NOT NULL DEFAULT 0
+  total_count INTEGER NOT NULL DEFAULT 0
+  fetched_at TEXT NOT NULL
+  expires_at TEXT NOT NULL
+  updated_at TEXT NOT NULL
+  PRIMARY KEY (steam_id64, app_id)
+
+steam_enrichment_attempt_cache
+  steam_id64 TEXT NOT NULL DEFAULT ''
+  app_id TEXT NOT NULL
+  phase TEXT NOT NULL
+  outcome TEXT NOT NULL
+  attempted_at TEXT NOT NULL
+  expires_at TEXT NOT NULL
+  updated_at TEXT NOT NULL
+  PRIMARY KEY (steam_id64, app_id, phase)
+```
+
+`steam_achievement_schema_cache` guarda definicoes por AppID com TTL mais longo. `steam_player_achievement_cache` guarda progresso por `steam_id64 + app_id`, mantendo isolamento por conta. `steam_enrichment_attempt_cache` funciona como negative cache temporario por fase (`artwork`, `achievement_schema`, `player_achievements`) para que jogos sem artwork/achievements disponiveis ou com falha nao rate-limit nao voltem para a fila imediatamente a cada nova sincronizacao. O cache nao substitui `games`, `library_entries`, `game_sources` nem dados editados pelo usuario. Como a fila e continua, esses caches tambem funcionam como checkpoint natural entre lotes e depois de uma parada por rate limit.
+
+### Xbox achievements em espera de compliance
+
+Achievements/title history cross-title do Xbox nao devem receber nova tabela, coluna ou persistencia enquanto nao houver confirmacao oficial de uso permitido, escopos, limites, revogacao e regras de armazenamento/exibicao. Qualquer persistencia futura desses dados precisa passar por decisao de compliance e por nova versao formal de schema.
+
 ## Regras para evoluir o schema
 
 - Toda mudanca de schema deve ganhar versao formal em `schema_migrations` e, quando necessario, compatibilidade de bootstrap para bancos legados.
@@ -285,7 +339,7 @@ Quando uma migration ou ajuste de dominio aumentar esse custo, a solucao esperad
 
 1. Registrar a nova versao em `schema_migrations` e manter a rotina de bootstrap compativel com bancos antigos.
 2. Entregar teste de upgrade a partir de schema legado quando houver alteracao em tabela existente.
-3. Proteger dados do usuario: `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres` e `config_json` de Steam nao podem ser apagados por compatibilidade.
+3. Proteger dados do usuario: `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres` e `config_json` de Steam/Xbox/library nao podem ser apagados por compatibilidade.
 4. Se `provider_account_configs` mudar, preservar o separador entre metadados nao secretos e segredos no AuthVault.
 5. Se a listagem principal mudar, declarar o impacto de consultas e indices e evitar piorar o N+1 sem batch/prefetch.
 6. Se a limpeza local mudar, continuar arquivando em vez de deletar, a menos que exista plano de restauracao/copia explicitamente documentado.

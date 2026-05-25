@@ -5,18 +5,17 @@ import {
   addPersistedManualGame,
   launchLibraryEntry,
   listLibraryEntries,
-  getLibrarySettings,
-  normalizeProviderErrorFeedback,
-  normalizeLibrarySettings,
   setLibraryEntryArchived,
-  saveLibrarySettings,
+  setLibraryEntryFavorite,
   syncSteamAccountGames,
   syncLocalGames,
   syncSteamGames,
   syncXboxAchievementGames,
   syncXboxGames,
   updatePersistedManualGame,
-} from '../services/libraryService'
+} from '../services/libraryCommands'
+import { getLibrarySettings, normalizeLibrarySettings, saveLibrarySettings } from '../services/librarySettings'
+import { normalizeProviderErrorFeedback } from '../services/providerErrorFeedback'
 import {
   buildManualLibraryEntry,
   emptyManualGameForm,
@@ -24,24 +23,39 @@ import {
   getSelectedEntryIdForEntries,
   validateManualGameInput,
 } from '../adapters/libraryEntryAdapter'
-import { INSTALL_STATUS, QUICK_FILTER_IDS } from '../constants/libraryConstants'
+import { INSTALL_STATUS, QUICK_FILTER_IDS, SORT_MODE_IDS } from '../constants/libraryConstants'
+import { groupLibraryEntries } from '../domain/libraryGrouping'
 import {
   getLaunchActionState,
   getPreferredLaunchEntryId,
   getVisibleSelectedEntry,
   isMicrosoftStoreUri,
   resolveMicrosoftStoreTarget,
-} from './libraryPageStateHelpers'
-import { groupLibraryEntries } from './libraryGroupingHelpers'
+} from '../domain/libraryLaunch'
+import { hasTauriRuntime } from '../services/tauriRuntime'
 import { useLibraryFiltering } from './useLibraryFiltering'
 
 const LIBRARY_BOOTSTRAP_COMPLETE_EVENT = 'library-bootstrap-complete'
+const STEAM_ENRICHMENT_COMPLETED_EVENT = 'steam-enrichment-completed'
 const XBOX_SYNC_FAILED_EVENT = 'xbox-sync-failed'
 const XBOX_ACHIEVEMENTS_SYNC_FAILED_EVENT = 'xbox-achievements-sync-failed'
 let bootstrapLibraryEntriesPromise = null
 
-const hasTauriRuntime = () =>
-  typeof window !== 'undefined' && Boolean(window.__TAURI_INTERNALS__)
+const isFavoriteEntry = (entry) =>
+  entry?.isFavorite === true ||
+  entry?.is_favorite === true ||
+  entry?.memberEntries?.some((memberEntry) => isFavoriteEntry(memberEntry)) === true
+
+const updateEntriesFavoriteState = (entries, targetIds, isFavorite) =>
+  entries.map((entry) => (
+    targetIds.includes(entry.id)
+      ? {
+          ...entry,
+          isFavorite,
+          is_favorite: isFavorite,
+        }
+      : entry
+  ))
 
 export function useLibraryPageState() {
   const [viewMode, setViewMode] = useState('grid')
@@ -49,6 +63,7 @@ export function useLibraryPageState() {
   const [selectedEntryId, setSelectedEntryId] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [quickFilters, setQuickFilters] = useState([])
+  const [sortMode, setSortMode] = useState(SORT_MODE_IDS.ALPHA_ASC)
   const [launchMessage, setLaunchMessage] = useState('')
   const [launchFeedback, setLaunchFeedback] = useState(null)
   const [isLibraryLoading, setIsLibraryLoading] = useState(true)
@@ -72,7 +87,7 @@ export function useLibraryPageState() {
   const isEditingManualGame = editingEntryId !== ''
   const showLibraryLoading = isLibraryLoading
   const groupedEntries = useMemo(() => groupLibraryEntries(entries), [entries])
-  const { filteredEntries, installedCount, totalHours } = useLibraryFiltering(groupedEntries, searchTerm, quickFilters)
+  const { filteredEntries, installedCount, totalHours } = useLibraryFiltering(groupedEntries, searchTerm, quickFilters, sortMode)
   const selectedEntry = getVisibleSelectedEntry(filteredEntries, selectedEntryId)
   const selectedLaunchPlatformId =
     selectedLaunchPlatformByEntryId[selectedEntry?.id] ?? preferredStoreId
@@ -121,6 +136,7 @@ export function useLibraryPageState() {
   useEffect(() => {
     let isMounted = true
     let unlistenBootstrapComplete = null
+    let unlistenSteamEnrichmentCompleted = null
     let unlistenXboxSyncFailed = null
     let unlistenXboxAchievementsSyncFailed = null
     let bootstrapTimeoutId = hasTauriRuntime()
@@ -182,6 +198,26 @@ export function useLibraryPageState() {
       }
     }
 
+    const registerSteamEnrichmentCompletionListener = async () => {
+      if (!hasTauriRuntime()) {
+        return
+      }
+
+      try {
+        unlistenSteamEnrichmentCompleted = await listen(STEAM_ENRICHMENT_COMPLETED_EVENT, async () => {
+          if (!isMounted) {
+            return
+          }
+
+          await syncLibraryEntries().catch(() => {})
+        })
+      } catch {
+        if (isMounted) {
+          setLaunchFeedback(null)
+        }
+      }
+    }
+
     const registerXboxSyncFailureListener = async () => {
       if (!hasTauriRuntime()) {
         return
@@ -240,6 +276,7 @@ export function useLibraryPageState() {
     }
 
     void registerBootstrapListener()
+    void registerSteamEnrichmentCompletionListener()
     void registerXboxSyncFailureListener()
     void registerXboxAchievementsSyncFailureListener()
     syncLibraryEntries()
@@ -262,6 +299,9 @@ export function useLibraryPageState() {
       }
       if (unlistenBootstrapComplete) {
         void unlistenBootstrapComplete()
+      }
+      if (unlistenSteamEnrichmentCompleted) {
+        void unlistenSteamEnrichmentCompleted()
       }
       if (unlistenXboxSyncFailed) {
         void unlistenXboxSyncFailed()
@@ -580,7 +620,7 @@ export function useLibraryPageState() {
     }
   }
 
-  const handleSyncSteamAccountGames = async () => {
+  const handleSyncSteamAccountGames = async ({ retryMarkedEnrichment = false } = {}) => {
     if (isSteamAccountSyncing || isSteamSyncing) {
       return
     }
@@ -591,7 +631,7 @@ export function useLibraryPageState() {
     setLaunchFeedback(null)
 
     try {
-      const accountSummary = await syncSteamAccountGames()
+      const accountSummary = await syncSteamAccountGames({ retryMarkedEnrichment })
 
       if (!accountSummary) {
         setLaunchMessage('Sincronizacao por conta disponivel apenas no aplicativo Tauri.')
@@ -687,6 +727,41 @@ export function useLibraryPageState() {
 
     await refreshEntries()
     setLaunchMessage(nextArchivedState ? 'Jogo arquivado.' : 'Jogo reativado.')
+    setLaunchFeedback(null)
+  }
+
+  const handleToggleFavoriteSelectedEntry = async () => {
+    if (!selectedEntry) {
+      setLaunchMessage('Nenhum jogo selecionado.')
+      setLaunchFeedback(null)
+      return
+    }
+
+    const nextFavoriteState = !isFavoriteEntry(selectedEntry)
+    const favoriteTargetIds = selectedEntry.memberEntryIds ?? [selectedEntry.id]
+    const favoriteResults = await Promise.all(
+      favoriteTargetIds.map((entryId) =>
+        setLibraryEntryFavorite(entryId, nextFavoriteState)
+          .then(() => true)
+          .catch(() => false),
+      ),
+    )
+    const didPersistEverywhere = favoriteResults.every(Boolean)
+
+    setEntries((currentEntries) => updateEntriesFavoriteState(currentEntries, favoriteTargetIds, nextFavoriteState))
+
+    if (hasTauriRuntime() && didPersistEverywhere) {
+      await refreshEntries()
+      setLaunchMessage(nextFavoriteState ? 'Jogo adicionado aos favoritos.' : 'Jogo removido dos favoritos.')
+      setLaunchFeedback(null)
+      return
+    }
+
+    setLaunchMessage(
+      nextFavoriteState
+        ? 'Jogo adicionado aos favoritos nesta sessao.'
+        : 'Jogo removido dos favoritos nesta sessao.',
+    )
     setLaunchFeedback(null)
   }
 
@@ -871,6 +946,8 @@ export function useLibraryPageState() {
     searchTerm,
     setSearchTerm,
     quickFilters,
+    sortMode,
+    setSortMode,
     handleQuickFilterChange,
     launchMessage,
     launchFeedback,
@@ -888,6 +965,7 @@ export function useLibraryPageState() {
     openManualGameModal,
     closeManualModal,
     handleArchiveSelectedEntry,
+    handleToggleFavoriteSelectedEntry,
     handleEditSelectedEntry,
     handleInstallAction,
     handleLaunchSelectedEntry,

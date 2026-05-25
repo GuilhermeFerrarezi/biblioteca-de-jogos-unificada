@@ -49,12 +49,14 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - Frontend migrado para JavaScript/JSX; os modelos agora sao contratos de dados mantidos pelos objetos e comandos Tauri.
 - Dados mockados concentrados em `src/data/mockLibrary.js` apenas como fallback web e referencia de seed.
 - Constantes compartilhadas de UI/dominio ficam em `src/constants/libraryConstants.js`.
-- Backend Tauri em `src-tauri` ja possui persistencia SQLite para a biblioteca, com seed idempotente dos 4 mocks e comandos `list_library_entries`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived`, `sync_local_games` e `launch_library_entry`.
-- A biblioteca principal exclui entradas arquivadas via `is_archived`; o backend tambem expoe o comando `set_library_entry_archived`. O frontend tem um botao de sincronizacao manual para importar jogos locais a partir de pastas conhecidas ou configuradas via ambiente. O scanner local ignora instaladores, componentes de runtime, servicos como EpicOnlineServices e diretorios de suporte, arquiva falsos positivos antigos desse tipo ao abrir o banco ou sincronizar, e encontra executaveis em subpastas comuns como `Binaries\Win64`.
+- Backend Tauri em `src-tauri` ja possui persistencia SQLite para a biblioteca, com seed idempotente dos 4 mocks e comandos `list_library_entries`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived`, `set_library_entry_favorite`, `sync_local_games` e `launch_library_entry`.
+- A biblioteca principal exclui entradas arquivadas via `is_archived`; favoritos sao persistidos via `is_favorite` e usados pelo frontend para marcar, filtrar e ordenar jogos favoritos. O frontend tem um botao de sincronizacao manual para importar jogos locais a partir de pastas conhecidas ou configuradas via ambiente. O scanner local ignora instaladores, componentes de runtime, servicos como EpicOnlineServices e diretorios de suporte, arquiva falsos positivos antigos desse tipo ao abrir o banco ou sincronizar, e encontra executaveis em subpastas comuns como `Binaries\Win64`.
 - A limpeza de falsos positivos locais no boot usa indices especificos em `library_entries` e `launch_actions`, e e ignorada rapidamente quando nao ha entradas locais ativas.
 - O `LocalGamesProvider` nao varre bibliotecas Steam por padrao. A importacao Steam fica no comando `sync_steam_games`, que le `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos instalados sem exigir credenciais.
 - O frontend tem acoes separadas para sincronizar Steam local, conectar conta Steam e sincronizar biblioteca da conta. A sincronizacao Steam local cobre instalacoes locais e cria acoes `steam://rungameid/<appid>`.
 - A integracao Web API por conta usa SteamID64 salvo no SQLite e Steam Web API key legivel no AuthVault/keyring do sistema operacional. Marcadores SQLite nao liberam sincronizacao sem o segredo no cofre. Senha, Steam Guard, cookies e sessoes de navegador nao sao capturados nem persistidos.
+- O corte de Steam enrichment/achievements roda best-effort em background: complementa artwork, metadados e sinais publicos de achievements sem bloquear boot, listagem, sincronizacao principal, login ou launch. Ele nao e mais um limite unico de 50 jogos; roda em lotes continuos com lote interno conservador, pausa/backoff e parada em rate limit.
+- Xbox achievements cross-title/title history ficam aguardando confirmacao oficial de compliance antes de serem usados como enrichment/catalogo; ate la, Xbox permanece conservador como descoberta local, launcher e associacao experimental.
 - O comando `launch_library_entry` abre executaveis locais para jogos manuais e locais persistidos, validando caminho absoluto, arquivo existente, extensao `.exe` e sem usar shell.
 - O scanner local rejeita componentes auxiliares de launchers e runtimes, incluindo Battle.net/Blizzard (`Battle.net.exe`, `Agent`, `BlizzardBrowser`, `BlizzardError`, `BlizzardUpdateAgent`), e arquiva falsos positivos antigos quando a limpeza local roda.
 - O banco local e criado em `%APPDATA%\\com.bibliotecajogos.unificada\\library.sqlite3`.
@@ -76,6 +78,20 @@ A pasta deve conter `steamapps\appmanifest_<appid>.acf`. Se houver `steamapps\li
 O botao `Entrar com Steam` abre o login oficial no navegador externo e recebe o retorno em um callback local temporario (`127.0.0.1`). Depois de validar a resposta com a Steam, o app salva apenas o SteamID64 no banco local.
 
 Para sincronizar a biblioteca da conta, ainda e necessaria uma Steam Web API key valida salva no AuthVault. O OpenID confirma a identidade, mas nao fornece token OAuth nem acesso automatico a bibliotecas privadas.
+
+## Steam enrichment e achievements
+
+O enrichment enriquece jogos Steam em background e de forma best-effort. Falha de artwork, metadados, playtime ou achievements nao deve impedir o uso da biblioteca nem alterar o caminho de lancamento.
+
+O processamento deixou de ser um corte unico limitado a 50 jogos. A fila continua em lotes sucessivos em background, usando lote interno conservador para reduzir pressao na Steam Web API. Entre requisicoes ha pausa/backoff; quando a Steam sinaliza rate limit, o job para a rodada atual, preserva o progresso ja salvo e permite retomada posterior.
+
+Dados sensiveis continuam fora do renderer e do SQLite. O cache estruturado de achievements Steam fica em SQLite com schema versionado e progresso isolado por `steam_id64 + app_id`; a Steam Web API key segue apenas no AuthVault.
+
+Jogos que nao retornam artwork ou que falham em uma fase de enrichment sem rate limit recebem um marcador temporario de tentativa. Isso evita que a proxima sincronizacao imediata reprocesse indefinidamente os mesmos AppIDs, mantendo retentativa futura por TTL.
+
+## Xbox achievements
+
+Achievements/title history cross-title do Xbox continuam em espera ate haver confirmacao oficial de API/compliance, incluindo uso permitido, escopos, limites, revogacao e regras de armazenamento/exibicao. Nao tratar achievements como prova de posse.
 
 ## Ambiente nativo
 
@@ -101,8 +117,8 @@ A estrutura do SQLite local fica em:
 
 ## Proximas implementacoes
 
+- Validar manualmente o Steam enrichment best-effort em background no Tauri, com lotes continuos, degradacao graciosa, pausa/backoff, parada em rate limit e feedback sanitizado.
+- Manter Xbox achievements cross-title/title history bloqueados ate confirmacao oficial de compliance.
 - Validacao manual do fluxo completo de adicionar, editar, arquivar, sincronizar Steam e sincronizar locais no Tauri.
-- Validar manualmente o login Steam OpenID e os casos de conta privada/chave Web API invalida.
-- Melhorias no `LocalGamesProvider` inicial para configurar raizes pela UI.
 - Consulta filtrada/paginacao no backend para bibliotecas maiores.
 

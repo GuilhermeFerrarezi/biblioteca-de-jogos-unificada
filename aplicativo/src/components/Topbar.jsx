@@ -1,4 +1,5 @@
 import { FolderPlus, RefreshCw, SlidersHorizontal } from 'lucide-react'
+import { useSteamEnrichmentStatus } from '../hooks/events/useSteamEnrichmentStatus'
 import SteamIcon from './icons/SteamIcon'
 
 function Topbar({
@@ -11,6 +12,7 @@ function Topbar({
   onSyncSteamGames,
 }) {
   const isSyncing = isLocalSyncing || isSteamSyncing
+  const steamEnrichmentStatus = useSteamEnrichmentStatus()
 
   return (
     <header className="topbar" aria-busy={isSyncing}>
@@ -32,6 +34,20 @@ function Topbar({
         >
           <SteamIcon size={18} className={isSteamSyncing ? 'spin-icon' : ''} />
         </button>
+        {steamEnrichmentStatus ? (
+          <div
+            className="steam-enrichment-status"
+            data-phase={steamEnrichmentStatus.phase}
+            data-rate-limited={steamEnrichmentStatus.rateLimited ? 'true' : undefined}
+            role="status"
+            aria-live="polite"
+            aria-label={`${steamEnrichmentStatus.text}. ${steamEnrichmentStatus.detail}`}
+            title={steamEnrichmentStatus.detail}
+          >
+            <span className="steam-enrichment-status-dot" aria-hidden="true" />
+            <span>{steamEnrichmentStatus.text}</span>
+          </div>
+        ) : null}
         <button
           className="icon-button"
           type="button"

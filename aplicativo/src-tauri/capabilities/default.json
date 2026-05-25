@@ -16,6 +16,7 @@
     "allow-sync-local-games",
     "allow-sync-steam-games",
     "allow-sync-steam-account-games",
+    "allow-get-steam-enrichment-retry-summary",
     "allow-get-library-settings",
     "allow-save-library-settings",
     "allow-get-steam-account-config",
@@ -37,6 +38,7 @@
     "allow-get-steam-web-api-key-state",
     "allow-disconnect-steam-web-api-key",
     "allow-set-library-entry-archived",
+    "allow-set-library-entry-favorite",
     "allow-launch-library-entry",
     "allow-sync-xbox-games",
     "allow-sync-xbox-achievement-games"

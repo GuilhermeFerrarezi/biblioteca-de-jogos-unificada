@@ -63,6 +63,8 @@ const pickLastPlayedLabel = (entries) =>
 
 const pickArchivedState = (entries) => entries.every((entry) => entry?.isArchived === true)
 
+const pickFavoriteState = (entries) => entries.some((entry) => entry?.isFavorite === true || entry?.is_favorite === true)
+
 const hasArtworkImage = (artwork) => Boolean(artwork?.coverUrl || artwork?.heroUrl || artwork?.fallbackUrl)
 
 const pickArtwork = (entries) =>
@@ -157,6 +159,7 @@ function buildGroupedEntry(entries, groupKey) {
     installStatus: pickInstallStatus(entries),
     lastPlayedLabel: pickLastPlayedLabel(entries),
     isArchived: pickArchivedState(entries),
+    isFavorite: pickFavoriteState(entries),
     platformIds,
     platformSummary: platformIds.map(getPlatformLabel).join(' + '),
     game: {

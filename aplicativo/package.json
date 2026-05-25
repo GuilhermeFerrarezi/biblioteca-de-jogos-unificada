@@ -7,7 +7,7 @@
     "dev": "set VITE_CACHE_DIR=%LOCALAPPDATA%\\BibliotecaJogosUnificada\\vite-cache&& vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test:smoke": "node --test src/hooks/libraryPageStateHelpers.test.js src/hooks/libraryGroupingHelpers.test.js src/adapters/libraryEntryAdapter.test.js src/services/libraryService.test.js",
+    "test:smoke": "node --test src/domain/libraryLaunch.test.js src/domain/libraryGrouping.test.js src/domain/steamEnrichmentStatus.test.js src/adapters/libraryEntryAdapter.test.js src/services/providerErrorFeedback.test.js src/services/librarySettings.test.js src/hooks/useLibraryFiltering.test.js",
     "onedrive:keep-local": "attrib +P -U .\\* /S /D",
     "preview": "vite preview",
     "tauri": "tauri",

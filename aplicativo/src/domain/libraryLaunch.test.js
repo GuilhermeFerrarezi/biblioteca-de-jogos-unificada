@@ -9,7 +9,7 @@ import {
   getPreferredLaunchEntryId,
   getVisibleSelectedEntry,
   resolveMicrosoftStoreTarget,
-} from './libraryPageStateHelpers.js'
+} from './libraryLaunch.js'
 
 const executableEntry = {
   id: 'entry-1',

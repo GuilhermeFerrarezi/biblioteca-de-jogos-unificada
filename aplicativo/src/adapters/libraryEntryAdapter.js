@@ -119,6 +119,7 @@ export const buildManualLibraryEntry = (form, existingEntry = null) => {
       userOverrides: existingEntry?.game.userOverrides ?? {},
     },
     isArchived: existingEntry?.isArchived ?? false,
+    isFavorite: existingEntry?.isFavorite ?? false,
   }
 }
 

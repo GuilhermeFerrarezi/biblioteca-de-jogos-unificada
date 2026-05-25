@@ -1,6 +1,6 @@
 ﻿# Checkpoint - Biblioteca de Jogos Unificada
 
-Data: 2026-05-22
+Data: 2026-05-25
 
 ## Objetivo do projeto
 
@@ -243,15 +243,14 @@ A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco
 3. Rodar `cargo test` em `aplicativo/src-tauri` usando `CARGO_TARGET_DIR=%LOCALAPPDATA%\BibliotecaJogosUnificada\cargo-target`.
 4. Manter espaco livre suficiente no C: antes de novos builds Tauri; 4,45 GB livres funcionaram para o empacotamento anterior, mas ainda e uma margem apertada.
 5. Validar manualmente a sincronizacao local com uma pasta controlada via `BIBLIOTECA_JOGOS_LOCAL_ROOTS`, conferindo insercao incremental e evitando falsos positivos.
-6. Xbox/Game Pass local ja entrou como provider experimental no Windows: o app descobre jogos instalados via inventario local, abre o jogo com `explorer.exe` + `shell:AppsFolder` quando instalado e usa Microsoft Store quando nao instalado. A heuristica foi refinada para cobrir melhor pacotes reais sem reabrir helpers do Windows/Xbox. Achievements/title history continuam apenas como sinal auxiliar, nunca ownership.
-7. Validar e refinar a importacao de title history do Xbox agora que o fluxo Xbox Live autenticado ja esta integrado, mantendo o contrato de seguranca e sem expor credenciais.
-8. Se a importacao de title history ainda nao for prioridade, melhorar a UX do erro de importacao Xbox para deixar mais claro ao usuario por que a operacao esta indisponivel e o que ele precisa configurar.
-   A descoberta local tambem recebe explicitamente jogos de desktop populares como `osu!`, que aparecem como `local` e nao como `xbox`.
-7. Em paralelo ou logo depois, fazer o corte inicial de Epic Games com foco em viabilidade e limites de API/compliance antes de qualquer fluxo de conta.
-8. Depois das novas plataformas, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e ajustar a UI para suportar listas mais longas.
-9. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch, usando a base de contratos ja existente.
-10. Manter a tela de contas e a Steam em modo de manutenção incremental, priorizando regressao e pequenos refinamentos apenas quando surgirem gaps claros.
-11. O proximo ajuste do projeto e reduzir o tempo de abertura do aplicativo, porque o Tauri esta demorando demais para mostrar a interface completa.
+6. Xbox/Game Pass local ja entrou como provider experimental no Windows: o app descobre jogos instalados via inventario local, abre o jogo com `explorer.exe` + `shell:AppsFolder` quando instalado e usa Microsoft Store quando nao instalado. A heuristica foi refinada para cobrir melhor pacotes reais sem reabrir helpers do Windows/Xbox. Achievements/title history remotos continuam aguardando confirmacao oficial/compliance e nao devem ser usados como ownership.
+7. Validar manualmente o Steam enrichment best-effort em background em lotes continuos, com fallback de artwork/metadados, lote interno conservador, pausa/backoff entre chamadas, parada ao detectar rate limit e sem bloquear boot, listagem, sync principal ou launch.
+8. Manter Xbox achievements cross-title/title history em espera por decisao oficial de API/compliance; enquanto isso, melhorar a UX do bloqueio para explicar por que a operacao esta indisponivel.
+9. Em paralelo ou logo depois, fazer o corte inicial de Epic Games com foco em viabilidade e limites de API/compliance antes de qualquer fluxo de conta.
+10. Depois das novas plataformas, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e ajustar a UI para suportar listas mais longas.
+11. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch, usando a base de contratos ja existente.
+12. Manter a tela de contas e a Steam em modo de manutencao incremental, priorizando regressao e pequenos refinamentos apenas quando surgirem gaps claros.
+13. O proximo ajuste do projeto e reduzir o tempo de abertura do aplicativo, porque o Tauri esta demorando demais para mostrar a interface completa.
 
 Atualizacao em 2026-05-21: o login Xbox Live foi convertido para fluxo de `public client` desktop com `authorization code + PKCE`, sem dependencia de `client_secret` no caminho critico. O usuario final agora apenas autentica com a conta Microsoft/Xbox; o `client_id` ficou como configuracao interna ou de build para a instancia do projeto, e o refresh token continua persistido no AuthVault do backend. Validacoes do corte: `npm run lint`, `npm run build` e `cargo test` passaram.
 
@@ -261,5 +260,7 @@ Atualizacao em 2026-05-22: o fluxo Xbox Live publico foi refinado ate concluir l
 
 Atualizacao em 2026-05-23: o `LocalGamesProvider` foi ajustado depois de uma sincronizacao local importar tres componentes do Battle.net como jogos. A heuristica agora rejeita executaveis e pastas auxiliares do launcher Battle.net/Blizzard, incluindo `Battle.net.exe`, pastas versionadas como `Battle.net.14542`, `Agent`, `BlizzardBrowser`, `BlizzardError` e `BlizzardUpdateAgent`, sem bloquear subpastas de jogos legitimos dentro da raiz Battle.net. A limpeza de falsos positivos locais tambem arquiva entradas antigas que ja tenham sido persistidas com alvos/rotulos desse launcher. Foram adicionados testes Rust para nao importar componentes Battle.net e para arquivar falsos positivos antigos. Validacoes executadas: `cargo test` com `CARGO_TARGET_DIR` local (132 testes), `npm run lint`, `npm run test:smoke` (29 testes) e `npm run build`.
 
-Proxima prioridade sugerida em 2026-05-22: testar manualmente uma biblioteca agrupada Steam + Xbox grande, conferindo se `Caminho`, tempo jogado, status e acao mudam corretamente ao alternar launcher; depois iniciar a persistencia/edicao manual de artwork para jogos que ainda dependem de fallback ou imagem incorreta.
+Atualizacao em 2026-05-25: o corte de enrichment/achievements foi delimitado para reduzir risco de API/compliance. O primeiro corte aprovado e Steam enrichment best-effort em background: metadados, artwork, playtime e sinais publicos de achievements podem complementar registros Steam sem bloquear login, listagem, sincronizacao principal ou lancamento, e falhas devem ficar sanitizadas como feedback de provider. O fluxo deixou de ser um corte unico limitado a 50 jogos e passou a alimentar lotes continuos em background; cada rodada usa lote interno conservador, pausa/backoff entre requisicoes e interrompe o job quando a Steam Web API sinaliza rate limit, preservando o progresso ja gravado no cache para retomada posterior. O backend passou a registrar cache SQLite de schema/progresso de achievements Steam, isolado por `steam_id64 + app_id`, e a disparar o enrichment apos `sync_steam_account_games` como job em background. Xbox achievements cross-title/title history ficam aguardando confirmacao oficial de uso permitido, escopos, limites e armazenamento antes de virarem fonte de enriquecimento ou catalogo; ate la, Xbox permanece como descoberta local/launcher e associacao experimental conservadora.
+
+Proxima prioridade sugerida em 2026-05-25: validar manualmente o Steam enrichment best-effort em background com lotes continuos, degradacao graciosa, pausa/backoff, parada em rate limit e sem novo bloqueio de boot; manter Xbox achievements cross-title em espera por confirmacao oficial/compliance; depois testar manualmente uma biblioteca agrupada Steam + Xbox grande, conferindo se `Caminho`, tempo jogado, status e acao mudam corretamente ao alternar launcher.
 

@@ -92,10 +92,12 @@ function LibraryPage() {
                 searchTerm={library.searchTerm}
                 selectedEntry={library.selectedEntry}
                 showLibraryLoading={library.showLibraryLoading}
+                sortMode={library.sortMode}
                 viewMode={library.viewMode}
                 onFilterChange={library.handleQuickFilterChange}
                 onSearchChange={library.setSearchTerm}
                 onSelectEntry={library.handleSelectEntry}
+                onSortModeChange={library.setSortMode}
                 onViewModeChange={library.setViewMode}
               />
 
@@ -110,6 +112,7 @@ function LibraryPage() {
                 onInstallAction={library.handleInstallAction}
                 onLaunchEntry={library.handleLaunchSelectedEntry}
                 onLaunchPlatformChange={library.handleLaunchPlatformChange}
+                onToggleFavoriteEntry={library.handleToggleFavoriteSelectedEntry}
               />
             </div>
           </>

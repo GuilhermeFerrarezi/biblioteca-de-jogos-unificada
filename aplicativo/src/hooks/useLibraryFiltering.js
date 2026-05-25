@@ -1,6 +1,11 @@
 import { useDeferredValue, useMemo } from 'react'
-import { INSTALL_STATUS, PLATFORM_LABELS, QUICK_FILTER_IDS } from '../constants/libraryConstants'
-import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
+import { INSTALL_STATUS, PLATFORM_LABELS, QUICK_FILTER_IDS, SORT_MODE_IDS } from '../constants/libraryConstants.js'
+import { getPlaytimeHours } from '../adapters/libraryEntryAdapter.js'
+
+const titleCollator = new Intl.Collator('pt-BR', {
+  numeric: true,
+  sensitivity: 'base',
+})
 
 const normalizeSearchValue = (value) =>
   String(value ?? '')
@@ -13,12 +18,15 @@ const normalizeSearchValue = (value) =>
     .replace(/\s+/g, ' ')
 
 const QUICK_FILTER_GROUPS = Object.freeze({
+  favorites: new Set([QUICK_FILTER_IDS.FAVORITES]),
   status: new Set([QUICK_FILTER_IDS.INSTALLED, QUICK_FILTER_IDS.NOT_INSTALLED]),
   platform: new Set([QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.LOCAL]),
 })
 
 function matchesQuickFilter(entry, quickFilterId) {
   switch (quickFilterId) {
+    case QUICK_FILTER_IDS.FAVORITES:
+      return isFavoriteEntry(entry)
     case QUICK_FILTER_IDS.INSTALLED:
       return entry.installStatus === INSTALL_STATUS.INSTALLED
     case QUICK_FILTER_IDS.NOT_INSTALLED:
@@ -33,6 +41,10 @@ function matchesQuickFilter(entry, quickFilterId) {
 }
 
 function getQuickFilterGroup(quickFilterId) {
+  if (QUICK_FILTER_GROUPS.favorites.has(quickFilterId)) {
+    return 'favorites'
+  }
+
   if (QUICK_FILTER_GROUPS.status.has(quickFilterId)) {
     return 'status'
   }
@@ -48,47 +60,151 @@ function matchesQuickFilterGroup(entry, quickFilterIds) {
   return quickFilterIds.some((quickFilterId) => matchesQuickFilter(entry, quickFilterId))
 }
 
-export function useLibraryFiltering(entries, searchTerm, quickFilters) {
-  const deferredSearchTerm = useDeferredValue(searchTerm)
-  const activeQuickFilters = useMemo(
-    () => quickFilters.filter((quickFilterId) => quickFilterId !== QUICK_FILTER_IDS.ALL),
-    [quickFilters],
-  )
-  const quickFilterGroups = useMemo(
-    () =>
-      activeQuickFilters.reduce((groups, quickFilterId) => {
-        const groupId = getQuickFilterGroup(quickFilterId)
-        const currentGroup = groups[groupId] ?? []
+const getEntryTitle = (entry) => String(entry?.game?.sortTitle ?? entry?.game?.title ?? '').trim()
 
-        return {
-          ...groups,
-          [groupId]: [...currentGroup, quickFilterId],
-        }
-      }, {}),
-    [activeQuickFilters],
-  )
+const compareByTitle = (leftEntry, rightEntry, direction = 1) => {
+  const titleComparison = titleCollator.compare(getEntryTitle(leftEntry), getEntryTitle(rightEntry))
+
+  if (titleComparison !== 0) {
+    return titleComparison * direction
+  }
+
+  return String(leftEntry?.id ?? '').localeCompare(String(rightEntry?.id ?? '')) * direction
+}
+
+const getPlaytimeMinutes = (entry) => Number(entry?.game?.playtime?.totalMinutes ?? 0)
+
+export const isFavoriteEntry = (entry) => {
+  if (entry?.isFavorite === true || entry?.is_favorite === true) {
+    return true
+  }
+
+  return entry?.memberEntries?.some((memberEntry) => isFavoriteEntry(memberEntry)) ?? false
+}
+
+const readProgressValue = (value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+
+  if (!value || typeof value !== 'object') {
+    return 0
+  }
+
+  const directValue =
+    value.progress ??
+    value.percentage ??
+    value.percent ??
+    value.completionPercent ??
+    value.completion_percent ??
+    value.ratio
+
+  if (typeof directValue === 'number' && Number.isFinite(directValue)) {
+    return directValue
+  }
+
+  const unlocked = value.unlocked ?? value.earned ?? value.completed
+  const total = value.total ?? value.available ?? value.count
+
+  if (Number.isFinite(unlocked) && Number.isFinite(total) && total > 0) {
+    return (unlocked / total) * 100
+  }
+
+  return 0
+}
+
+const getAchievementProgressValue = (entry) => {
+  const candidates = [
+    entry?.achievementProgress,
+    entry?.achievement_progress,
+    entry?.achievements,
+    entry?.game?.achievementProgress,
+    entry?.game?.achievement_progress,
+    entry?.game?.achievements,
+  ]
+
+  const ownProgress = Math.max(0, ...candidates.map(readProgressValue))
+  const memberProgress = entry?.memberEntries?.map(getAchievementProgressValue) ?? []
+
+  return Math.max(ownProgress, ...memberProgress)
+}
+
+export function sortLibraryEntries(entries, sortMode = SORT_MODE_IDS.ALPHA_ASC) {
+  const normalizedSortMode = Object.values(SORT_MODE_IDS).includes(sortMode) ? sortMode : SORT_MODE_IDS.ALPHA_ASC
+
+  return [...entries].sort((leftEntry, rightEntry) => {
+    switch (normalizedSortMode) {
+      case SORT_MODE_IDS.ALPHA_DESC:
+        return compareByTitle(leftEntry, rightEntry, -1)
+      case SORT_MODE_IDS.PLAYTIME_DESC: {
+        const playtimeComparison = getPlaytimeMinutes(rightEntry) - getPlaytimeMinutes(leftEntry)
+        return playtimeComparison || compareByTitle(leftEntry, rightEntry)
+      }
+      case SORT_MODE_IDS.PLAYTIME_ASC: {
+        const playtimeComparison = getPlaytimeMinutes(leftEntry) - getPlaytimeMinutes(rightEntry)
+        return playtimeComparison || compareByTitle(leftEntry, rightEntry)
+      }
+      case SORT_MODE_IDS.FAVORITES_FIRST: {
+        const favoriteComparison = Number(isFavoriteEntry(rightEntry)) - Number(isFavoriteEntry(leftEntry))
+        return favoriteComparison || compareByTitle(leftEntry, rightEntry)
+      }
+      case SORT_MODE_IDS.ACHIEVEMENTS_DESC: {
+        const progressComparison = getAchievementProgressValue(rightEntry) - getAchievementProgressValue(leftEntry)
+        return progressComparison || compareByTitle(leftEntry, rightEntry)
+      }
+      case SORT_MODE_IDS.ACHIEVEMENTS_ASC: {
+        const progressComparison = getAchievementProgressValue(leftEntry) - getAchievementProgressValue(rightEntry)
+        return progressComparison || compareByTitle(leftEntry, rightEntry)
+      }
+      case SORT_MODE_IDS.ALPHA_ASC:
+      default:
+        return compareByTitle(leftEntry, rightEntry)
+    }
+  })
+}
+
+export function filterLibraryEntries(entries, searchTerm, quickFilters) {
+  const normalizedSearch = normalizeSearchValue(String(searchTerm ?? '').trim())
+  const activeQuickFilters = quickFilters.filter((quickFilterId) => quickFilterId !== QUICK_FILTER_IDS.ALL)
+  const quickFilterGroups = activeQuickFilters.reduce((groups, quickFilterId) => {
+    const groupId = getQuickFilterGroup(quickFilterId)
+    const currentGroup = groups[groupId] ?? []
+
+    return {
+      ...groups,
+      [groupId]: [...currentGroup, quickFilterId],
+    }
+  }, {})
+
+  return entries.filter((entry) => {
+    const matchesSearch = normalizedSearch
+      ? [
+          entry.game.title,
+          entry.platformSummary ?? PLATFORM_LABELS[entry.primaryPlatformId] ?? entry.primaryPlatformId,
+          entry.platformIds?.map((platformId) => PLATFORM_LABELS[platformId] ?? platformId).join(' ') ?? '',
+          entry.game.genres?.join(' ') ?? '',
+          entry.installStatus === INSTALL_STATUS.INSTALLED ? 'instalado' : 'nao instalado',
+        ].some((value) => normalizeSearchValue(value).includes(normalizedSearch))
+      : true
+
+    const matchesQuickFilters = Object.values(quickFilterGroups).every((quickFilterIds) =>
+      matchesQuickFilterGroup(entry, quickFilterIds),
+    )
+
+    return matchesSearch && matchesQuickFilters
+  })
+}
+
+export function getVisibleLibraryEntries(entries, searchTerm, quickFilters, sortMode) {
+  return sortLibraryEntries(filterLibraryEntries(entries, searchTerm, quickFilters), sortMode)
+}
+
+export function useLibraryFiltering(entries, searchTerm, quickFilters, sortMode = SORT_MODE_IDS.ALPHA_ASC) {
+  const deferredSearchTerm = useDeferredValue(searchTerm)
 
   const filteredEntries = useMemo(() => {
-    const normalizedSearch = normalizeSearchValue(deferredSearchTerm.trim())
-
-    return entries.filter((entry) => {
-      const matchesSearch = normalizedSearch
-        ? [
-            entry.game.title,
-            entry.platformSummary ?? PLATFORM_LABELS[entry.primaryPlatformId] ?? entry.primaryPlatformId,
-            entry.platformIds?.map((platformId) => PLATFORM_LABELS[platformId] ?? platformId).join(' ') ?? '',
-            entry.game.genres?.join(' ') ?? '',
-            entry.installStatus === INSTALL_STATUS.INSTALLED ? 'instalado' : 'nao instalado',
-          ].some((value) => normalizeSearchValue(value).includes(normalizedSearch))
-        : true
-
-      const matchesQuickFilters = Object.values(quickFilterGroups).every((quickFilterIds) =>
-        matchesQuickFilterGroup(entry, quickFilterIds),
-      )
-
-      return matchesSearch && matchesQuickFilters
-    })
-  }, [deferredSearchTerm, entries, quickFilterGroups])
+    return getVisibleLibraryEntries(entries, deferredSearchTerm, quickFilters, sortMode)
+  }, [deferredSearchTerm, entries, quickFilters, sortMode])
 
   const installedCount = useMemo(
     () => entries.filter((entry) => entry.installStatus === INSTALL_STATUS.INSTALLED).length,

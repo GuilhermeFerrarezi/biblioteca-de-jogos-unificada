@@ -1,11 +1,6 @@
 use tauri::{Emitter, Manager};
 
-const LIBRARY_BOOTSTRAP_COMPLETE_EVENT: &str = "library-bootstrap-complete";
-const STEAM_SYNC_FAILED_EVENT: &str = "steam-sync-failed";
-const XBOX_SYNC_FAILED_EVENT: &str = "xbox-sync-failed";
-const XBOX_ACHIEVEMENTS_SYNC_FAILED_EVENT: &str = "xbox-achievements-sync-failed";
-const XBOX_TITLE_HISTORY_IMPORT_FAILED_EVENT: &str = "xbox-title-history-import-failed";
-
+mod events;
 mod xbox_live_auth;
 mod xbox_provider;
 
@@ -33,6 +28,9 @@ pub fn run() {
                 steam_account_sync_in_progress: std::sync::Arc::new(
                     std::sync::atomic::AtomicBool::new(false),
                 ),
+                steam_enrichment_in_progress: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(false),
+                ),
             });
             bootstrap_library(app.handle().clone(), connection);
 
@@ -56,6 +54,7 @@ pub fn run() {
             commands::sync_xbox_achievement_games,
             commands::import_xbox_achievement_title_history,
             commands::sync_steam_account_games,
+            commands::get_steam_enrichment_retry_summary,
             commands::get_steam_account_config,
             commands::get_steam_library_roots,
             commands::start_steam_openid_login,
@@ -75,6 +74,7 @@ pub fn run() {
             commands::get_steam_web_api_key_state,
             commands::disconnect_steam_web_api_key,
             commands::set_library_entry_archived,
+            commands::set_library_entry_favorite,
             commands::launch_library_entry,
         ])
         .run(tauri::generate_context!())
@@ -85,6 +85,7 @@ struct AppState {
     connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
     auth_vault: std::sync::Arc<security::AuthVault>,
     steam_account_sync_in_progress: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    steam_enrichment_in_progress: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -139,7 +140,7 @@ fn bootstrap_library(
     connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
 ) {
     if !cfg!(debug_assertions) {
-        let _ = handle.emit(LIBRARY_BOOTSTRAP_COMPLETE_EVENT, true);
+        let _ = handle.emit(events::LIBRARY_BOOTSTRAP_COMPLETE, true);
         return;
     }
 
@@ -156,7 +157,7 @@ fn bootstrap_library(
             eprintln!("library bootstrap failed: {error}");
         }
 
-        let _ = handle.emit(LIBRARY_BOOTSTRAP_COMPLETE_EVENT, result.is_ok());
+        let _ = handle.emit(events::LIBRARY_BOOTSTRAP_COMPLETE, result.is_ok());
     });
 }
 
@@ -261,7 +262,7 @@ mod commands {
                 provider_error.provider_id,
                 provider_error.details_sanitized
             );
-            let _ = app.emit(super::XBOX_SYNC_FAILED_EVENT, provider_error.clone());
+            let _ = app.emit(super::events::XBOX_SYNC_FAILED, provider_error.clone());
             provider_error_json
         })
     }
@@ -289,7 +290,7 @@ mod commands {
                 provider_error.details_sanitized
             );
             let _ = app.emit(
-                super::XBOX_ACHIEVEMENTS_SYNC_FAILED_EVENT,
+                super::events::XBOX_ACHIEVEMENTS_SYNC_FAILED,
                 provider_error.clone(),
             );
             provider_error_json
@@ -319,7 +320,7 @@ mod commands {
                 provider_error.details_sanitized
             );
             let _ = app.emit(
-                super::XBOX_TITLE_HISTORY_IMPORT_FAILED_EVENT,
+                super::events::XBOX_TITLE_HISTORY_IMPORT_FAILED,
                 provider_error.clone(),
             );
             provider_error_json
@@ -330,19 +331,47 @@ mod commands {
     pub fn sync_steam_account_games(
         app: AppHandle,
         state: State<'_, AppState>,
+        input: Option<SteamAccountSyncInput>,
     ) -> Result<storage::SyncSummaryDto, String> {
-        sync_steam_account_games_impl(state.inner()).map_err(|error| {
-            log::warn!(
-                "steam sync failed: code={} phase={} recoverable={} provider_id={} details_sanitized={:?}",
-                error.code,
-                error.phase,
-                error.recoverable,
-                error.provider_id,
-                error.details_sanitized
-            );
-            let _ = app.emit(super::STEAM_SYNC_FAILED_EVENT, error.clone());
-            error.message
-        })
+        let retry_marked_enrichment = input
+            .as_ref()
+            .is_some_and(|input| input.retry_marked_enrichment);
+        sync_steam_account_games_impl(Some(app.clone()), state.inner(), retry_marked_enrichment)
+            .map_err(|error| {
+                log::warn!(
+                    "steam sync failed: code={} phase={} recoverable={} provider_id={} details_sanitized={:?}",
+                    error.code,
+                    error.phase,
+                    error.recoverable,
+                    error.provider_id,
+                    error.details_sanitized
+                );
+                let _ = app.emit(super::events::STEAM_SYNC_FAILED, error.clone());
+                error.message
+            })
+    }
+
+    #[derive(Debug, Clone, Default, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamAccountSyncInput {
+        #[serde(default)]
+        retry_marked_enrichment: bool,
+    }
+
+    #[tauri::command]
+    pub fn get_steam_enrichment_retry_summary(
+        state: State<'_, AppState>,
+    ) -> Result<storage::SteamEnrichmentRetrySummaryDto, String> {
+        let connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+        let steam_id64 = storage::read_steam_account_config(&connection)
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+
+        storage::get_steam_enrichment_retry_summary(&connection, &steam_id64)
+            .map_err(|error| error.to_string())
     }
 
     #[tauri::command]
@@ -664,33 +693,84 @@ mod commands {
                     }
 
                     match steam_web_api::fetch_appdetails_header_image(&client, &app_id) {
-                        Ok(Some(header_image)) => {
-                            steam_web_api::cache_appdetails_header_image(
-                                &app_id,
-                                header_image.clone(),
-                            );
+                                Ok(Some(header_image)) => {
+                                    steam_web_api::cache_appdetails_header_image(
+                                        &app_id,
+                                        header_image.clone(),
+                                    );
 
-                            if let Ok(connection) = connection.lock() {
-                                if let Err(error) = storage::save_steam_artwork_header_image(
-                                    &connection,
-                                    &app_id,
-                                    &header_image,
-                                ) {
+                                    if let Ok(connection) = connection.lock() {
+                                        if let Err(error) = storage::save_steam_artwork_header_image(
+                                            &connection,
+                                            &app_id,
+                                            &header_image,
+                                        ) {
                                     log::debug!(
                                         "failed to persist steam artwork cache: app_id={} error={error}",
                                         app_id
                                     );
                                 }
                             }
+                                }
+                                Ok(None) => {
+                                    if let Ok(connection) = connection.lock() {
+                                        if let Err(error) =
+                                            storage::record_steam_enrichment_attempt(
+                                                &connection,
+                                                None,
+                                                &app_id,
+                                                storage::STEAM_ENRICHMENT_PHASE_ARTWORK,
+                                                storage::STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS,
+                                                "not_available",
+                                            )
+                                        {
+                                            log::debug!(
+                                                "failed to persist steam artwork negative cache: app_id={} error={error}",
+                                                app_id
+                                            );
+                                        } else if let Err(error) =
+                                            storage::clear_steam_enrichment_attempt(
+                                                &connection,
+                                                None,
+                                                &app_id,
+                                                storage::STEAM_ENRICHMENT_PHASE_ARTWORK,
+                                            )
+                                        {
+                                            log::debug!(
+                                                "failed to clear steam artwork attempt cache: app_id={} error={error}",
+                                                app_id
+                                            );
+                                        }
+                                    }
+                                }
+                        Err(error) => {
+                            if error.code() != "steam_web_api_network_unavailable" {
+                                if let Ok(connection) = connection.lock() {
+                                    if let Err(storage_error) =
+                                        storage::record_steam_enrichment_attempt(
+                                            &connection,
+                                            None,
+                                            &app_id,
+                                            storage::STEAM_ENRICHMENT_PHASE_ARTWORK,
+                                            storage::STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS,
+                                            error.code(),
+                                        )
+                                    {
+                                        log::debug!(
+                                            "failed to persist steam artwork error cache: app_id={} error={storage_error}",
+                                            app_id
+                                        );
+                                    }
+                                }
+                            }
+                            log::debug!(
+                                "steam appdetails artwork fetch failed: app_id={} code={} phase={} details_sanitized={:?}",
+                                app_id,
+                                error.code(),
+                                error.phase(),
+                                error.details_sanitized()
+                            );
                         }
-                        Ok(None) => {}
-                        Err(error) => log::debug!(
-                            "steam appdetails artwork fetch failed: app_id={} code={} phase={} details_sanitized={:?}",
-                            app_id,
-                            error.code(),
-                            error.phase(),
-                            error.details_sanitized()
-                        ),
                     }
                 }
             })
@@ -700,8 +780,467 @@ mod commands {
         }
     }
 
+    #[derive(Debug, Clone, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SteamEnrichmentJobEvent {
+        job_id: String,
+        provider_id: &'static str,
+        total_candidates: usize,
+        batch_size: usize,
+        phases: Vec<&'static str>,
+    }
+
+    #[derive(Debug, Clone, Default, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SteamEnrichmentJobSummaryDto {
+        job_id: String,
+        provider_id: &'static str,
+        total_candidates: usize,
+        completed: usize,
+        skipped_cached: usize,
+        fetched_artwork: usize,
+        fetched_achievement_schemas: usize,
+        fetched_player_achievements: usize,
+        updated: usize,
+        failed: usize,
+        rate_limited: bool,
+    }
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SteamEnrichmentProgressEvent {
+        job_id: String,
+        provider_id: &'static str,
+        phase: &'static str,
+        completed: usize,
+        total: usize,
+        total_candidates: usize,
+        batch_completed: usize,
+        batch_total: usize,
+        batches_completed: usize,
+        total_batches: usize,
+        skipped_cached: usize,
+        failed: usize,
+        rate_limited: bool,
+    }
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SteamEnrichmentFailedEvent {
+        job_id: String,
+        provider_id: &'static str,
+        error: ProviderErrorDto,
+        partial_summary: SteamEnrichmentJobSummaryDto,
+    }
+
+    const STEAM_ENRICHMENT_BATCH_SIZE: usize = 50;
+    const STEAM_ENRICHMENT_MAX_INPUT_APPS: usize = 2000;
+    const STEAM_ENRICHMENT_MAX_APPS_PER_JOB: usize = 1000;
+    const STEAM_ENRICHMENT_REQUEST_DELAY_MS: u64 = 650;
+    const STEAM_ENRICHMENT_BATCH_DELAY_MS: u64 = 1500;
+
+    fn spawn_steam_enrichment_job_best_effort(
+        app: AppHandle,
+        connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+        auth_vault: std::sync::Arc<security::AuthVault>,
+        enrichment_in_progress: std::sync::Arc<AtomicBool>,
+        steam_id: String,
+        app_ids: Vec<String>,
+        retry_marked_enrichment: bool,
+    ) {
+        if enrichment_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            let summary = SteamEnrichmentJobSummaryDto {
+                job_id: "steam-enrichment-skipped".to_string(),
+                provider_id: "steam",
+                ..SteamEnrichmentJobSummaryDto::default()
+            };
+            let error = ProviderErrorDto::steam(
+                "steam_enrichment_already_running",
+                "A atualizacao de capas e conquistas da Steam ja esta em andamento.",
+                true,
+                "preflight",
+                Some("tentativa duplicada de enrichment Steam".to_string()),
+            );
+            let _ = app.emit(
+                super::events::STEAM_ENRICHMENT_FAILED,
+                SteamEnrichmentFailedEvent {
+                    job_id: summary.job_id.clone(),
+                    provider_id: "steam",
+                    error,
+                    partial_summary: summary,
+                },
+            );
+            return;
+        }
+
+        let app_ids = app_ids
+            .into_iter()
+            .filter(|app_id| steam_web_api::is_valid_steam_app_id(app_id))
+            .take(STEAM_ENRICHMENT_MAX_INPUT_APPS)
+            .collect::<Vec<_>>();
+
+        if app_ids.is_empty() {
+            enrichment_in_progress.store(false, Ordering::Release);
+            return;
+        }
+
+        let enrichment_flag_for_thread = enrichment_in_progress.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("steam-enrichment".to_string())
+            .spawn(move || {
+                struct EnrichmentFlagGuard(std::sync::Arc<AtomicBool>);
+
+                impl Drop for EnrichmentFlagGuard {
+                    fn drop(&mut self) {
+                        self.0.store(false, Ordering::Release);
+                    }
+                }
+
+                let _guard = EnrichmentFlagGuard(enrichment_flag_for_thread);
+                let job_id = format!("steam-enrichment-{}", storage::timestamp_millis());
+                let candidates = connection
+                    .lock()
+                    .map_err(|_| {
+                        ProviderErrorDto::steam(
+                            "steam_enrichment_database_lock_unavailable",
+                            "Nao foi possivel acessar o banco local para preparar a atualizacao Steam.",
+                            true,
+                            "preflight",
+                            Some("falha ao adquirir o lock local".to_string()),
+                        )
+                    })
+                    .and_then(|connection| {
+                        storage::list_steam_enrichment_candidates(
+                            &connection,
+                            &steam_id,
+                            &app_ids,
+                            STEAM_ENRICHMENT_MAX_APPS_PER_JOB,
+                            retry_marked_enrichment,
+                        )
+                        .map_err(|error| {
+                            ProviderErrorDto::steam(
+                                "steam_enrichment_candidate_read_failed",
+                                "Nao foi possivel preparar a fila de atualizacao Steam.",
+                                true,
+                                "preflight",
+                                Some(error.to_string()),
+                            )
+                        })
+                    });
+                let candidates = match candidates {
+                    Ok(candidates) => candidates,
+                    Err(error) => {
+                        let summary = SteamEnrichmentJobSummaryDto {
+                            job_id: job_id.clone(),
+                            provider_id: "steam",
+                            ..SteamEnrichmentJobSummaryDto::default()
+                        };
+                        let _ = app.emit(
+                            super::events::STEAM_ENRICHMENT_FAILED,
+                            SteamEnrichmentFailedEvent {
+                                job_id,
+                                provider_id: "steam",
+                                error,
+                                partial_summary: summary,
+                            },
+                        );
+                        return;
+                    }
+                };
+
+                if candidates.is_empty() {
+                    let summary = SteamEnrichmentJobSummaryDto {
+                        job_id,
+                        provider_id: "steam",
+                        skipped_cached: app_ids.len(),
+                        ..SteamEnrichmentJobSummaryDto::default()
+                    };
+                    let _ = app.emit(super::events::STEAM_ENRICHMENT_COMPLETED, summary);
+                    return;
+                }
+
+                let _ = app.emit(
+                    super::events::STEAM_ENRICHMENT_STARTED,
+                    SteamEnrichmentJobEvent {
+                        job_id: job_id.clone(),
+                        provider_id: "steam",
+                        total_candidates: candidates.len(),
+                        batch_size: STEAM_ENRICHMENT_BATCH_SIZE,
+                        phases: vec!["artwork", "achievements"],
+                    },
+                );
+
+                let api_key = auth_vault.steam_web_api_key().ok().flatten();
+                let client = steam_web_api::ReqwestSteamWebApiClient::default();
+                let mut summary = SteamEnrichmentJobSummaryDto {
+                    job_id: job_id.clone(),
+                    provider_id: "steam",
+                    total_candidates: candidates.len(),
+                    ..SteamEnrichmentJobSummaryDto::default()
+                };
+                let total_batches =
+                    candidates.len().div_ceil(STEAM_ENRICHMENT_BATCH_SIZE).max(1);
+
+                for (batch_index, batch) in
+                    candidates.chunks(STEAM_ENRICHMENT_BATCH_SIZE).enumerate()
+                {
+                    for (batch_item_index, candidate) in batch.iter().enumerate() {
+                        let mut changed = false;
+
+                        if candidate.needs_artwork {
+                            match steam_web_api::fetch_appdetails_header_image(
+                                &client,
+                                &candidate.app_id,
+                            ) {
+                                Ok(Some(header_image)) => {
+                                    steam_web_api::cache_appdetails_header_image(
+                                        &candidate.app_id,
+                                        header_image.clone(),
+                                    );
+                                    if let Ok(connection) = connection.lock() {
+                                        if storage::save_steam_artwork_header_image(
+                                            &connection,
+                                            &candidate.app_id,
+                                            &header_image,
+                                        )
+                                        .is_ok()
+                                        {
+                                            let _ = storage::clear_steam_enrichment_attempt(
+                                                &connection,
+                                                None,
+                                                &candidate.app_id,
+                                                storage::STEAM_ENRICHMENT_PHASE_ARTWORK,
+                                            );
+                                            summary.fetched_artwork += 1;
+                                            changed = true;
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    if let Ok(connection) = connection.lock() {
+                                        if storage::record_steam_enrichment_attempt(
+                                            &connection,
+                                            None,
+                                            &candidate.app_id,
+                                            storage::STEAM_ENRICHMENT_PHASE_ARTWORK,
+                                            storage::STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS,
+                                            "not_available",
+                                        )
+                                        .is_ok()
+                                        {
+                                            changed = true;
+                                        }
+                                    }
+                                }
+                                Err(error) if error.code() == "steam_web_api_rate_limited" => {
+                                    summary.rate_limited = true;
+                                    summary.failed += 1;
+                                    emit_steam_enrichment_rate_limited(
+                                        &app, &job_id, &summary, error,
+                                    );
+                                    return;
+                                }
+                                Err(error) => {
+                                    summary.failed += 1;
+                                    if error.code() != "steam_web_api_network_unavailable" {
+                                        if let Ok(connection) = connection.lock() {
+                                            let _ = storage::record_steam_enrichment_attempt(
+                                                &connection,
+                                                None,
+                                                &candidate.app_id,
+                                                storage::STEAM_ENRICHMENT_PHASE_ARTWORK,
+                                                storage::STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS,
+                                                error.code(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(api_key) = api_key.as_deref() {
+                            if candidate.needs_achievement_schema {
+                                match steam_web_api::fetch_achievement_schema(
+                                    &client,
+                                    api_key,
+                                    &candidate.app_id,
+                                ) {
+                                    Ok(schema) => {
+                                        if let Ok(connection) = connection.lock() {
+                                            if storage::save_steam_achievement_schema_cache(
+                                                &connection,
+                                                &candidate.app_id,
+                                                &schema.raw_json,
+                                                schema.total_count,
+                                            )
+                                            .is_ok()
+                                            {
+                                                let _ = storage::clear_steam_enrichment_attempt(
+                                                    &connection,
+                                                    None,
+                                                    &candidate.app_id,
+                                                    storage::STEAM_ENRICHMENT_PHASE_ACHIEVEMENT_SCHEMA,
+                                                );
+                                                summary.fetched_achievement_schemas += 1;
+                                                changed = true;
+                                            }
+                                        }
+                                    }
+                                    Err(error) if error.code() == "steam_web_api_rate_limited" => {
+                                        summary.rate_limited = true;
+                                        summary.failed += 1;
+                                        emit_steam_enrichment_rate_limited(
+                                            &app, &job_id, &summary, error,
+                                        );
+                                        return;
+                                    }
+                                    Err(error) => {
+                                        summary.failed += 1;
+                                        if error.code() != "steam_web_api_network_unavailable" {
+                                            if let Ok(connection) = connection.lock() {
+                                                let _ = storage::record_steam_enrichment_attempt(
+                                                    &connection,
+                                                    None,
+                                                    &candidate.app_id,
+                                                    storage::STEAM_ENRICHMENT_PHASE_ACHIEVEMENT_SCHEMA,
+                                                    storage::STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS,
+                                                    error.code(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if candidate.needs_player_achievements {
+                                match steam_web_api::fetch_player_achievements(
+                                    &client,
+                                    api_key,
+                                    &steam_id,
+                                    &candidate.app_id,
+                                ) {
+                                    Ok(player_achievements) => {
+                                        if let Ok(connection) = connection.lock() {
+                                            if storage::save_steam_player_achievement_cache(
+                                                &connection,
+                                                &steam_id,
+                                                &candidate.app_id,
+                                                &player_achievements.raw_json,
+                                                player_achievements.unlocked_count,
+                                                player_achievements.total_count,
+                                            )
+                                            .is_ok()
+                                            {
+                                                let _ = storage::clear_steam_enrichment_attempt(
+                                                    &connection,
+                                                    Some(&steam_id),
+                                                    &candidate.app_id,
+                                                    storage::STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS,
+                                                );
+                                                summary.fetched_player_achievements += 1;
+                                                changed = true;
+                                            }
+                                        }
+                                    }
+                                    Err(error) if error.code() == "steam_web_api_rate_limited" => {
+                                        summary.rate_limited = true;
+                                        summary.failed += 1;
+                                        emit_steam_enrichment_rate_limited(
+                                            &app, &job_id, &summary, error,
+                                        );
+                                        return;
+                                    }
+                                    Err(error) => {
+                                        summary.failed += 1;
+                                        if error.code() != "steam_web_api_network_unavailable" {
+                                            if let Ok(connection) = connection.lock() {
+                                                let _ = storage::record_steam_enrichment_attempt(
+                                                    &connection,
+                                                    Some(&steam_id),
+                                                    &candidate.app_id,
+                                                    storage::STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS,
+                                                    storage::STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS,
+                                                    error.code(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if changed {
+                            summary.updated += 1;
+                        } else if !candidate.needs_artwork
+                            && !candidate.needs_achievement_schema
+                            && !candidate.needs_player_achievements
+                        {
+                            summary.skipped_cached += 1;
+                        }
+
+                        summary.completed += 1;
+                        let _ = app.emit(
+                            super::events::STEAM_ENRICHMENT_PROGRESS,
+                            SteamEnrichmentProgressEvent {
+                                job_id: job_id.clone(),
+                                provider_id: "steam",
+                                phase: "enrichment",
+                                completed: summary.completed,
+                                total: summary.total_candidates,
+                                total_candidates: summary.total_candidates,
+                                batch_completed: batch_item_index + 1,
+                                batch_total: batch.len(),
+                                batches_completed: batch_index,
+                                total_batches,
+                                skipped_cached: summary.skipped_cached,
+                                failed: summary.failed,
+                                rate_limited: summary.rate_limited,
+                            },
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            STEAM_ENRICHMENT_REQUEST_DELAY_MS,
+                        ));
+                    }
+
+                    if batch_index + 1 < total_batches {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            STEAM_ENRICHMENT_BATCH_DELAY_MS,
+                        ));
+                    }
+                }
+
+                let _ = app.emit(super::events::STEAM_ENRICHMENT_COMPLETED, summary);
+            })
+        {
+            enrichment_in_progress.store(false, Ordering::Release);
+            log::debug!("failed to start steam enrichment thread: {error}");
+        }
+    }
+
+    fn emit_steam_enrichment_rate_limited(
+        app: &AppHandle,
+        job_id: &str,
+        summary: &SteamEnrichmentJobSummaryDto,
+        error: steam_web_api::SteamWebApiError,
+    ) {
+        let _ = app.emit(
+            super::events::STEAM_ENRICHMENT_FAILED,
+            SteamEnrichmentFailedEvent {
+                job_id: job_id.to_string(),
+                provider_id: "steam",
+                error: error.into_provider_error(),
+                partial_summary: summary.clone(),
+            },
+        );
+    }
+
     fn sync_steam_account_games_impl(
+        app: Option<AppHandle>,
         state: &AppState,
+        retry_marked_enrichment: bool,
     ) -> Result<storage::SyncSummaryDto, ProviderErrorDto> {
         let _sync_guard = SteamAccountSyncGuard::acquire(&state.steam_account_sync_in_progress)?;
         let steam_id = {
@@ -775,7 +1314,17 @@ mod commands {
         })?;
 
         drop(connection);
-        warm_steam_artwork_cache_best_effort(state.connection.clone(), artwork_app_ids);
+        if let Some(app) = app {
+            spawn_steam_enrichment_job_best_effort(
+                app,
+                state.connection.clone(),
+                state.auth_vault.clone(),
+                state.steam_enrichment_in_progress.clone(),
+                steam_id,
+                artwork_app_ids,
+                retry_marked_enrichment,
+            );
+        }
 
         Ok(summary)
     }
@@ -834,6 +1383,21 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         storage::set_library_entry_archived(&mut connection, &entry_id, is_archived)
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn set_library_entry_favorite(
+        entry_id: String,
+        is_favorite: bool,
+        state: State<'_, AppState>,
+    ) -> Result<(), String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::set_library_entry_favorite(&mut connection, &entry_id, is_favorite)
             .map_err(|error| error.to_string())
     }
 
@@ -931,8 +1495,8 @@ mod commands {
                 true,
             );
 
-            let error =
-                sync_steam_account_games_impl(&state).expect_err("reject duplicate steam sync");
+            let error = sync_steam_account_games_impl(None, &state, false)
+                .expect_err("reject duplicate steam sync");
 
             assert_eq!(error.code, "steam_sync_already_running");
             assert_eq!(error.phase, "preflight");
@@ -949,10 +1513,10 @@ mod commands {
                 false,
             );
 
-            let first_error =
-                sync_steam_account_games_impl(&state).expect_err("missing steam account");
-            let second_error =
-                sync_steam_account_games_impl(&state).expect_err("missing steam account again");
+            let first_error = sync_steam_account_games_impl(None, &state, false)
+                .expect_err("missing steam account");
+            let second_error = sync_steam_account_games_impl(None, &state, false)
+                .expect_err("missing steam account again");
 
             assert_eq!(first_error.code, "steam_account_missing");
             assert_eq!(second_error.code, "steam_account_missing");
@@ -970,6 +1534,7 @@ mod commands {
                     )),
                 )),
                 steam_account_sync_in_progress: std::sync::Arc::new(AtomicBool::new(sync_running)),
+                steam_enrichment_in_progress: std::sync::Arc::new(AtomicBool::new(false)),
             }
         }
 
@@ -2531,6 +3096,7 @@ mod launcher {
                         install_status TEXT NOT NULL,
                         last_played_label TEXT NOT NULL,
                         is_archived INTEGER NOT NULL DEFAULT 0,
+                        is_favorite INTEGER NOT NULL DEFAULT 0,
                         added_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     );
@@ -2605,6 +3171,10 @@ mod steam_web_api {
 
     const STEAM_OWNED_GAMES_ENDPOINT: &str =
         "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
+    const STEAM_PLAYER_ACHIEVEMENTS_ENDPOINT: &str =
+        "https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/";
+    const STEAM_ACHIEVEMENT_SCHEMA_ENDPOINT: &str =
+        "https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/";
     const STEAM_APPDETAILS_ENDPOINT: &str = "https://store.steampowered.com/api/appdetails";
     const STEAM_OWNED_GAMES_TIMEOUT: Duration = Duration::from_secs(15);
     const STEAM_APPDETAILS_TIMEOUT: Duration = Duration::from_millis(1200);
@@ -2612,6 +3182,8 @@ mod steam_web_api {
     pub trait SteamWebApiClient {
         fn get_owned_games(&self, url: &Url) -> Result<String, SteamWebApiError>;
         fn get_appdetails(&self, url: &Url) -> Result<String, SteamWebApiError>;
+        fn get_player_achievements(&self, url: &Url) -> Result<String, SteamWebApiError>;
+        fn get_schema_for_game(&self, url: &Url) -> Result<String, SteamWebApiError>;
     }
 
     pub struct ReqwestSteamWebApiClient {
@@ -2708,6 +3280,54 @@ mod steam_web_api {
                 ))
             })
         }
+
+        fn get_player_achievements(&self, url: &Url) -> Result<String, SteamWebApiError> {
+            request_steam_web_api_text(&self.client, url, STEAM_OWNED_GAMES_TIMEOUT)
+        }
+
+        fn get_schema_for_game(&self, url: &Url) -> Result<String, SteamWebApiError> {
+            request_steam_web_api_text(&self.client, url, STEAM_OWNED_GAMES_TIMEOUT)
+        }
+    }
+
+    fn request_steam_web_api_text(
+        client: &reqwest::blocking::Client,
+        url: &Url,
+        timeout: Duration,
+    ) -> Result<String, SteamWebApiError> {
+        let response = client
+            .get(url.clone())
+            .timeout(timeout)
+            .send()
+            .map_err(|error| SteamWebApiError::network_unavailable_from_reqwest(Some(&error)))?;
+        let status = response.status();
+
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(SteamWebApiError::rate_limited());
+        }
+
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
+            || status == reqwest::StatusCode::BAD_REQUEST
+        {
+            return Err(SteamWebApiError::auth_required(Some(format!(
+                "resposta HTTP {} da Steam Web API",
+                status.as_u16()
+            ))));
+        }
+
+        if !status.is_success() {
+            return Err(SteamWebApiError::platform_unavailable(Some(format!(
+                "resposta HTTP {} da Steam Web API",
+                status.as_u16()
+            ))));
+        }
+
+        response.text().map_err(|_| {
+            SteamWebApiError::platform_unavailable(Some(
+                "nao foi possivel ler o corpo da resposta".to_string(),
+            ))
+        })
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2841,6 +3461,19 @@ mod steam_web_api {
         pub playtime_forever: Option<i64>,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SteamAchievementSchema {
+        pub raw_json: String,
+        pub total_count: usize,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SteamPlayerAchievements {
+        pub raw_json: String,
+        pub total_count: usize,
+        pub unlocked_count: usize,
+    }
+
     pub fn fetch_owned_games(
         client: &impl SteamWebApiClient,
         api_key: &str,
@@ -2882,6 +3515,53 @@ mod steam_web_api {
 
         let body = client.get_appdetails(&url)?;
         parse_appdetails_header_image(app_id, &body)
+    }
+
+    pub fn fetch_achievement_schema(
+        client: &impl SteamWebApiClient,
+        api_key: &str,
+        app_id: &str,
+    ) -> Result<SteamAchievementSchema, SteamWebApiError> {
+        if !is_valid_steam_app_id(app_id) {
+            return Err(SteamWebApiError::parse_failed(Some(
+                "appid Steam invalido".to_string(),
+            )));
+        }
+
+        let mut url = Url::parse(STEAM_ACHIEVEMENT_SCHEMA_ENDPOINT)
+            .map_err(|_| SteamWebApiError::parse_failed(Some("endpoint invalido".to_string())))?;
+        url.query_pairs_mut()
+            .append_pair("key", api_key)
+            .append_pair("appid", app_id)
+            .append_pair("format", "json");
+
+        let body = client.get_schema_for_game(&url)?;
+        parse_achievement_schema_response(&body)
+    }
+
+    pub fn fetch_player_achievements(
+        client: &impl SteamWebApiClient,
+        api_key: &str,
+        steam_id: &str,
+        app_id: &str,
+    ) -> Result<SteamPlayerAchievements, SteamWebApiError> {
+        if !is_valid_steam_app_id(app_id) {
+            return Err(SteamWebApiError::parse_failed(Some(
+                "appid Steam invalido".to_string(),
+            )));
+        }
+
+        let mut url = Url::parse(STEAM_PLAYER_ACHIEVEMENTS_ENDPOINT)
+            .map_err(|_| SteamWebApiError::parse_failed(Some("endpoint invalido".to_string())))?;
+        url.query_pairs_mut()
+            .append_pair("key", api_key)
+            .append_pair("steamid", steam_id)
+            .append_pair("appid", app_id)
+            .append_pair("l", "brazilian")
+            .append_pair("format", "json");
+
+        let body = client.get_player_achievements(&url)?;
+        parse_player_achievements_response(&body)
     }
 
     fn parse_appdetails_header_image(
@@ -2966,6 +3646,60 @@ mod steam_web_api {
         }
 
         Ok(games)
+    }
+
+    fn parse_achievement_schema_response(
+        body: &str,
+    ) -> Result<SteamAchievementSchema, SteamWebApiError> {
+        let payload: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+            SteamWebApiError::parse_failed(Some(
+                "payload JSON invalido do schema de achievements Steam".to_string(),
+            ))
+        })?;
+        let achievements = payload
+            .get("game")
+            .and_then(|game| game.get("availableGameStats"))
+            .and_then(|stats| stats.get("achievements"))
+            .and_then(|achievements| achievements.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(SteamAchievementSchema {
+            raw_json: serde_json::Value::Array(achievements.clone()).to_string(),
+            total_count: achievements.len(),
+        })
+    }
+
+    fn parse_player_achievements_response(
+        body: &str,
+    ) -> Result<SteamPlayerAchievements, SteamWebApiError> {
+        let payload: serde_json::Value = serde_json::from_str(body).map_err(|_| {
+            SteamWebApiError::parse_failed(Some(
+                "payload JSON invalido dos achievements Steam".to_string(),
+            ))
+        })?;
+        let achievements = payload
+            .get("playerstats")
+            .and_then(|stats| stats.get("achievements"))
+            .and_then(|achievements| achievements.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let unlocked_count = achievements
+            .iter()
+            .filter(|achievement| {
+                achievement
+                    .get("achieved")
+                    .and_then(parse_i64_value)
+                    .unwrap_or_default()
+                    > 0
+            })
+            .count();
+
+        Ok(SteamPlayerAchievements {
+            raw_json: serde_json::Value::Array(achievements.clone()).to_string(),
+            total_count: achievements.len(),
+            unlocked_count,
+        })
     }
 
     #[derive(Deserialize)]
@@ -3201,13 +3935,54 @@ mod steam_web_api {
             );
         }
 
+        #[test]
+        fn fetch_achievement_schema_counts_definitions() {
+            let mut client = FakeSteamWebApiClient::default();
+            client.schema_body = Some(
+                r#"{"game":{"availableGameStats":{"achievements":[{"name":"FIRST"},{"name":"SECOND"}]}}}"#
+                    .to_string(),
+            );
+
+            let schema =
+                fetch_achievement_schema(&client, "0123456789abcdefABCDEF0123456789", "413150")
+                    .expect("fetch achievement schema");
+
+            assert_eq!(schema.total_count, 2);
+            assert!(schema.raw_json.contains("FIRST"));
+        }
+
+        #[test]
+        fn fetch_player_achievements_counts_unlocked_items() {
+            let mut client = FakeSteamWebApiClient::default();
+            client.achievements_body = Some(
+                r#"{"playerstats":{"achievements":[{"apiname":"FIRST","achieved":1},{"apiname":"SECOND","achieved":0},{"apiname":"THIRD","achieved":"1"}]}}"#
+                    .to_string(),
+            );
+
+            let achievements = fetch_player_achievements(
+                &client,
+                "0123456789abcdefABCDEF0123456789",
+                "76561198000000000",
+                "413150",
+            )
+            .expect("fetch player achievements");
+
+            assert_eq!(achievements.total_count, 3);
+            assert_eq!(achievements.unlocked_count, 2);
+            assert!(achievements.raw_json.contains("THIRD"));
+        }
+
         #[derive(Default)]
         struct FakeSteamWebApiClient {
             body: Option<String>,
             appdetails_body: Option<String>,
+            achievements_body: Option<String>,
+            schema_body: Option<String>,
             error: Option<SteamWebApiError>,
             last_url: Mutex<Option<Url>>,
             last_appdetails_url: Mutex<Option<Url>>,
+            last_achievements_url: Mutex<Option<Url>>,
+            last_schema_url: Mutex<Option<Url>>,
         }
 
         impl FakeSteamWebApiClient {
@@ -3215,9 +3990,13 @@ mod steam_web_api {
                 Self {
                     body: Some(body.to_string()),
                     appdetails_body: None,
+                    achievements_body: None,
+                    schema_body: None,
                     error: None,
                     last_url: Mutex::new(None),
                     last_appdetails_url: Mutex::new(None),
+                    last_achievements_url: Mutex::new(None),
+                    last_schema_url: Mutex::new(None),
                 }
             }
 
@@ -3225,9 +4004,13 @@ mod steam_web_api {
                 Self {
                     body: None,
                     appdetails_body: Some(body.to_string()),
+                    achievements_body: None,
+                    schema_body: None,
                     error: None,
                     last_url: Mutex::new(None),
                     last_appdetails_url: Mutex::new(None),
+                    last_achievements_url: Mutex::new(None),
+                    last_schema_url: Mutex::new(None),
                 }
             }
 
@@ -3235,9 +4018,13 @@ mod steam_web_api {
                 Self {
                     body: None,
                     appdetails_body: None,
+                    achievements_body: None,
+                    schema_body: None,
                     error: Some(error),
                     last_url: Mutex::new(None),
                     last_appdetails_url: Mutex::new(None),
+                    last_achievements_url: Mutex::new(None),
+                    last_schema_url: Mutex::new(None),
                 }
             }
 
@@ -3280,6 +4067,29 @@ mod steam_web_api {
                 }
 
                 Ok(self.appdetails_body.clone().unwrap_or_default())
+            }
+
+            fn get_player_achievements(&self, url: &Url) -> Result<String, SteamWebApiError> {
+                *self
+                    .last_achievements_url
+                    .lock()
+                    .expect("lock achievements url") = Some(url.clone());
+
+                if let Some(error) = &self.error {
+                    return Err(error.clone());
+                }
+
+                Ok(self.achievements_body.clone().unwrap_or_default())
+            }
+
+            fn get_schema_for_game(&self, url: &Url) -> Result<String, SteamWebApiError> {
+                *self.last_schema_url.lock().expect("lock schema url") = Some(url.clone());
+
+                if let Some(error) = &self.error {
+                    return Err(error.clone());
+                }
+
+                Ok(self.schema_body.clone().unwrap_or_default())
             }
         }
     }
@@ -3667,7 +4477,9 @@ mod storage {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         migrate(&connection)?;
         ensure_archived_column(&connection)?;
+        ensure_favorite_column(&connection)?;
         ensure_active_entries_index(&connection)?;
+        ensure_favorite_entries_index(&connection)?;
         ensure_local_cleanup_indexes(&connection)?;
         ensure_provider_account_configs_table(&connection)?;
         archive_rejected_local_entries(&connection)?;
@@ -3700,6 +4512,7 @@ mod storage {
         install_status TEXT NOT NULL,
         last_played_label TEXT NOT NULL,
         is_archived INTEGER NOT NULL DEFAULT 0,
+        is_favorite INTEGER NOT NULL DEFAULT 0,
         added_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
@@ -3752,15 +4565,58 @@ mod storage {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS steam_achievement_schema_cache (
+        app_id TEXT PRIMARY KEY,
+        schema_json TEXT NOT NULL,
+        achievement_count INTEGER NOT NULL DEFAULT 0,
+        fetched_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS steam_player_achievement_cache (
+        steam_id64 TEXT NOT NULL,
+        app_id TEXT NOT NULL,
+        achievements_json TEXT NOT NULL,
+        unlocked_count INTEGER NOT NULL DEFAULT 0,
+        total_count INTEGER NOT NULL DEFAULT 0,
+        fetched_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (steam_id64, app_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS steam_enrichment_attempt_cache (
+        steam_id64 TEXT NOT NULL DEFAULT '',
+        app_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        attempted_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (steam_id64, app_id, phase)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_games_sort_title ON games(sort_title);
       CREATE INDEX IF NOT EXISTS idx_library_entries_install_status ON library_entries(install_status);
       CREATE INDEX IF NOT EXISTS idx_library_entries_platform ON library_entries(primary_platform_id);
       CREATE INDEX IF NOT EXISTS idx_launch_actions_game_primary ON launch_actions(game_id, is_primary);
+      CREATE INDEX IF NOT EXISTS idx_steam_achievement_schema_expires ON steam_achievement_schema_cache(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_steam_player_achievement_expires ON steam_player_achievement_cache(steam_id64, expires_at);
+      CREATE INDEX IF NOT EXISTS idx_steam_enrichment_attempt_expires ON steam_enrichment_attempt_cache(phase, expires_at);
       "#,
     )?;
 
         connection.execute(
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?1)",
+            params![now_iso()],
+        )?;
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, ?1)",
+            params![now_iso()],
+        )?;
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?1)",
             params![now_iso()],
         )?;
 
@@ -3785,6 +4641,7 @@ mod storage {
         install_status: String,
         last_played_label: String,
         is_archived: bool,
+        is_favorite: bool,
         added_at: String,
         updated_at: String,
     }
@@ -4863,6 +5720,7 @@ mod storage {
         library_entries.install_status,
         library_entries.last_played_label,
         library_entries.is_archived,
+        library_entries.is_favorite,
         library_entries.added_at,
         library_entries.updated_at,
         games.id,
@@ -4879,21 +5737,22 @@ mod storage {
         )?;
 
         let rows = statement.query_map([], |row| {
-            let game_id: String = row.get(7)?;
+            let game_id: String = row.get(8)?;
             Ok(EntryRow {
                 entry_id: row.get(0)?,
                 primary_platform_id: row.get(1)?,
                 install_status: row.get(2)?,
                 last_played_label: row.get(3)?,
                 is_archived: row.get::<_, i64>(4)? == 1,
-                added_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                is_favorite: row.get::<_, i64>(5)? == 1,
+                added_at: row.get(6)?,
+                updated_at: row.get(7)?,
                 game_id,
-                title: row.get(8)?,
-                sort_title: row.get(9)?,
-                installed: row.get::<_, i64>(10)? == 1,
-                playtime_total_minutes: row.get(11)?,
-                accent_color: row.get(12)?,
+                title: row.get(9)?,
+                sort_title: row.get(10)?,
+                installed: row.get::<_, i64>(11)? == 1,
+                playtime_total_minutes: row.get(12)?,
+                accent_color: row.get(13)?,
                 source_account_id: None,
             })
         })?;
@@ -4911,6 +5770,7 @@ mod storage {
         library_entries.install_status,
         library_entries.last_played_label,
         library_entries.is_archived,
+        library_entries.is_favorite,
         library_entries.added_at,
         library_entries.updated_at,
         games.id,
@@ -4928,21 +5788,22 @@ mod storage {
         )?;
 
         let rows = statement.query_map([], |row| {
-            let game_id: String = row.get(7)?;
+            let game_id: String = row.get(8)?;
             Ok(EntryRow {
                 entry_id: row.get(0)?,
                 primary_platform_id: row.get(1)?,
                 install_status: row.get(2)?,
                 last_played_label: row.get(3)?,
                 is_archived: row.get::<_, i64>(4)? == 1,
-                added_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                is_favorite: row.get::<_, i64>(5)? == 1,
+                added_at: row.get(6)?,
+                updated_at: row.get(7)?,
                 game_id,
-                title: row.get(8)?,
-                sort_title: row.get(9)?,
-                installed: row.get::<_, i64>(10)? == 1,
-                playtime_total_minutes: row.get(11)?,
-                accent_color: row.get(12)?,
+                title: row.get(9)?,
+                sort_title: row.get(10)?,
+                installed: row.get::<_, i64>(11)? == 1,
+                playtime_total_minutes: row.get(12)?,
+                accent_color: row.get(13)?,
                 source_account_id: None,
             })
         })?;
@@ -5108,6 +5969,7 @@ mod storage {
         install_status: String,
         last_played_label: String,
         is_archived: bool,
+        is_favorite: bool,
         added_at: String,
         updated_at: String,
         game_id: String,
@@ -5129,6 +5991,7 @@ mod storage {
           library_entries.install_status,
           library_entries.last_played_label,
           library_entries.is_archived,
+          library_entries.is_favorite,
           library_entries.added_at,
           library_entries.updated_at,
           games.id,
@@ -5149,14 +6012,15 @@ mod storage {
                         install_status: row.get(2)?,
                         last_played_label: row.get(3)?,
                         is_archived: row.get::<_, i64>(4)? == 1,
-                        added_at: row.get(5)?,
-                        updated_at: row.get(6)?,
-                        game_id: row.get(7)?,
-                        title: row.get(8)?,
-                        sort_title: row.get(9)?,
-                        installed: row.get::<_, i64>(10)? == 1,
-                        playtime_total_minutes: row.get(11)?,
-                        accent_color: row.get(12)?,
+                        is_favorite: row.get::<_, i64>(5)? == 1,
+                        added_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        game_id: row.get(8)?,
+                        title: row.get(9)?,
+                        sort_title: row.get(10)?,
+                        installed: row.get::<_, i64>(11)? == 1,
+                        playtime_total_minutes: row.get(12)?,
+                        accent_color: row.get(13)?,
                         source_account_id: None,
                     })
                 },
@@ -5185,6 +6049,7 @@ mod storage {
             install_status: row.install_status,
             last_played_label: row.last_played_label,
             is_archived: row.is_archived,
+            is_favorite: row.is_favorite,
             added_at: row.added_at,
             updated_at: row.updated_at,
             game: GameDto {
@@ -5391,9 +6256,29 @@ mod storage {
         Ok(())
     }
 
+    fn ensure_favorite_column(connection: &Connection) -> rusqlite::Result<()> {
+        if !table_has_column(connection, "library_entries", "is_favorite")? {
+            connection.execute(
+                "ALTER TABLE library_entries ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
+        Ok(())
+    }
+
     fn ensure_active_entries_index(connection: &Connection) -> rusqlite::Result<()> {
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_library_entries_active_added_at ON library_entries(added_at DESC) WHERE is_archived = 0",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    fn ensure_favorite_entries_index(connection: &Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_library_entries_active_favorites ON library_entries(added_at DESC) WHERE is_archived = 0 AND is_favorite = 1",
             [],
         )?;
 
@@ -5864,6 +6749,7 @@ mod storage {
     }
 
     pub fn list_steam_app_ids(connection: &Connection) -> rusqlite::Result<Vec<String>> {
+        let now = now_iso();
         let mut statement = connection.prepare(
             r#"
             SELECT DISTINCT game_sources.external_id
@@ -5879,7 +6765,17 @@ mod storage {
 
         rows.filter_map(|row| match row {
             Ok(app_id) if steam_web_api::cached_appdetails_header_image(&app_id).is_none() => {
-                Some(Ok(app_id))
+                match has_fresh_steam_enrichment_attempt(
+                    connection,
+                    None,
+                    &app_id,
+                    STEAM_ENRICHMENT_PHASE_ARTWORK,
+                    &now,
+                ) {
+                    Ok(false) => Some(Ok(app_id)),
+                    Ok(true) => None,
+                    Err(error) => Some(Err(error)),
+                }
             }
             Ok(_) => None,
             Err(error) => Some(Err(error)),
@@ -5928,6 +6824,340 @@ mod storage {
         )?;
 
         Ok(())
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct SteamEnrichmentCandidate {
+        pub app_id: String,
+        pub needs_artwork: bool,
+        pub needs_achievement_schema: bool,
+        pub needs_player_achievements: bool,
+    }
+
+    #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct SteamEnrichmentRetrySummaryDto {
+        pub marked_games: usize,
+        pub marked_attempts: usize,
+        pub artwork: usize,
+        pub achievement_schema: usize,
+        pub player_achievements: usize,
+    }
+
+    pub const STEAM_ENRICHMENT_PHASE_ARTWORK: &str = "artwork";
+    pub const STEAM_ENRICHMENT_PHASE_ACHIEVEMENT_SCHEMA: &str = "achievement_schema";
+    pub const STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS: &str = "player_achievements";
+    pub const STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS: i64 = 30;
+    pub const STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS: i64 = 1;
+
+    pub fn list_steam_enrichment_candidates(
+        connection: &Connection,
+        steam_id64: &str,
+        app_ids: &[String],
+        limit: usize,
+        include_recent_attempts: bool,
+    ) -> rusqlite::Result<Vec<SteamEnrichmentCandidate>> {
+        let now = now_iso();
+        let mut candidates = Vec::new();
+
+        for app_id in app_ids
+            .iter()
+            .map(|app_id| app_id.trim())
+            .filter(|app_id| steam_web_api::is_valid_steam_app_id(app_id))
+        {
+            let needs_artwork = read_steam_artwork_header_image(connection, app_id)?.is_none()
+                && steam_web_api::cached_appdetails_header_image(app_id).is_none()
+                && (include_recent_attempts
+                    || !has_fresh_steam_enrichment_attempt(
+                        connection,
+                        None,
+                        app_id,
+                        STEAM_ENRICHMENT_PHASE_ARTWORK,
+                        &now,
+                    )?);
+            let needs_achievement_schema =
+                !has_fresh_steam_achievement_schema(connection, app_id, &now)?
+                    && (include_recent_attempts
+                        || !has_fresh_steam_enrichment_attempt(
+                            connection,
+                            None,
+                            app_id,
+                            STEAM_ENRICHMENT_PHASE_ACHIEVEMENT_SCHEMA,
+                            &now,
+                        )?);
+            let needs_player_achievements =
+                !has_fresh_steam_player_achievements(connection, steam_id64, app_id, &now)?
+                    && (include_recent_attempts
+                        || !has_fresh_steam_enrichment_attempt(
+                            connection,
+                            Some(steam_id64),
+                            app_id,
+                            STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS,
+                            &now,
+                        )?);
+
+            if needs_artwork || needs_achievement_schema || needs_player_achievements {
+                candidates.push(SteamEnrichmentCandidate {
+                    app_id: app_id.to_string(),
+                    needs_artwork,
+                    needs_achievement_schema,
+                    needs_player_achievements,
+                });
+            }
+
+            if candidates.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    pub fn get_steam_enrichment_retry_summary(
+        connection: &Connection,
+        steam_id64: &str,
+    ) -> rusqlite::Result<SteamEnrichmentRetrySummaryDto> {
+        let now = now_iso();
+        let mut summary = SteamEnrichmentRetrySummaryDto::default();
+        let mut marked_games = std::collections::HashSet::new();
+        let mut statement = connection.prepare(
+            r#"
+            SELECT DISTINCT game_sources.external_id, steam_enrichment_attempt_cache.phase
+            FROM steam_enrichment_attempt_cache
+            INNER JOIN game_sources
+              ON game_sources.platform_id = 'steam'
+             AND game_sources.external_id = steam_enrichment_attempt_cache.app_id
+            WHERE steam_enrichment_attempt_cache.expires_at > ?1
+              AND (
+                steam_enrichment_attempt_cache.steam_id64 = ''
+                OR steam_enrichment_attempt_cache.steam_id64 = ?2
+              )
+            "#,
+        )?;
+        let rows = statement.query_map(params![now, steam_id64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (app_id, phase) = row?;
+            marked_games.insert(app_id);
+            summary.marked_attempts += 1;
+
+            match phase.as_str() {
+                STEAM_ENRICHMENT_PHASE_ARTWORK => summary.artwork += 1,
+                STEAM_ENRICHMENT_PHASE_ACHIEVEMENT_SCHEMA => summary.achievement_schema += 1,
+                STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS => summary.player_achievements += 1,
+                _ => {}
+            }
+        }
+
+        summary.marked_games = marked_games.len();
+        Ok(summary)
+    }
+
+    pub fn record_steam_enrichment_attempt(
+        connection: &Connection,
+        steam_id64: Option<&str>,
+        app_id: &str,
+        phase: &str,
+        retry_after_days: i64,
+        outcome: &str,
+    ) -> rusqlite::Result<()> {
+        let now = now_iso();
+        let expires_at = iso_days_from_now(retry_after_days.max(1));
+        connection.execute(
+            r#"
+            INSERT INTO steam_enrichment_attempt_cache (
+              steam_id64,
+              app_id,
+              phase,
+              outcome,
+              attempted_at,
+              expires_at,
+              updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?5)
+            ON CONFLICT(steam_id64, app_id, phase) DO UPDATE SET
+              outcome = excluded.outcome,
+              attempted_at = excluded.attempted_at,
+              expires_at = excluded.expires_at,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                steam_id64.unwrap_or_default(),
+                app_id,
+                phase,
+                outcome,
+                now,
+                expires_at
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn clear_steam_enrichment_attempt(
+        connection: &Connection,
+        steam_id64: Option<&str>,
+        app_id: &str,
+        phase: &str,
+    ) -> rusqlite::Result<()> {
+        connection.execute(
+            r#"
+            DELETE FROM steam_enrichment_attempt_cache
+            WHERE steam_id64 = ?1
+              AND app_id = ?2
+              AND phase = ?3
+            "#,
+            params![steam_id64.unwrap_or_default(), app_id, phase],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn save_steam_achievement_schema_cache(
+        connection: &Connection,
+        app_id: &str,
+        schema_json: &str,
+        achievement_count: usize,
+    ) -> rusqlite::Result<()> {
+        let now = now_iso();
+        let expires_at = iso_days_from_now(30);
+        connection.execute(
+            r#"
+            INSERT INTO steam_achievement_schema_cache (
+              app_id,
+              schema_json,
+              achievement_count,
+              fetched_at,
+              expires_at,
+              updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?4)
+            ON CONFLICT(app_id) DO UPDATE SET
+              schema_json = excluded.schema_json,
+              achievement_count = excluded.achievement_count,
+              fetched_at = excluded.fetched_at,
+              expires_at = excluded.expires_at,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                app_id,
+                schema_json,
+                achievement_count as i64,
+                now,
+                expires_at
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn save_steam_player_achievement_cache(
+        connection: &Connection,
+        steam_id64: &str,
+        app_id: &str,
+        achievements_json: &str,
+        unlocked_count: usize,
+        total_count: usize,
+    ) -> rusqlite::Result<()> {
+        let now = now_iso();
+        let expires_at = iso_days_from_now(1);
+        connection.execute(
+            r#"
+            INSERT INTO steam_player_achievement_cache (
+              steam_id64,
+              app_id,
+              achievements_json,
+              unlocked_count,
+              total_count,
+              fetched_at,
+              expires_at,
+              updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6)
+            ON CONFLICT(steam_id64, app_id) DO UPDATE SET
+              achievements_json = excluded.achievements_json,
+              unlocked_count = excluded.unlocked_count,
+              total_count = excluded.total_count,
+              fetched_at = excluded.fetched_at,
+              expires_at = excluded.expires_at,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                steam_id64,
+                app_id,
+                achievements_json,
+                unlocked_count as i64,
+                total_count as i64,
+                now,
+                expires_at
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    fn has_fresh_steam_achievement_schema(
+        connection: &Connection,
+        app_id: &str,
+        now: &str,
+    ) -> rusqlite::Result<bool> {
+        let expires_at = connection
+            .query_row(
+                "SELECT expires_at FROM steam_achievement_schema_cache WHERE app_id = ?1",
+                params![app_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        Ok(expires_at.is_some_and(|expires_at| expires_at.as_str() > now))
+    }
+
+    fn has_fresh_steam_player_achievements(
+        connection: &Connection,
+        steam_id64: &str,
+        app_id: &str,
+        now: &str,
+    ) -> rusqlite::Result<bool> {
+        let expires_at = connection
+            .query_row(
+                r#"
+                SELECT expires_at
+                FROM steam_player_achievement_cache
+                WHERE steam_id64 = ?1
+                  AND app_id = ?2
+                "#,
+                params![steam_id64, app_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        Ok(expires_at.is_some_and(|expires_at| expires_at.as_str() > now))
+    }
+
+    fn has_fresh_steam_enrichment_attempt(
+        connection: &Connection,
+        steam_id64: Option<&str>,
+        app_id: &str,
+        phase: &str,
+        now: &str,
+    ) -> rusqlite::Result<bool> {
+        let expires_at = connection
+            .query_row(
+                r#"
+                SELECT expires_at
+                FROM steam_enrichment_attempt_cache
+                WHERE steam_id64 = ?1
+                  AND app_id = ?2
+                  AND phase = ?3
+                "#,
+                params![steam_id64.unwrap_or_default(), app_id, phase],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        Ok(expires_at.is_some_and(|expires_at| expires_at.as_str() > now))
     }
 
     pub fn record_steam_account_sync_metadata(
@@ -6876,6 +8106,7 @@ mod storage {
               library_entries.install_status,
               library_entries.last_played_label,
               library_entries.is_archived,
+              library_entries.is_favorite,
               library_entries.added_at,
               library_entries.updated_at,
               games.id,
@@ -6903,15 +8134,16 @@ mod storage {
                         install_status: row.get(3)?,
                         last_played_label: row.get(4)?,
                         is_archived: row.get::<_, i64>(5)? == 1,
-                        added_at: row.get(6)?,
-                        updated_at: row.get(7)?,
-                        game_id: row.get(8)?,
-                        title: row.get(9)?,
-                        sort_title: row.get(10)?,
-                        installed: row.get::<_, i64>(11)? == 1,
-                        playtime_total_minutes: row.get(12)?,
-                        accent_color: row.get(13)?,
-                        source_account_id: row.get(14)?,
+                        is_favorite: row.get::<_, i64>(6)? == 1,
+                        added_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                        game_id: row.get(9)?,
+                        title: row.get(10)?,
+                        sort_title: row.get(11)?,
+                        installed: row.get::<_, i64>(12)? == 1,
+                        playtime_total_minutes: row.get(13)?,
+                        accent_color: row.get(14)?,
+                        source_account_id: row.get(15)?,
                     },
                 ))
             })?
@@ -6932,6 +8164,7 @@ mod storage {
               library_entries.install_status,
               library_entries.last_played_label,
               library_entries.is_archived,
+              library_entries.is_favorite,
               library_entries.added_at,
               library_entries.updated_at,
               games.id,
@@ -6959,15 +8192,16 @@ mod storage {
                         install_status: row.get(3)?,
                         last_played_label: row.get(4)?,
                         is_archived: row.get::<_, i64>(5)? == 1,
-                        added_at: row.get(6)?,
-                        updated_at: row.get(7)?,
-                        game_id: row.get(8)?,
-                        title: row.get(9)?,
-                        sort_title: row.get(10)?,
-                        installed: row.get::<_, i64>(11)? == 1,
-                        playtime_total_minutes: row.get(12)?,
-                        accent_color: row.get(13)?,
-                        source_account_id: row.get(14)?,
+                        is_favorite: row.get::<_, i64>(6)? == 1,
+                        added_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                        game_id: row.get(9)?,
+                        title: row.get(10)?,
+                        sort_title: row.get(11)?,
+                        installed: row.get::<_, i64>(12)? == 1,
+                        playtime_total_minutes: row.get(13)?,
+                        accent_color: row.get(14)?,
+                        source_account_id: row.get(15)?,
                     },
                 ))
             })?
@@ -7626,6 +8860,29 @@ mod storage {
         Ok(())
     }
 
+    pub fn set_library_entry_favorite(
+        connection: &mut Connection,
+        entry_id: &str,
+        is_favorite: bool,
+    ) -> rusqlite::Result<()> {
+        let updated_at = now_iso();
+        let affected = connection.execute(
+            r#"
+            UPDATE library_entries
+            SET is_favorite = ?2,
+                updated_at = ?3
+            WHERE id = ?1
+            "#,
+            params![entry_id, is_favorite as i64, updated_at],
+        )?;
+
+        if affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+
+        Ok(())
+    }
+
     fn create_slug(value: &str) -> String {
         let mut slug = String::new();
         let mut last_was_dash = false;
@@ -7671,7 +8928,11 @@ mod storage {
         Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
     }
 
-    fn timestamp_millis() -> u128 {
+    fn iso_days_from_now(days: i64) -> String {
+        (Utc::now() + chrono::Duration::days(days)).to_rfc3339_opts(SecondsFormat::Millis, true)
+    }
+
+    pub(crate) fn timestamp_millis() -> u128 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_millis())
@@ -8696,6 +9957,213 @@ mod storage {
         }
 
         #[test]
+        fn steam_enrichment_candidates_skip_fresh_cache() {
+            let connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let app_id = "413150";
+            let steam_id = "76561198000000000";
+            save_steam_artwork_header_image(
+                &connection,
+                app_id,
+                "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/413150/header.jpg",
+            )
+            .expect("save artwork");
+            save_steam_achievement_schema_cache(&connection, app_id, "[]", 0).expect("save schema");
+            save_steam_player_achievement_cache(&connection, steam_id, app_id, "[]", 0, 0)
+                .expect("save player achievements");
+
+            let candidates = list_steam_enrichment_candidates(
+                &connection,
+                steam_id,
+                &[app_id.to_string()],
+                50,
+                false,
+            )
+            .expect("list candidates");
+
+            assert!(candidates.is_empty());
+        }
+
+        #[test]
+        fn steam_enrichment_candidates_include_missing_cache() {
+            let connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+
+            let candidates = list_steam_enrichment_candidates(
+                &connection,
+                "76561198000000000",
+                &["413150".to_string()],
+                50,
+                false,
+            )
+            .expect("list candidates");
+
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].app_id, "413150");
+            assert!(candidates[0].needs_artwork);
+            assert!(candidates[0].needs_achievement_schema);
+            assert!(candidates[0].needs_player_achievements);
+        }
+
+        #[test]
+        fn steam_enrichment_candidates_skip_recent_negative_attempts() {
+            let connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let app_id = "413150";
+            let steam_id = "76561198000000000";
+
+            record_steam_enrichment_attempt(
+                &connection,
+                None,
+                app_id,
+                STEAM_ENRICHMENT_PHASE_ARTWORK,
+                STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS,
+                "not_available",
+            )
+            .expect("record artwork attempt");
+            record_steam_enrichment_attempt(
+                &connection,
+                None,
+                app_id,
+                STEAM_ENRICHMENT_PHASE_ACHIEVEMENT_SCHEMA,
+                STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS,
+                "steam_web_api_auth_required",
+            )
+            .expect("record schema attempt");
+            record_steam_enrichment_attempt(
+                &connection,
+                Some(steam_id),
+                app_id,
+                STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS,
+                STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS,
+                "steam_web_api_auth_required",
+            )
+            .expect("record player achievements attempt");
+
+            let candidates = list_steam_enrichment_candidates(
+                &connection,
+                steam_id,
+                &[app_id.to_string()],
+                50,
+                false,
+            )
+            .expect("list candidates");
+
+            assert!(candidates.is_empty());
+        }
+
+        #[test]
+        fn steam_enrichment_candidates_can_retry_recent_negative_attempts() {
+            let connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let app_id = "413150";
+            let steam_id = "76561198000000000";
+
+            record_steam_enrichment_attempt(
+                &connection,
+                None,
+                app_id,
+                STEAM_ENRICHMENT_PHASE_ARTWORK,
+                STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS,
+                "not_available",
+            )
+            .expect("record artwork attempt");
+
+            let candidates = list_steam_enrichment_candidates(
+                &connection,
+                steam_id,
+                &[app_id.to_string()],
+                50,
+                true,
+            )
+            .expect("list candidates");
+
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].app_id, app_id);
+            assert!(candidates[0].needs_artwork);
+        }
+
+        #[test]
+        fn steam_enrichment_retry_summary_counts_marked_games() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let steam_id = "76561198000000000";
+            let candidate = SteamGameCandidate {
+                app_id: "413150".to_string(),
+                title: "Stardew Valley".to_string(),
+                install_path: Some("C:/Steam/steamapps/common/Stardew Valley".to_string()),
+                source_id: "source-steam-413150".to_string(),
+                game_id: "game-steam-stardew-valley-413150".to_string(),
+                entry_id: "entry-steam-stardew-valley-413150".to_string(),
+                launch_id: "launch-steam-413150".to_string(),
+                accent_color: "#2563eb",
+            };
+            let transaction = connection.transaction().expect("begin transaction");
+            insert_steam_entry(&transaction, &candidate).expect("insert steam entry");
+            transaction.commit().expect("commit steam entry");
+
+            record_steam_enrichment_attempt(
+                &connection,
+                None,
+                &candidate.app_id,
+                STEAM_ENRICHMENT_PHASE_ARTWORK,
+                STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS,
+                "not_available",
+            )
+            .expect("record artwork attempt");
+            record_steam_enrichment_attempt(
+                &connection,
+                Some(steam_id),
+                &candidate.app_id,
+                STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS,
+                STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS,
+                "steam_web_api_auth_required",
+            )
+            .expect("record player achievements attempt");
+
+            let summary =
+                get_steam_enrichment_retry_summary(&connection, steam_id).expect("retry summary");
+
+            assert_eq!(summary.marked_games, 1);
+            assert_eq!(summary.marked_attempts, 2);
+            assert_eq!(summary.artwork, 1);
+            assert_eq!(summary.player_achievements, 1);
+        }
+
+        #[test]
+        fn list_steam_app_ids_skips_recent_artwork_negative_attempts() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let candidate = SteamGameCandidate {
+                app_id: "413150".to_string(),
+                title: "Stardew Valley".to_string(),
+                install_path: Some("C:/Steam/steamapps/common/Stardew Valley".to_string()),
+                source_id: "source-steam-413150".to_string(),
+                game_id: "game-steam-stardew-valley-413150".to_string(),
+                entry_id: "entry-steam-stardew-valley-413150".to_string(),
+                launch_id: "launch-steam-413150".to_string(),
+                accent_color: "#2563eb",
+            };
+            let transaction = connection.transaction().expect("begin transaction");
+            insert_steam_entry(&transaction, &candidate).expect("insert steam entry");
+            transaction.commit().expect("commit steam entry");
+
+            record_steam_enrichment_attempt(
+                &connection,
+                None,
+                &candidate.app_id,
+                STEAM_ENRICHMENT_PHASE_ARTWORK,
+                STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS,
+                "not_available",
+            )
+            .expect("record artwork attempt");
+
+            let app_ids = list_steam_app_ids(&connection).expect("list app ids");
+
+            assert!(app_ids.is_empty());
+        }
+
+        #[test]
         fn sync_steam_account_games_imports_remote_games_as_not_installed() {
             let mut connection = Connection::open_in_memory().expect("open in-memory database");
             migrate(&connection).expect("apply migration");
@@ -9582,6 +11050,11 @@ mod storage {
                 table_has_column(&connection, "library_entries", "is_archived")
                     .expect("check archived column")
             );
+            assert!(
+                table_has_column(&connection, "library_entries", "is_favorite")
+                    .expect("check favorite column")
+            );
+            assert!(entries.iter().all(|entry| !entry.is_favorite));
 
             let _ = std::fs::remove_file(path);
         }
@@ -9611,6 +11084,42 @@ mod storage {
             assert!(restored_entries
                 .iter()
                 .any(|entry| entry.id == "entry-manual-silksong"));
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn set_library_entry_favorite_is_reflected_in_listing() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-favorite-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            set_library_entry_favorite(&mut connection, "entry-manual-silksong", true)
+                .expect("favorite entry");
+            let favorited_entries =
+                list_library_entries(&connection).expect("list favorited state");
+            let favorited_entry = favorited_entries
+                .iter()
+                .find(|entry| entry.id == "entry-manual-silksong")
+                .expect("favorited entry appears in listing");
+            let serialized_entry =
+                serde_json::to_value(favorited_entry).expect("serialize favorited entry");
+
+            assert!(favorited_entry.is_favorite);
+            assert_eq!(serialized_entry["isFavorite"], serde_json::json!(true));
+
+            set_library_entry_favorite(&mut connection, "entry-manual-silksong", false)
+                .expect("unfavorite entry");
+            let unfavorited_entries =
+                list_library_entries(&connection).expect("list unfavorited state");
+            let unfavorited_entry = unfavorited_entries
+                .iter()
+                .find(|entry| entry.id == "entry-manual-silksong")
+                .expect("unfavorited entry appears in listing");
+
+            assert!(!unfavorited_entry.is_favorite);
 
             let _ = std::fs::remove_file(path);
         }

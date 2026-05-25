@@ -22,21 +22,22 @@ import SteamIcon from '../components/icons/SteamIcon'
 import XboxIcon from '../components/icons/XboxIcon'
 import {
   deleteSteamApiKey,
+  getSteamEnrichmentRetrySummary,
   getSteamAccountConfig,
   getSteamApiKeyStatus,
   getSteamLibraryRoots,
   getXboxAccountConfig,
   getXboxLiveAuthState,
   getXboxLibraryRoots,
-  normalizeProviderErrorFeedback,
   saveSteamAccountConfig,
   saveSteamApiKey,
   saveSteamLibraryRoots,
-  saveLibrarySettings,
   saveXboxLibraryRoots,
   startSteamLogin,
   startXboxLiveLogin,
-} from '../services/libraryService'
+} from '../services/libraryCommands'
+import { saveLibrarySettings } from '../services/librarySettings'
+import { normalizeProviderErrorFeedback } from '../services/providerErrorFeedback'
 
 const emptySteamApiKeyForm = Object.freeze({
   apiKey: '',
@@ -268,6 +269,9 @@ function AccountsSettingsPage({
   const [steamApiKeyError, setSteamApiKeyError] = useState(null)
   const [steamAccountStatusMessage, setSteamAccountStatusMessage] = useState('')
   const [steamAccountError, setSteamAccountError] = useState(null)
+  const [steamEnrichmentRetrySummary, setSteamEnrichmentRetrySummary] = useState(null)
+  const [isSteamEnrichmentRetryModalOpen, setIsSteamEnrichmentRetryModalOpen] = useState(false)
+  const [isSteamEnrichmentRetryChecking, setIsSteamEnrichmentRetryChecking] = useState(false)
   const [steamLibraryRootsStatusMessage, setSteamLibraryRootsStatusMessage] = useState('')
   const [steamLibraryRootsError, setSteamLibraryRootsError] = useState(null)
   const [xboxLibraryRootsStatusMessage, setXboxLibraryRootsStatusMessage] = useState('')
@@ -819,6 +823,31 @@ function AccountsSettingsPage({
     }
   }
 
+  const runSteamAccountSync = async ({ retryMarkedEnrichment = false } = {}) => {
+    setSteamAccountError(null)
+    setSteamAccountStatusMessage(
+      retryMarkedEnrichment
+        ? 'Sincronizacao por conta em andamento, tentando novamente jogos adiados.'
+        : 'Sincronizacao por conta em andamento.',
+    )
+
+    try {
+      await onSyncSteamAccountGames({ retryMarkedEnrichment })
+      setSteamAccountStatusMessage('Sincronizacao por conta finalizada.')
+      setSteamEnrichmentRetrySummary(null)
+      setIsSteamEnrichmentRetryModalOpen(false)
+    } catch (error) {
+      setSteamAccountError(
+        normalizeProviderErrorFeedback(
+          error,
+          'Nao foi possivel sincronizar a conta Steam.',
+          'Sincronizacao da conta Steam',
+        ),
+      )
+      setSteamAccountStatusMessage('')
+    }
+  }
+
   const handleSteamAccountSync = async () => {
     const validationError = validateSteamId64Input(steamAccountForm.steamId64)
 
@@ -849,22 +878,58 @@ function AccountsSettingsPage({
       return
     }
 
+    setIsSteamEnrichmentRetryChecking(true)
     setSteamAccountError(null)
-    setSteamAccountStatusMessage('Sincronizacao por conta em andamento.')
+    setSteamAccountStatusMessage('Verificando jogos Steam adiados pelo enrichment.')
 
     try {
-      await onSyncSteamAccountGames()
-      setSteamAccountStatusMessage('Sincronizacao por conta finalizada.')
+      const retrySummary = await getSteamEnrichmentRetrySummary()
+      const markedGames = Number(retrySummary?.markedGames ?? 0)
+
+      if (markedGames > 0) {
+        setSteamEnrichmentRetrySummary(retrySummary)
+        setIsSteamEnrichmentRetryModalOpen(true)
+        setSteamAccountStatusMessage('')
+        return
+      }
+
+      await runSteamAccountSync({ retryMarkedEnrichment: false })
     } catch (error) {
       setSteamAccountError(
         normalizeProviderErrorFeedback(
           error,
-          'Nao foi possivel sincronizar a conta Steam.',
-          'Sincronizacao da conta Steam',
+          'Nao foi possivel verificar os jogos adiados da Steam.',
+          'Verificar enrichment Steam',
         ),
       )
       setSteamAccountStatusMessage('')
+    } finally {
+      setIsSteamEnrichmentRetryChecking(false)
     }
+  }
+
+  const handleSteamEnrichmentRetryModalClose = () => {
+    if (isSteamAccountSyncing) {
+      return
+    }
+
+    setIsSteamEnrichmentRetryModalOpen(false)
+  }
+
+  const handleSteamEnrichmentRetrySkip = async () => {
+    if (isSteamAccountSyncing) {
+      return
+    }
+
+    await runSteamAccountSync({ retryMarkedEnrichment: false })
+  }
+
+  const handleSteamEnrichmentRetryConfirm = async () => {
+    if (isSteamAccountSyncing) {
+      return
+    }
+
+    await runSteamAccountSync({ retryMarkedEnrichment: true })
   }
 
   const handleSteamApiKeySubmit = async (event) => {
@@ -1239,6 +1304,7 @@ function AccountsSettingsPage({
                     isSteamApiKeyDeleting={isSteamApiKeyDeleting}
                     isSteamApiKeyLoading={isSteamApiKeyLoading}
                     isSteamApiKeySaving={isSteamApiKeySaving}
+                    isSteamEnrichmentRetryChecking={isSteamEnrichmentRetryChecking}
                     isSteamLibraryRootsLoading={isSteamLibraryRootsLoading}
                     isSteamLibraryRootsSaving={isSteamLibraryRootsSaving}
                     isSteamLoginStarting={isSteamLoginStarting}
@@ -1361,6 +1427,16 @@ function AccountsSettingsPage({
           statusMessage={xboxTitleHistoryStatusMessage}
           onClose={handleXboxTitleHistoryModalClose}
           onConfirm={handleXboxTitleHistoryConfirm}
+        />
+      ) : null}
+
+      {isSteamEnrichmentRetryModalOpen ? (
+        <SteamEnrichmentRetryModal
+          isBusy={isSteamAccountSyncing}
+          onClose={handleSteamEnrichmentRetryModalClose}
+          onConfirm={handleSteamEnrichmentRetryConfirm}
+          onSkip={handleSteamEnrichmentRetrySkip}
+          summary={steamEnrichmentRetrySummary}
         />
       ) : null}
     </section>
@@ -1547,6 +1623,7 @@ function SteamProviderPanel({
   isSteamApiKeyDeleting,
   isSteamApiKeyLoading,
   isSteamApiKeySaving,
+  isSteamEnrichmentRetryChecking,
   isSteamLibraryRootsLoading,
   isSteamLibraryRootsSaving,
   isSteamLoginStarting,
@@ -1601,10 +1678,14 @@ function SteamProviderPanel({
           type="button"
           aria-label="Sincronizar conta Steam via Web API"
           aria-describedby={!canSyncSteamAccount ? 'steam-account-sync-requirements' : undefined}
-          disabled={!canSyncSteamAccount || isSteamSyncing || isSteamAccountSyncing}
+          disabled={!canSyncSteamAccount || isSteamSyncing || isSteamAccountSyncing || isSteamEnrichmentRetryChecking}
           onClick={onSyncSteamAccountGames}
         >
-          {isSteamAccountSyncing ? 'Sincronizando conta' : 'Sincronizar conta'}
+          {isSteamEnrichmentRetryChecking
+            ? 'Verificando'
+            : isSteamAccountSyncing
+              ? 'Sincronizando conta'
+              : 'Sincronizar conta'}
         </button>
         {!canSyncSteamAccount ? (
           <span id="steam-account-sync-requirements" className="account-action-hint">
@@ -2174,10 +2255,159 @@ function ProviderAccountRow({
   )
 }
 
+function useModalBodyScrollLock() {
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow
+    const previousDocumentOverflow = document.documentElement.style.overflow
+
+    document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow
+      document.documentElement.style.overflow = previousDocumentOverflow
+    }
+  }, [])
+}
+
+function SteamEnrichmentRetryModal({ isBusy, onClose, onConfirm, onSkip, summary }) {
+  const panelRef = useRef(null)
+  const closeButtonRef = useRef(null)
+  const previouslyFocusedRef = useRef(null)
+  const markedGames = Number(summary?.markedGames ?? 0)
+
+  useModalBodyScrollLock()
+
+  useEffect(() => {
+    previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+
+    const focusFirstElement = () => {
+      const focusableElements = panelRef.current?.querySelectorAll(
+        'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+      )
+      const firstFocusable = focusableElements?.[0] ?? closeButtonRef.current
+
+      if (firstFocusable instanceof HTMLElement) {
+        firstFocusable.focus()
+      }
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+
+      if (event.key !== 'Tab') {
+        return
+      }
+
+      const focusableElements = Array.from(
+        panelRef.current?.querySelectorAll(
+          'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element instanceof HTMLElement)
+
+      if (focusableElements.length === 0) {
+        return
+      }
+
+      const firstFocusable = focusableElements[0]
+      const lastFocusable = focusableElements[focusableElements.length - 1]
+
+      if (event.shiftKey && document.activeElement === firstFocusable) {
+        event.preventDefault()
+        lastFocusable.focus()
+        return
+      }
+
+      if (!event.shiftKey && document.activeElement === lastFocusable) {
+        event.preventDefault()
+        firstFocusable.focus()
+      }
+    }
+
+    const focusTimeoutId = window.setTimeout(focusFirstElement, 0)
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.clearTimeout(focusTimeoutId)
+      window.removeEventListener('keydown', handleKeyDown)
+      previouslyFocusedRef.current?.focus?.()
+    }
+  }, [onClose])
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        ref={panelRef}
+        className="modal-panel steam-enrichment-retry-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="steam-enrichment-retry-title"
+      >
+        <header className="modal-header">
+          <div>
+            <span>Steam</span>
+            <h2 id="steam-enrichment-retry-title">Tentar jogos adiados?</h2>
+          </div>
+          <button
+            ref={closeButtonRef}
+            className="icon-button"
+            type="button"
+            aria-label="Fechar aviso de enrichment Steam"
+            title="Fechar"
+            onClick={onClose}
+            disabled={isBusy}
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+
+        <div className="steam-enrichment-retry-content">
+          <p className="steam-enrichment-retry-intro">
+            Existem {markedGames} {markedGames === 1 ? 'jogo Steam adiado' : 'jogos Steam adiados'} pelo enrichment.
+            Eles ja foram tentados recentemente e podem continuar sem capa ou conquistas disponiveis na Steam.
+          </p>
+
+          <div className="steam-enrichment-retry-warning" role="note" aria-label="Aviso sobre nova tentativa Steam">
+            <AlertTriangle size={18} aria-hidden="true" />
+            <p>
+              Tentar novamente pode fazer mais requisicoes a Steam Web API. Se preferir manter os marcadores, a
+              sincronizacao da conta continua normalmente para os demais jogos.
+            </p>
+          </div>
+
+          <ul className="steam-enrichment-retry-list">
+            <li>{markedGames} {markedGames === 1 ? 'jogo com marcador ativo' : 'jogos com marcador ativo'} no cache local.</li>
+            <li>Escolher nao tentar novamente preserva os marcadores atuais.</li>
+            <li>Escolher tentar novamente ignora os marcadores apenas nesta rodada.</li>
+          </ul>
+        </div>
+
+        <div className="modal-actions">
+          <button className="secondary-button" type="button" disabled={isBusy} onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="secondary-button" type="button" disabled={isBusy} onClick={onSkip}>
+            Sincronizar sem tentar
+          </button>
+          <button className="primary-button" type="button" disabled={isBusy} onClick={onConfirm}>
+            {isBusy ? 'Sincronizando' : 'Tentar novamente'}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function XboxTitleHistoryModal({ errorFeedback, isBusy, isConfigured, onClose, onConfirm, statusMessage }) {
   const panelRef = useRef(null)
   const closeButtonRef = useRef(null)
   const previouslyFocusedRef = useRef(null)
+
+  useModalBodyScrollLock()
 
   useEffect(() => {
     previouslyFocusedRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null

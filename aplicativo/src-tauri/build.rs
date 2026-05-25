@@ -29,6 +29,7 @@ const COMMANDS: &[&str] = &[
     "get_steam_web_api_key_state",
     "disconnect_steam_web_api_key",
     "set_library_entry_archived",
+    "set_library_entry_favorite",
     "launch_library_entry",
 ];
 

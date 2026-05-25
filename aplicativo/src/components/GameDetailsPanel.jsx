@@ -1,8 +1,8 @@
-import { Archive, Clock3, Download, Pencil, Play, Store } from 'lucide-react'
+import { Archive, Clock3, Download, Heart, Pencil, Play, Store } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
 import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, LAUNCH_ACTION_KIND, PLATFORM_LABELS } from '../constants/libraryConstants'
-import { getDetailsEntryForSelectedPlatform, getLaunchActionState, getLaunchChoices, isMicrosoftStoreUri } from '../hooks/libraryPageStateHelpers'
+import { getDetailsEntryForSelectedPlatform, getLaunchActionState, getLaunchChoices, isMicrosoftStoreUri } from '../domain/libraryLaunch'
 import StatusDisclosure from './StatusDisclosure'
 
 const WINDOWS_EXECUTABLE_PATH_PATTERN = /^[a-zA-Z]:[\\/].+\.exe$/i
@@ -61,6 +61,7 @@ function GameDetailsPanel({
   onInstallAction,
   onLaunchEntry,
   onLaunchPlatformChange,
+  onToggleFavoriteEntry,
 }) {
   const [isLaunchChooserOpen, setIsLaunchChooserOpen] = useState(false)
   const launchChooserButtonRef = useRef(null)
@@ -94,6 +95,10 @@ function GameDetailsPanel({
     detailsEntry && hasMultipleLaunchChoices
       ? PLATFORM_LABELS[detailsEntry.primaryPlatformId] ?? detailsEntry.primaryPlatformId
       : selectedEntry?.platformSummary ?? PLATFORM_LABELS[selectedEntry?.primaryPlatformId] ?? selectedEntry?.primaryPlatformId
+  const isFavorite =
+    selectedEntry?.isFavorite === true ||
+    selectedEntry?.is_favorite === true ||
+    selectedEntry?.memberEntries?.some((entry) => entry?.isFavorite === true || entry?.is_favorite === true) === true
 
   useEffect(() => {
     setIsLaunchChooserOpen(false)
@@ -209,6 +214,16 @@ function GameDetailsPanel({
               ) : null}
               <button className="icon-button" type="button" aria-label="Instalar ou localizar arquivos" title="Instalar ou localizar arquivos" onClick={onInstallAction}>
                 <Download size={18} aria-hidden="true" />
+              </button>
+              <button
+                className={isFavorite ? 'icon-button favorite-button active' : 'icon-button favorite-button'}
+                type="button"
+                aria-label={isFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
+                aria-pressed={isFavorite}
+                title={isFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
+                onClick={onToggleFavoriteEntry}
+              >
+                <Heart size={18} fill={isFavorite ? 'currentColor' : 'none'} aria-hidden="true" />
               </button>
               {selectedEntry.primaryPlatformId === 'manual' ? (
                 <button

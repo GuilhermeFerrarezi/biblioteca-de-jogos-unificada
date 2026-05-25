@@ -172,8 +172,79 @@ button:disabled {
   border: 1px solid #263741;
 }
 
+.favorite-button.active {
+  border-color: #be185d;
+  background: #331522;
+  color: #f9a8d4;
+}
+
 .spin-icon {
   animation: spin 0.85s linear infinite;
+}
+
+.steam-enrichment-status {
+  min-height: 32px;
+  max-width: 220px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid #263741;
+  border-radius: 999px;
+  background: #0d151a;
+  color: #b5c5c1;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.steam-enrichment-status span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.steam-enrichment-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #5eead4;
+  box-shadow: 0 0 0 4px rgb(94 234 212 / 10%);
+}
+
+.steam-enrichment-status[data-phase='running'] .steam-enrichment-status-dot {
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+.steam-enrichment-status[data-rate-limited='true'] {
+  border-color: #66511e;
+  color: #fde68a;
+}
+
+.steam-enrichment-status[data-rate-limited='true'] .steam-enrichment-status-dot {
+  background: #facc15;
+  box-shadow: 0 0 0 4px rgb(250 204 21 / 10%);
+}
+
+.steam-enrichment-status[data-phase='completed'] {
+  border-color: #1f5f45;
+  color: #bbf7d0;
+}
+
+.steam-enrichment-status[data-phase='completed'] .steam-enrichment-status-dot {
+  background: #86efac;
+  box-shadow: 0 0 0 4px rgb(134 239 172 / 10%);
+}
+
+.steam-enrichment-status[data-phase='failed'] {
+  border-color: #6b2a2a;
+  color: #fca5a5;
+}
+
+.steam-enrichment-status[data-phase='failed'] .steam-enrichment-status-dot {
+  background: #f87171;
+  box-shadow: 0 0 0 4px rgb(248 113 113 / 10%);
 }
 
 .primary-button,
@@ -203,6 +274,12 @@ button:disabled {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes status-pulse {
+  50% {
+    opacity: 0.45;
   }
 }
 
@@ -314,6 +391,33 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+.sort-control {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  border: 1px solid #2a3d47;
+  border-radius: 8px;
+  background: #0b1217;
+  color: #b5c5c1;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sort-control select {
+  min-width: 150px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #edf4f2;
+  font: inherit;
+}
+
+.sort-control select:focus {
+  box-shadow: none;
+}
+
 .filter-chip {
   display: inline-flex;
   align-items: center;
@@ -404,10 +508,32 @@ button:disabled {
   white-space: nowrap;
 }
 
+.game-info strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.favorite-marker {
+  flex: 0 0 auto;
+  color: #f9a8d4;
+}
+
+.game-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .game-info span,
 .playtime {
   color: #91a39f;
   font-size: 13px;
+}
+
+.game-info .game-title-text {
+  color: #edf4f2;
+  font-size: inherit;
 }
 
 .status-pill {
@@ -677,6 +803,7 @@ button:disabled {
 }
 
 .game-cover-card {
+  position: relative;
   min-width: 0;
   border-radius: 8px;
   cursor: pointer;
@@ -759,6 +886,20 @@ button:disabled {
   font-size: 12px;
 }
 
+.favorite-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  box-sizing: content-box;
+  padding: 6px;
+  border: 1px solid rgb(249 168 212 / 42%);
+  border-radius: 999px;
+  background: rgb(13 21 26 / 86%);
+  color: #f9a8d4;
+  box-shadow: 0 8px 18px rgb(0 0 0 / 28%);
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -767,12 +908,14 @@ button:disabled {
   place-items: center;
   padding: 20px;
   background: rgb(3 7 10 / 72%);
+  overscroll-behavior: contain;
 }
 
 .modal-panel {
   width: min(100%, 480px);
   max-height: calc(100vh - 40px);
   overflow: auto;
+  overscroll-behavior: contain;
   border: 1px solid #2a3d47;
   border-radius: 8px;
   background: #111a20;
@@ -1399,23 +1542,27 @@ button:disabled {
   max-width: none;
 }
 
-.xbox-title-history-modal {
+.xbox-title-history-modal,
+.steam-enrichment-retry-modal {
   width: min(100%, 560px);
 }
 
-.xbox-title-history-content {
+.xbox-title-history-content,
+.steam-enrichment-retry-content {
   display: grid;
   gap: 14px;
   padding: 18px;
 }
 
-.xbox-title-history-intro {
+.xbox-title-history-intro,
+.steam-enrichment-retry-intro {
   margin: 0;
   color: #edf4f2;
   line-height: 1.55;
 }
 
-.xbox-title-history-warning {
+.xbox-title-history-warning,
+.steam-enrichment-retry-warning {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   gap: 12px;
@@ -1426,18 +1573,21 @@ button:disabled {
   background: linear-gradient(180deg, #23180a 0%, #171209 100%);
 }
 
-.xbox-title-history-warning svg {
+.xbox-title-history-warning svg,
+.steam-enrichment-retry-warning svg {
   margin-top: 2px;
   color: #fbbf24;
 }
 
-.xbox-title-history-warning p {
+.xbox-title-history-warning p,
+.steam-enrichment-retry-warning p {
   margin: 0;
   color: #f7e8c4;
   line-height: 1.5;
 }
 
-.xbox-title-history-list {
+.xbox-title-history-list,
+.steam-enrichment-retry-list {
   margin: 0;
   padding-left: 20px;
   display: grid;
@@ -1446,7 +1596,8 @@ button:disabled {
   line-height: 1.45;
 }
 
-.xbox-title-history-list li::marker {
+.xbox-title-history-list li::marker,
+.steam-enrichment-retry-list li::marker {
   color: #5eead4;
 }
 
@@ -1720,6 +1871,11 @@ button:disabled {
     flex-direction: column;
   }
 
+  .steam-enrichment-status {
+    max-width: none;
+    justify-content: center;
+  }
+
   .stats-grid {
     grid-template-columns: 1fr;
   }
@@ -1741,6 +1897,16 @@ button:disabled {
   .view-toggle {
     width: 100%;
     margin-left: 0;
+  }
+
+  .sort-control {
+    order: 2;
+    width: 100%;
+  }
+
+  .sort-control select {
+    min-width: 0;
+    flex: 1;
   }
 
   .view-toggle button {

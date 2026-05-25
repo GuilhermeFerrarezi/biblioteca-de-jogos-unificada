@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { groupLibraryEntries } from './libraryGroupingHelpers.js'
+import { groupLibraryEntries } from './libraryGrouping.js'
 
 const steamEntry = {
   id: 'steam-entry',
@@ -85,6 +85,16 @@ test('groupLibraryEntries merges Steam and Xbox records with the same title', ()
   assert.equal(mergedEntry.game.platforms.length, 2)
   assert.deepEqual(mergedEntry.platformIds, ['steam', 'xbox'])
   assert.equal(mergedEntry.game.sources.length, 2)
+})
+
+test('groupLibraryEntries marks a merged entry as favorite when any member is favorite', () => {
+  const groupedEntries = groupLibraryEntries([
+    { ...steamEntry, isFavorite: false },
+    { ...xboxEntry, isFavorite: true },
+  ])
+
+  assert.equal(groupedEntries.length, 1)
+  assert.equal(groupedEntries[0].isFavorite, true)
 })
 
 test('groupLibraryEntries keeps non cross-platform entries separate', () => {

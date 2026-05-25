@@ -2244,6 +2244,7 @@ mod tests {
                     install_status TEXT NOT NULL,
                     last_played_label TEXT NOT NULL,
                     is_archived INTEGER NOT NULL DEFAULT 0,
+                    is_favorite INTEGER NOT NULL DEFAULT 0,
                     added_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );

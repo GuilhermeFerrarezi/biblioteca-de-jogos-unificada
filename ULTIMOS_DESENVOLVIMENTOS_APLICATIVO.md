@@ -1,6 +1,6 @@
 # Ultimos Desenvolvimentos do Aplicativo
 
-Data de referencia: 2026-05-20
+Data de referencia: 2026-05-25
 
 Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Para historico completo, use `CHECKPOINT.md`.
 
@@ -67,6 +67,8 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - O app nao captura nem armazena senha Steam, Steam Guard, cookies, sessao de navegador ou URL completa de callback OpenID.
 - O backend do corte seguinte da Steam Web API passou a classificar falhas internas com `ProviderErrorDto`, tolerar itens invalidos no payload remoto e registrar metadados de sincronizacao nao sensiveis em `provider_account_configs.config_json`, sem alterar o contrato consumido pelo frontend.
 - A mensagem de erro da Steam agora fica curta no padrao e expande detalhes tecnicos sob demanda. O backend emite `steam-sync-failed` com payload sanitizado e o frontend mostra `code`, `phase` e detalhes resumidos apenas quando o usuario abre o disclosure.
+- O corte atual de Steam enrichment/achievements fica delimitado como best-effort em background: arte, metadados, playtime e sinais publicos de achievements podem enriquecer a biblioteca Steam sem bloquear boot, listagem, login, sincronizacao principal ou lancamento. O fluxo nao deve mais ser lido como um limite unico de 50 jogos; ele roda em lotes continuos, com lote interno conservador, pausa/backoff entre chamadas e parada quando houver rate limit da Steam Web API.
+- Xbox achievements cross-title/title history ficam em espera por confirmacao oficial de compliance, escopos, limites e regras de armazenamento antes de serem usados como enriquecimento ou catalogo. Ate la, Xbox permanece conservador: descoberta local, launcher e associacao experimental, sem tratar achievements como ownership.
 
 ## Persistencia SQLite
 
@@ -115,6 +117,15 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - Quando um jogo Steam local tambem aparece na biblioteca remota, o sync por conta preserva o estado instalado local e preenche `game_sources.account_id`.
 - O OpenID nao concede acesso automatico a biblioteca privada; ele apenas verifica a identidade e retorna SteamID64. A Web API continua dependendo de chave valida e visibilidade da biblioteca.
 
+## Steam enrichment best-effort
+
+- O enrichment roda em background e complementa registros Steam existentes, sem virar pre-condicao para listagem, login, sync principal ou launch.
+- O fluxo deixou de ser limite unico de 50 jogos: a fila processa lotes continuos em background, mantendo um lote interno conservador apenas para controlar pressao na Steam Web API.
+- Entre chamadas, o job aplica pausa/backoff; se a Steam Web API sinalizar rate limit, o enrichment para a rodada atual, emite falha sanitizada e preserva o cache/progresso para retomada posterior.
+- Artwork e metadados devem usar fallback quando a fonte remota falhar ou estiver incompleta.
+- Playtime/achievements devem ser tratados como sinais complementares e sujeitos a privacidade/disponibilidade da Steam Web API, com erro sanitizado e sem segredo exposto ao renderer.
+- O backend registra cache SQLite de schema/progresso de achievements Steam com `schema_migrations` versao `2`, mantendo o progresso isolado por `steam_id64 + app_id` e sem substituir dados editados pelo usuario.
+
 ## Xbox heuristics hardening
 
 - A heuristica do Xbox local foi reforcada para rejeitar apps de sistema/loja como `Filmes e TV`.
@@ -126,6 +137,12 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - A limpeza de Xbox persistido agora tambem considera o alvo de lancamento armazenado para arquivar entradas antigas claramente ligadas a executaveis desktop locais.
 - O provider continua preservando Appx/Xbox reais, inclusive quando a descoberta roda sem encontrar o mesmo registro na forma atual.
 - Foram adicionados testes Rust para o falso positivo desktop local e para um alvo Appx real continuar valido.
+
+## Xbox achievements compliance hold
+
+- Achievements/title history do Xbox seguem como area sensivel de compliance e nao devem ser promovidos a fonte cross-title ate haver confirmacao oficial sobre uso permitido para app desktop de terceiros.
+- Antes de implementar novo corte, a decisao precisa registrar API/endpoints oficiais, escopos, dados armazenaveis, dados exibiveis, limites, revogacao e riscos.
+- O comportamento atual recomendado e manter Xbox como provider local/launcher, com importacao remota atras de bloqueio explicito de compliance.
 
 ## Local staging hardening
 
@@ -219,13 +236,14 @@ Resultado validado: lint/build aprovados, smoke frontend com 29 testes passando 
 
 ## Proximos cortes recomendados
 
-1. Consolidar e testar o Xbox/Game Pass local como provider experimental do Windows, refinando a heuristica contra apps falsos positivos e validando mais jogos de desktop que devem entrar como `local`.
-2. Em seguida, fazer o corte inicial de Epic Games, tratando compliance e limite de API como bloqueios de decisao antes de qualquer fluxo de conta.
-3. Depois das novas plataformas, preparar consulta filtrada/paginacao no backend para bibliotecas maiores e ajustar a UI para listas mais longas.
-4. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch.
-5. Concluir a importacao de title history do Xbox usando o fluxo Xbox Live ja autenticado.
-6. Refinar a UX do bloqueio de importacao Xbox, explicando melhor ao usuario porque a operacao ainda pode falhar quando a autenticacao nao estiver concluida.
-7. O proximo ajuste do projeto e reduzir o tempo de abertura do aplicativo, porque o Tauri esta demorando demais para mostrar a interface completa.
+1. Validar manualmente o Steam enrichment best-effort em background no Tauri, com lotes continuos, fallback de artwork/metadados, pausa/backoff, parada em rate limit e sem bloquear boot, listagem, sync principal ou launch.
+2. Manter Xbox achievements cross-title/title history aguardando confirmacao oficial de compliance antes de qualquer uso como enrichment/catalogo.
+3. Consolidar e testar o Xbox/Game Pass local como provider experimental do Windows, refinando a heuristica contra apps falsos positivos e validando mais jogos de desktop que devem entrar como `local`.
+4. Em seguida, fazer o corte inicial de Epic Games, tratando compliance e limite de API como bloqueios de decisao antes de qualquer fluxo de conta.
+5. Depois das novas plataformas, preparar consulta filtrada/paginacao no backend para bibliotecas maiores e ajustar a UI para listas mais longas.
+6. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch.
+7. Refinar a UX do bloqueio de importacao Xbox, explicando melhor ao usuario porque a operacao ainda pode falhar quando compliance/autenticacao nao estiverem concluidos.
+8. O proximo ajuste do projeto e reduzir o tempo de abertura do aplicativo, porque o Tauri esta demorando demais para mostrar a interface completa.
 
 ## Corte Xbox Public Client
 
@@ -233,3 +251,10 @@ Resultado validado: lint/build aprovados, smoke frontend com 29 testes passando 
 - O fluxo deixou de exigir `client secret` do usuario final; o `client_id` passou a ser configuracao interna ou de build da instancia do projeto.
 - O refresh token continua salvo no `AuthVault`, sem expor segredo ao renderer nem ao fluxo de contas.
 - Para a build final, o `client_id` nao deve permanecer editavel na interface. O valor deve vir de configuracao interna, variavel de ambiente ou build, e a tela deve apenas reportar estado/erro se ele nao estiver definido.
+
+## Atualizacao 2026-05-25
+
+- Corte de Steam enrichment/achievements iniciado sob apoio de QA/compliance e integracao.
+- Escopo registrado: Steam enrichment best-effort em background; Xbox achievements cross-title aguardando confirmacao oficial/compliance.
+- O backend passou a preparar cache SQLite para achievements Steam e eventos de enrichment em background; a UI mostra um indicador discreto sem bloquear a biblioteca.
+- O enrichment Steam foi atualizado de um limite unico de 50 para processamento continuo em background, respeitando lote interno conservador, backoff/pausa entre requisicoes e parada imediata quando houver rate limit.

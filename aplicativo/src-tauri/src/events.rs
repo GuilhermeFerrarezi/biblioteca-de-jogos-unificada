@@ -1,0 +1,9 @@
+pub const LIBRARY_BOOTSTRAP_COMPLETE: &str = "library-bootstrap-complete";
+pub const STEAM_SYNC_FAILED: &str = "steam-sync-failed";
+pub const STEAM_ENRICHMENT_STARTED: &str = "steam-enrichment-started";
+pub const STEAM_ENRICHMENT_PROGRESS: &str = "steam-enrichment-progress";
+pub const STEAM_ENRICHMENT_COMPLETED: &str = "steam-enrichment-completed";
+pub const STEAM_ENRICHMENT_FAILED: &str = "steam-enrichment-failed";
+pub const XBOX_SYNC_FAILED: &str = "xbox-sync-failed";
+pub const XBOX_ACHIEVEMENTS_SYNC_FAILED: &str = "xbox-achievements-sync-failed";
+pub const XBOX_TITLE_HISTORY_IMPORT_FAILED: &str = "xbox-title-history-import-failed";

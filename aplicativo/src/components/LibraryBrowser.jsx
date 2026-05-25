@@ -1,7 +1,14 @@
-import { CircleDot, HardDrive, LayoutGrid, Library, List, Search } from 'lucide-react'
+import { CircleDot, HardDrive, Heart, LayoutGrid, Library, List, Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
-import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, PLATFORM_LABELS, QUICK_FILTERS, QUICK_FILTER_IDS } from '../constants/libraryConstants'
+import {
+  DEFAULT_ACCENT_COLOR,
+  INSTALL_STATUS,
+  PLATFORM_LABELS,
+  QUICK_FILTERS,
+  QUICK_FILTER_IDS,
+  SORT_MODE_OPTIONS,
+} from '../constants/libraryConstants'
 import SteamIcon from './icons/SteamIcon'
 import XboxIcon from './icons/XboxIcon'
 
@@ -9,6 +16,7 @@ const STATUS_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.INSTALLED, QUICK_FILTE
 const PLATFORM_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.LOCAL])
 const QUICK_FILTER_ICONS = Object.freeze({
   [QUICK_FILTER_IDS.ALL]: Library,
+  [QUICK_FILTER_IDS.FAVORITES]: Heart,
   [QUICK_FILTER_IDS.INSTALLED]: CircleDot,
   [QUICK_FILTER_IDS.NOT_INSTALLED]: HardDrive,
   [QUICK_FILTER_IDS.STEAM]: SteamIcon,
@@ -23,10 +31,12 @@ function LibraryBrowser({
   searchTerm,
   selectedEntry,
   showLibraryLoading,
+  sortMode,
   viewMode,
   onFilterChange,
   onSearchChange,
   onSelectEntry,
+  onSortModeChange,
   onViewModeChange,
 }) {
   return (
@@ -40,6 +50,7 @@ function LibraryBrowser({
           totalEntriesCount={entriesCount}
           isLoading={showLibraryLoading}
         />
+        <SortSelect sortMode={sortMode} onSortModeChange={onSortModeChange} />
         <ViewModeToggle viewMode={viewMode} onViewModeChange={onViewModeChange} />
       </div>
 
@@ -99,6 +110,7 @@ function getEmptyStateDescription(entriesCount, searchTerm, quickFilters) {
   const hasFilters = activeQuickFilters.length > 0
   const statusFilters = activeQuickFilters.filter((filterId) => STATUS_FILTER_IDS.includes(filterId))
   const platformFilters = activeQuickFilters.filter((filterId) => PLATFORM_FILTER_IDS.includes(filterId))
+  const hasFavoritesFilter = activeQuickFilters.includes(QUICK_FILTER_IDS.FAVORITES)
 
   if (entriesCount === 0) {
     return 'Adicione um jogo manualmente ou sincronize um provider para começar.'
@@ -110,6 +122,10 @@ function getEmptyStateDescription(entriesCount, searchTerm, quickFilters) {
 
   if (hasSearch) {
     return 'Nenhum jogo corresponde ao termo pesquisado.'
+  }
+
+  if (hasFavoritesFilter) {
+    return 'Nenhum favorito corresponde aos filtros selecionados.'
   }
 
   if (statusFilters.length > 0 && platformFilters.length > 0) {
@@ -207,6 +223,21 @@ function FilterSummary({ filteredEntriesCount, totalEntriesCount, isLoading }) {
   )
 }
 
+function SortSelect({ sortMode, onSortModeChange }) {
+  return (
+    <label className="sort-control">
+      <span>Ordenar</span>
+      <select value={sortMode} onChange={(event) => onSortModeChange(event.target.value)}>
+        {SORT_MODE_OPTIONS.map((option) => (
+          <option value={option.id} key={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
 function isFilterActive(quickFilters, filterId) {
   return filterId === QUICK_FILTER_IDS.ALL ? quickFilters.length === 0 : quickFilters.includes(filterId)
 }
@@ -240,6 +271,7 @@ function ViewModeToggle({ viewMode, onViewModeChange }) {
 
 function GameRow({ entry, isSelected, onSelectEntry }) {
   const artwork = entry.game.artwork
+  const isFavorite = isFavoriteEntry(entry)
 
   return (
     <article
@@ -262,7 +294,10 @@ function GameRow({ entry, isSelected, onSelectEntry }) {
         imageAlt=""
       />
       <div className="game-info">
-        <strong>{entry.game.title}</strong>
+        <strong>
+          <span className="game-title-text">{entry.game.title}</span>
+          {isFavorite ? <Heart className="favorite-marker" size={14} fill="currentColor" aria-label="Favorito" /> : null}
+        </strong>
         <span>{entry.platformSummary ?? PLATFORM_LABELS[entry.primaryPlatformId]} / {entry.game.genres[0]}</span>
       </div>
       <div className="status-pill" data-status={entry.installStatus}>
@@ -275,6 +310,7 @@ function GameRow({ entry, isSelected, onSelectEntry }) {
 
 function GameCoverCard({ entry, isSelected, onSelectEntry }) {
   const artwork = entry.game.artwork
+  const isFavorite = isFavoriteEntry(entry)
 
   return (
     <article
@@ -296,10 +332,19 @@ function GameCoverCard({ entry, isSelected, onSelectEntry }) {
         fallbackText={entry.game.title}
         imageAlt=""
       />
+      {isFavorite ? <Heart className="favorite-badge" size={15} fill="currentColor" aria-label="Favorito" /> : null}
       <strong>{entry.game.title}</strong>
       <span>{entry.platformSummary ?? PLATFORM_LABELS[entry.primaryPlatformId]}</span>
     </article>
   )
+}
+
+function isFavoriteEntry(entry) {
+  if (entry?.isFavorite === true || entry?.is_favorite === true) {
+    return true
+  }
+
+  return entry?.memberEntries?.some((memberEntry) => isFavoriteEntry(memberEntry)) ?? false
 }
 
 function ArtworkFrame({ className, imageUrls, accentColor, fallbackText, imageAlt }) {

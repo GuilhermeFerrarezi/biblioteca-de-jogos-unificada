@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-library-entry-favorite"
+description = "Enables the set_library_entry_favorite command without any pre-configured scope."
+commands.allow = ["set_library_entry_favorite"]
+
+[[permission]]
+identifier = "deny-set-library-entry-favorite"
+description = "Denies the set_library_entry_favorite command without any pre-configured scope."
+commands.deny = ["set_library_entry_favorite"]

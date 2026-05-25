@@ -41,6 +41,7 @@ test('buildManualLibraryEntry infers uri launch actions and preserves existing i
     lastPlayedLabel: 'Ontem',
     addedAt: '2026-05-18T10:00:00.000Z',
     isArchived: true,
+    isFavorite: true,
     game: {
       internalId: 'game-existing',
       platforms: ['manual'],
@@ -74,6 +75,7 @@ test('buildManualLibraryEntry infers uri launch actions and preserves existing i
 
   assert.equal(nextEntry.id, 'entry-existing')
   assert.equal(nextEntry.isArchived, true)
+  assert.equal(nextEntry.isFavorite, true)
   assert.equal(nextEntry.game.internalId, 'game-existing')
   assert.equal(nextEntry.game.launchActions[0].id, 'launch-existing')
   assert.equal(nextEntry.game.launchActions[0].kind, LAUNCH_ACTION_KIND.URI)
