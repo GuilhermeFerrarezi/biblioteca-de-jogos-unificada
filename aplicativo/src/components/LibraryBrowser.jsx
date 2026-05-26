@@ -1,6 +1,6 @@
-import { CircleDot, HardDrive, Heart, LayoutGrid, Library, List, Search } from 'lucide-react'
+import { CircleDot, HardDrive, Heart, LayoutGrid, Library, List, Search, Trophy } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
+import { getAchievementProgress, getAchievementSummaryLabel, getPlaytimeHours } from '../adapters/libraryEntryAdapter'
 import {
   DEFAULT_ACCENT_COLOR,
   INSTALL_STATUS,
@@ -272,6 +272,7 @@ function ViewModeToggle({ viewMode, onViewModeChange }) {
 function GameRow({ entry, isSelected, onSelectEntry }) {
   const artwork = entry.game.artwork
   const isFavorite = isFavoriteEntry(entry)
+  const achievementProgress = getAchievementProgress(entry)
 
   return (
     <article
@@ -303,6 +304,10 @@ function GameRow({ entry, isSelected, onSelectEntry }) {
       <div className="status-pill" data-status={entry.installStatus}>
         {entry.installStatus === INSTALL_STATUS.INSTALLED ? 'Instalado' : 'Nao instalado'}
       </div>
+      <span className={achievementProgress.hasData ? 'achievement-summary' : 'achievement-summary muted'}>
+        <Trophy size={14} aria-hidden="true" />
+        {getAchievementSummaryLabel(entry)}
+      </span>
       <span className="playtime">{getPlaytimeHours(entry.game.playtime.totalMinutes)}h</span>
     </article>
   )
@@ -311,6 +316,7 @@ function GameRow({ entry, isSelected, onSelectEntry }) {
 function GameCoverCard({ entry, isSelected, onSelectEntry }) {
   const artwork = entry.game.artwork
   const isFavorite = isFavoriteEntry(entry)
+  const achievementProgress = getAchievementProgress(entry)
 
   return (
     <article
@@ -333,6 +339,10 @@ function GameCoverCard({ entry, isSelected, onSelectEntry }) {
         imageAlt=""
       />
       {isFavorite ? <Heart className="favorite-badge" size={15} fill="currentColor" aria-label="Favorito" /> : null}
+      <span className={achievementProgress.hasData ? 'achievement-badge' : 'achievement-badge muted'}>
+        <Trophy size={13} aria-hidden="true" />
+        {achievementProgress.hasData ? `${Math.round(achievementProgress.percentage)}%` : 'Sem dados'}
+      </span>
       <strong>{entry.game.title}</strong>
       <span>{entry.platformSummary ?? PLATFORM_LABELS[entry.primaryPlatformId]}</span>
     </article>

@@ -91,6 +91,11 @@ const pickTags = (entries) =>
 const pickUserOverrides = (entries) =>
   entries.reduce((merged, entry) => ({ ...merged, ...(entry?.game?.userOverrides ?? {}) }), {})
 
+const pickAchievements = (entries) =>
+  entries.find((entry) => entry?.primaryPlatformId === 'steam' && entry?.game?.achievements)?.game?.achievements ??
+  entries.find((entry) => entry?.game?.achievements)?.game?.achievements ??
+  null
+
 const buildSyntheticId = (groupKey) => `group-${groupKey}`
 
 export function groupLibraryEntries(entries) {
@@ -175,6 +180,7 @@ function buildGroupedEntry(entries, groupKey) {
         totalMinutes: entries.reduce((sum, entry) => sum + Number(entry?.game?.playtime?.totalMinutes ?? 0), 0),
       },
       artwork: pickArtwork(entries),
+      achievements: pickAchievements(entries),
       genres: pickGenres(entries),
       tags: pickTags(entries),
       userOverrides: pickUserOverrides(entries),

@@ -9,6 +9,153 @@ export const emptyManualGameForm = Object.freeze({
 
 export const getPlaytimeHours = (minutes) => Math.floor(minutes / 60)
 
+export const getAchievementProgress = (entry) => {
+  const candidates = [
+    entry?.achievementProgress,
+    entry?.achievement_progress,
+    entry?.achievements,
+    entry?.game?.achievementProgress,
+    entry?.game?.achievement_progress,
+    entry?.game?.achievements,
+    ...(entry?.memberEntries?.flatMap((memberEntry) => [
+      memberEntry?.achievementProgress,
+      memberEntry?.achievement_progress,
+      memberEntry?.achievements,
+      memberEntry?.game?.achievementProgress,
+      memberEntry?.game?.achievement_progress,
+      memberEntry?.game?.achievements,
+    ]) ?? []),
+  ]
+
+  return candidates.map(normalizeAchievementProgress).find((progress) => progress.hasData) ?? normalizeAchievementProgress(null)
+}
+
+export const getAchievementSummaryLabel = (entry) => {
+  const progress = getAchievementProgress(entry)
+
+  if (!progress.hasData) {
+    return 'Sem dados'
+  }
+
+  return `${progress.unlocked}/${progress.total} conquistas`
+}
+
+export const getAchievementKey = (achievement, index = 0) =>
+  String(achievement?.apiName ?? achievement?.api_name ?? achievement?.id ?? `achievement-${index}`)
+
+export const getAchievementDisplayState = (achievement, revealedSecretAchievements = new Set(), index = 0) => {
+  const apiName = getAchievementKey(achievement, index)
+  const isHidden = achievement?.hidden === true
+  const isAchieved = achievement?.achieved === true
+  const isSecretLocked = isHidden && !isAchieved
+  const isRevealed = isSecretLocked && revealedSecretAchievements.has(apiName)
+  const shouldMask = isSecretLocked && !isRevealed
+  const name = shouldMask ? 'Conquista secreta' : achievement?.name || apiName || 'Conquista'
+  const description = shouldMask
+    ? 'Conteudo oculto ate voce revelar manualmente.'
+    : achievement?.description || (isAchieved ? 'Conquista desbloqueada.' : 'Ainda bloqueada.')
+  const iconUrl = shouldMask
+    ? achievement?.lockedIconUrl ?? achievement?.locked_icon_url ?? achievement?.iconUrl ?? achievement?.icon_url
+    : achievement?.iconUrl ?? achievement?.icon_url ?? achievement?.lockedIconUrl ?? achievement?.locked_icon_url
+
+  return {
+    apiName,
+    description,
+    iconUrl,
+    isAchieved,
+    isHidden,
+    isRevealed,
+    isSecretLocked,
+    name,
+    shouldMask,
+    visibleText: `${name} ${description}`.trim(),
+  }
+}
+
+export const sortAchievementItems = (items, revealedSecretAchievements = new Set()) =>
+  [...(Array.isArray(items) ? items : [])]
+    .map((achievement, index) => ({
+      achievement,
+      index,
+      display: getAchievementDisplayState(achievement, revealedSecretAchievements, index),
+    }))
+    .sort((left, right) => {
+      if (left.display.isAchieved !== right.display.isAchieved) {
+        return left.display.isAchieved ? -1 : 1
+      }
+
+      const leftSecretRank = left.display.isSecretLocked ? 1 : 0
+      const rightSecretRank = right.display.isSecretLocked ? 1 : 0
+
+      if (leftSecretRank !== rightSecretRank) {
+        return leftSecretRank - rightSecretRank
+      }
+
+      const textComparison = left.display.name.localeCompare(right.display.name, 'pt-BR', {
+        sensitivity: 'base',
+      })
+
+      return textComparison !== 0 ? textComparison : left.index - right.index
+    })
+    .map(({ achievement }) => achievement)
+
+export const filterAchievementItems = (items, searchTerm, revealedSecretAchievements = new Set()) => {
+  const query = String(searchTerm ?? '').trim().toLocaleLowerCase('pt-BR')
+
+  if (!query) {
+    return Array.isArray(items) ? items : []
+  }
+
+  return (Array.isArray(items) ? items : []).filter((achievement, index) =>
+    getAchievementDisplayState(achievement, revealedSecretAchievements, index)
+      .visibleText.toLocaleLowerCase('pt-BR')
+      .includes(query),
+  )
+}
+
+function normalizeAchievementProgress(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return {
+      hasData: true,
+      unlocked: 0,
+      total: 0,
+      percentage: Math.max(0, value),
+      items: [],
+    }
+  }
+
+  if (!value || typeof value !== 'object') {
+    return {
+      hasData: false,
+      unlocked: 0,
+      total: 0,
+      percentage: 0,
+      items: [],
+    }
+  }
+
+  const unlocked = Number(value.unlocked ?? value.earned ?? value.completed ?? 0)
+  const total = Number(value.total ?? value.available ?? value.count ?? 0)
+  const directPercentage = Number(
+    value.progress ?? value.percentage ?? value.percent ?? value.completionPercent ?? value.completion_percent ?? value.ratio,
+  )
+  const percentage = Number.isFinite(directPercentage)
+    ? directPercentage
+    : Number.isFinite(unlocked) && Number.isFinite(total) && total > 0
+      ? (unlocked / total) * 100
+      : 0
+  const items = Array.isArray(value.items) ? value.items : []
+  const hasData = total > 0 || items.length > 0 || Number.isFinite(directPercentage)
+
+  return {
+    hasData,
+    unlocked: Number.isFinite(unlocked) ? unlocked : 0,
+    total: Number.isFinite(total) ? total : items.length,
+    percentage: Math.max(0, percentage),
+    items,
+  }
+}
+
 const createSlug = (value) =>
   value
     .trim()

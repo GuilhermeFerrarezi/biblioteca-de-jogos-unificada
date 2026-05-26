@@ -170,7 +170,7 @@ fn bootstrap_library(
 }
 
 mod command_logic {
-    use super::{security, storage, AppState, ProviderErrorDto};
+    use super::{security, steam_web_api, storage, AppState, ProviderErrorDto};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     pub(super) fn prepare_steam_account_sync(
@@ -240,6 +240,46 @@ mod command_logic {
             })?;
 
         Ok((steam_id, api_key))
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) struct SteamEnrichmentFailureDecision {
+        pub stop_round: bool,
+        pub record_retry: bool,
+        pub retry_after_days: i64,
+        pub outcome: &'static str,
+    }
+
+    pub(super) fn classify_steam_enrichment_failure(
+        phase: &str,
+        error: &steam_web_api::SteamWebApiError,
+    ) -> SteamEnrichmentFailureDecision {
+        let retry_after_days = if phase == storage::STEAM_ENRICHMENT_PHASE_ARTWORK {
+            storage::STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS
+        } else {
+            storage::STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS
+        };
+
+        match error.code() {
+            "steam_web_api_rate_limited" => SteamEnrichmentFailureDecision {
+                stop_round: true,
+                record_retry: false,
+                retry_after_days,
+                outcome: error.code(),
+            },
+            "steam_web_api_network_unavailable" => SteamEnrichmentFailureDecision {
+                stop_round: false,
+                record_retry: false,
+                retry_after_days,
+                outcome: error.code(),
+            },
+            _ => SteamEnrichmentFailureDecision {
+                stop_round: false,
+                record_retry: true,
+                retry_after_days,
+                outcome: error.code(),
+            },
+        }
     }
 
     #[derive(Debug)]
@@ -376,6 +416,56 @@ mod command_logic {
             assert_eq!(first_error.code, "steam_account_missing");
             assert_eq!(second_error.code, "steam_account_missing");
             assert!(!state.steam_account_sync_in_progress.load(Ordering::Acquire));
+        }
+
+        #[test]
+        fn steam_enrichment_failure_rate_limit_stops_round_without_retry_marker() {
+            let decision = classify_steam_enrichment_failure(
+                storage::STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS,
+                &steam_web_api::SteamWebApiError::rate_limited(),
+            );
+
+            assert!(decision.stop_round);
+            assert!(!decision.record_retry);
+            assert_eq!(
+                decision.retry_after_days,
+                storage::STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS
+            );
+            assert_eq!(decision.outcome, "steam_web_api_rate_limited");
+        }
+
+        #[test]
+        fn steam_enrichment_failure_marks_recoverable_provider_errors_for_backoff() {
+            let decision = classify_steam_enrichment_failure(
+                storage::STEAM_ENRICHMENT_PHASE_ACHIEVEMENT_SCHEMA,
+                &steam_web_api::SteamWebApiError::auth_required(Some(
+                    "resposta HTTP 403 da Steam Web API".to_string(),
+                )),
+            );
+
+            assert!(!decision.stop_round);
+            assert!(decision.record_retry);
+            assert_eq!(
+                decision.retry_after_days,
+                storage::STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS
+            );
+            assert_eq!(decision.outcome, "steam_web_api_auth_required");
+        }
+
+        #[test]
+        fn steam_enrichment_failure_keeps_network_errors_transient() {
+            let decision = classify_steam_enrichment_failure(
+                storage::STEAM_ENRICHMENT_PHASE_ARTWORK,
+                &steam_web_api::SteamWebApiError::network_unavailable_for_test(),
+            );
+
+            assert!(!decision.stop_round);
+            assert!(!decision.record_retry);
+            assert_eq!(
+                decision.retry_after_days,
+                storage::STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS
+            );
+            assert_eq!(decision.outcome, "steam_web_api_network_unavailable");
         }
 
         fn test_app_state_with_database(path: std::path::PathBuf, sync_running: bool) -> AppState {
@@ -1240,25 +1330,29 @@ mod commands {
                                         }
                                     }
                                 }
-                                Err(error) if error.code() == "steam_web_api_rate_limited" => {
-                                    summary.rate_limited = true;
-                                    summary.failed += 1;
-                                    emit_steam_enrichment_rate_limited(
-                                        &app, &job_id, &summary, error,
-                                    );
-                                    return;
-                                }
                                 Err(error) => {
+                                    let decision =
+                                        command_logic::classify_steam_enrichment_failure(
+                                            storage::STEAM_ENRICHMENT_PHASE_ARTWORK,
+                                            &error,
+                                        );
                                     summary.failed += 1;
-                                    if error.code() != "steam_web_api_network_unavailable" {
+                                    if decision.stop_round {
+                                        summary.rate_limited = true;
+                                        emit_steam_enrichment_rate_limited(
+                                            &app, &job_id, &summary, error,
+                                        );
+                                        return;
+                                    }
+                                    if decision.record_retry {
                                         if let Ok(connection) = connection.lock() {
                                             let _ = storage::record_steam_enrichment_attempt(
                                                 &connection,
                                                 None,
                                                 &candidate.app_id,
                                                 storage::STEAM_ENRICHMENT_PHASE_ARTWORK,
-                                                storage::STEAM_ENRICHMENT_ARTWORK_RETRY_DAYS,
-                                                error.code(),
+                                                decision.retry_after_days,
+                                                decision.outcome,
                                             );
                                         }
                                     }
@@ -1294,25 +1388,29 @@ mod commands {
                                             }
                                         }
                                     }
-                                    Err(error) if error.code() == "steam_web_api_rate_limited" => {
-                                        summary.rate_limited = true;
-                                        summary.failed += 1;
-                                        emit_steam_enrichment_rate_limited(
-                                            &app, &job_id, &summary, error,
-                                        );
-                                        return;
-                                    }
                                     Err(error) => {
+                                        let decision =
+                                            command_logic::classify_steam_enrichment_failure(
+                                                storage::STEAM_ENRICHMENT_PHASE_ACHIEVEMENT_SCHEMA,
+                                                &error,
+                                            );
                                         summary.failed += 1;
-                                        if error.code() != "steam_web_api_network_unavailable" {
+                                        if decision.stop_round {
+                                            summary.rate_limited = true;
+                                            emit_steam_enrichment_rate_limited(
+                                                &app, &job_id, &summary, error,
+                                            );
+                                            return;
+                                        }
+                                        if decision.record_retry {
                                             if let Ok(connection) = connection.lock() {
                                                 let _ = storage::record_steam_enrichment_attempt(
                                                     &connection,
                                                     None,
                                                     &candidate.app_id,
                                                     storage::STEAM_ENRICHMENT_PHASE_ACHIEVEMENT_SCHEMA,
-                                                    storage::STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS,
-                                                    error.code(),
+                                                    decision.retry_after_days,
+                                                    decision.outcome,
                                                 );
                                             }
                                         }
@@ -1350,25 +1448,29 @@ mod commands {
                                             }
                                         }
                                     }
-                                    Err(error) if error.code() == "steam_web_api_rate_limited" => {
-                                        summary.rate_limited = true;
-                                        summary.failed += 1;
-                                        emit_steam_enrichment_rate_limited(
-                                            &app, &job_id, &summary, error,
-                                        );
-                                        return;
-                                    }
                                     Err(error) => {
+                                        let decision =
+                                            command_logic::classify_steam_enrichment_failure(
+                                                storage::STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS,
+                                                &error,
+                                            );
                                         summary.failed += 1;
-                                        if error.code() != "steam_web_api_network_unavailable" {
+                                        if decision.stop_round {
+                                            summary.rate_limited = true;
+                                            emit_steam_enrichment_rate_limited(
+                                                &app, &job_id, &summary, error,
+                                            );
+                                            return;
+                                        }
+                                        if decision.record_retry {
                                             if let Ok(connection) = connection.lock() {
                                                 let _ = storage::record_steam_enrichment_attempt(
                                                     &connection,
                                                     Some(&steam_id),
                                                     &candidate.app_id,
                                                     storage::STEAM_ENRICHMENT_PHASE_PLAYER_ACHIEVEMENTS,
-                                                    storage::STEAM_ENRICHMENT_ACHIEVEMENT_RETRY_DAYS,
-                                                    error.code(),
+                                                    decision.retry_after_days,
+                                                    decision.outcome,
                                                 );
                                             }
                                         }
@@ -3384,7 +3486,7 @@ mod steam_web_api {
             }
         }
 
-        fn auth_required(details_sanitized: Option<String>) -> Self {
+        pub(crate) fn auth_required(details_sanitized: Option<String>) -> Self {
             Self::new(
                 "steam_web_api_auth_required",
                 "Nao foi possivel autenticar na Steam Web API. Verifique a chave salva no cofre.",
@@ -3419,6 +3521,11 @@ mod steam_web_api {
             )
         }
 
+        #[cfg(test)]
+        pub(crate) fn network_unavailable_for_test() -> Self {
+            Self::network_unavailable_from_reqwest(None)
+        }
+
         fn platform_unavailable(details_sanitized: Option<String>) -> Self {
             Self::new(
                 "steam_web_api_platform_unavailable",
@@ -3429,7 +3536,7 @@ mod steam_web_api {
             )
         }
 
-        fn rate_limited() -> Self {
+        pub(crate) fn rate_limited() -> Self {
             Self::new(
                 "steam_web_api_rate_limited",
                 "A Steam Web API limitou as requisicoes. Aguarde antes de sincronizar novamente.",
@@ -3700,6 +3807,18 @@ mod steam_web_api {
                 "payload JSON invalido dos achievements Steam".to_string(),
             ))
         })?;
+        if payload
+            .get("playerstats")
+            .and_then(|stats| stats.get("success"))
+            .and_then(|success| success.as_bool())
+            .is_some_and(|success| !success)
+        {
+            return Ok(SteamPlayerAchievements {
+                raw_json: "[]".to_string(),
+                total_count: 0,
+                unlocked_count: 0,
+            });
+        }
         let achievements = payload
             .get("playerstats")
             .and_then(|stats| stats.get("achievements"))
@@ -3992,6 +4111,27 @@ mod steam_web_api {
             assert_eq!(achievements.total_count, 3);
             assert_eq!(achievements.unlocked_count, 2);
             assert!(achievements.raw_json.contains("THIRD"));
+        }
+
+        #[test]
+        fn fetch_player_achievements_treats_private_or_missing_data_as_empty_cache() {
+            let mut client = FakeSteamWebApiClient::default();
+            client.achievements_body = Some(
+                r#"{"playerstats":{"success":false,"error":"Profile is not public"}}"#.to_string(),
+            );
+
+            let achievements = fetch_player_achievements(
+                &client,
+                "0123456789abcdefABCDEF0123456789",
+                "76561198000000000",
+                "413150",
+            )
+            .expect("private achievements should not fail enrichment");
+
+            assert_eq!(achievements.total_count, 0);
+            assert_eq!(achievements.unlocked_count, 0);
+            assert_eq!(achievements.raw_json, "[]");
+            assert!(!achievements.raw_json.contains("Profile is not public"));
         }
 
         #[derive(Default)]
@@ -5695,6 +5835,7 @@ mod storage {
         launch_actions: Vec<LaunchActionDto>,
         playtime: PlaytimeDto,
         artwork: GameArtworkDto,
+        achievements: Option<GameAchievementsDto>,
         genres: Vec<String>,
         tags: Vec<String>,
         user_overrides: serde_json::Value,
@@ -5735,6 +5876,31 @@ mod storage {
         hero_url: Option<String>,
         fallback_url: Option<String>,
         source: Option<String>,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GameAchievementsDto {
+        provider_id: String,
+        app_id: String,
+        total: usize,
+        unlocked: usize,
+        percentage: f64,
+        fetched_at: String,
+        items: Vec<GameAchievementDto>,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct GameAchievementDto {
+        api_name: String,
+        name: String,
+        description: String,
+        icon_url: Option<String>,
+        locked_icon_url: Option<String>,
+        hidden: bool,
+        achieved: bool,
+        unlock_time: Option<i64>,
     }
 
     pub fn list_library_entries(connection: &Connection) -> rusqlite::Result<Vec<LibraryEntryDto>> {
@@ -6068,6 +6234,7 @@ mod storage {
         }
 
         let artwork = game_artwork_from_sources(connection, row.accent_color, &sources);
+        let achievements = game_achievements_from_sources(connection, &sources)?;
 
         Ok(LibraryEntryDto {
             id: row.entry_id,
@@ -6091,6 +6258,7 @@ mod storage {
                     total_minutes: row.playtime_total_minutes,
                 },
                 artwork,
+                achievements,
                 genres,
                 tags: Vec::new(),
                 user_overrides: serde_json::json!({}),
@@ -6145,6 +6313,215 @@ mod storage {
         } else {
             None
         }
+    }
+
+    fn game_achievements_from_sources(
+        connection: &Connection,
+        sources: &[GameSourceDto],
+    ) -> rusqlite::Result<Option<GameAchievementsDto>> {
+        let Some(source) = sources.iter().find(|source| {
+            source.platform_id == "steam"
+                && steam_web_api::is_valid_steam_app_id(&source.external_id)
+        }) else {
+            return Ok(None);
+        };
+        let Some(steam_id64) = source
+            .account_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
+
+        read_steam_achievements(connection, steam_id64, &source.external_id)
+    }
+
+    fn read_steam_achievements(
+        connection: &Connection,
+        steam_id64: &str,
+        app_id: &str,
+    ) -> rusqlite::Result<Option<GameAchievementsDto>> {
+        let player_cache = connection
+            .query_row(
+                r#"
+                SELECT achievements_json, unlocked_count, total_count, fetched_at
+                FROM steam_player_achievement_cache
+                WHERE steam_id64 = ?1
+                  AND app_id = ?2
+                "#,
+                params![steam_id64, app_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((player_json, unlocked_count, player_total_count, fetched_at)) = player_cache
+        else {
+            return Ok(None);
+        };
+
+        let schema_cache = connection
+            .query_row(
+                r#"
+                SELECT schema_json, achievement_count
+                FROM steam_achievement_schema_cache
+                WHERE app_id = ?1
+                "#,
+                params![app_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        let (schema_json, schema_count) = schema_cache.unwrap_or_else(|| ("[]".to_string(), 0));
+        let schema_items = parse_steam_achievement_array(&schema_json);
+        let player_items = parse_steam_achievement_array(&player_json);
+        let player_by_api_name = player_items
+            .iter()
+            .filter_map(|achievement| {
+                achievement_api_name(achievement)
+                    .map(|api_name| (api_name.to_string(), achievement))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut items = schema_items
+            .iter()
+            .filter_map(|achievement| {
+                let api_name = achievement_api_name(achievement)?;
+                let player_achievement = player_by_api_name.get(api_name);
+                Some(build_steam_achievement_dto(
+                    api_name,
+                    Some(achievement),
+                    player_achievement.copied(),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        if items.is_empty() {
+            items = player_items
+                .iter()
+                .filter_map(|achievement| {
+                    let api_name = achievement_api_name(achievement)?;
+                    Some(build_steam_achievement_dto(
+                        api_name,
+                        None,
+                        Some(achievement),
+                    ))
+                })
+                .collect();
+        }
+
+        let total = usize::try_from(schema_count.max(player_total_count).max(items.len() as i64))
+            .unwrap_or_default();
+        let unlocked = usize::try_from(unlocked_count.max(0)).unwrap_or_default();
+        let percentage = if total > 0 {
+            ((unlocked as f64 / total as f64) * 1000.0).round() / 10.0
+        } else {
+            0.0
+        };
+
+        Ok(Some(GameAchievementsDto {
+            provider_id: "steam".to_string(),
+            app_id: app_id.to_string(),
+            total,
+            unlocked,
+            percentage,
+            fetched_at,
+            items,
+        }))
+    }
+
+    fn parse_steam_achievement_array(raw_json: &str) -> Vec<serde_json::Value> {
+        serde_json::from_str::<serde_json::Value>(raw_json)
+            .ok()
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default()
+    }
+
+    fn build_steam_achievement_dto(
+        api_name: &str,
+        schema: Option<&serde_json::Value>,
+        player: Option<&serde_json::Value>,
+    ) -> GameAchievementDto {
+        let name = read_string_field(schema, &["displayName", "display_name", "name"])
+            .or_else(|| {
+                read_string_field(player, &["displayName", "display_name", "name", "apiname"])
+            })
+            .unwrap_or_else(|| api_name.to_string());
+        let description = read_string_field(schema, &["description", "desc"]).unwrap_or_default();
+        let hidden = read_bool_field(schema, &["hidden", "secret"]).unwrap_or(false);
+        let achieved = player
+            .and_then(|value| value.get("achieved"))
+            .and_then(parse_i64_from_json)
+            .unwrap_or_default()
+            > 0;
+        let unlock_time = player
+            .and_then(|value| value.get("unlocktime"))
+            .and_then(parse_i64_from_json)
+            .filter(|value| *value > 0);
+
+        GameAchievementDto {
+            api_name: api_name.to_string(),
+            name,
+            description,
+            icon_url: read_string_field(schema, &["icon"]),
+            locked_icon_url: read_string_field(schema, &["icongray", "iconGray", "lockedIcon"]),
+            hidden,
+            achieved,
+            unlock_time,
+        }
+    }
+
+    fn achievement_api_name(value: &serde_json::Value) -> Option<&str> {
+        value
+            .get("apiname")
+            .or_else(|| value.get("name"))
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    fn read_string_field(value: Option<&serde_json::Value>, fields: &[&str]) -> Option<String> {
+        fields.iter().find_map(|field| {
+            value?
+                .get(*field)
+                .and_then(|field_value| field_value.as_str())
+                .map(str::trim)
+                .filter(|field_value| !field_value.is_empty())
+                .map(str::to_string)
+        })
+    }
+
+    fn read_bool_field(value: Option<&serde_json::Value>, fields: &[&str]) -> Option<bool> {
+        fields.iter().find_map(|field| {
+            value?.get(*field).and_then(|field_value| {
+                field_value.as_bool().or_else(|| {
+                    field_value.as_i64().map(|raw| raw != 0).or_else(|| {
+                        field_value
+                            .as_str()
+                            .map(|raw| matches!(raw.trim(), "1" | "true" | "TRUE"))
+                    })
+                })
+            })
+        })
+    }
+
+    fn parse_i64_from_json(value: &serde_json::Value) -> Option<i64> {
+        value
+            .as_i64()
+            .or_else(|| {
+                value
+                    .as_u64()
+                    .and_then(|raw| (raw <= i64::MAX as u64).then_some(raw as i64))
+            })
+            .or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|raw| raw.trim().parse::<i64>().ok())
+            })
     }
 
     fn list_sources(
@@ -10008,6 +10385,165 @@ mod storage {
             .expect("list candidates");
 
             assert!(candidates.is_empty());
+        }
+
+        #[test]
+        fn steam_player_achievement_cache_is_scoped_by_account_and_preserves_rows() {
+            let connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let app_id = "413150";
+            let first_steam_id = "76561198000000000";
+            let second_steam_id = "76561198000000001";
+
+            save_steam_artwork_header_image(
+                &connection,
+                app_id,
+                "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/413150/header.jpg",
+            )
+            .expect("save artwork");
+            save_steam_achievement_schema_cache(&connection, app_id, r#"[{"name":"FIRST"}]"#, 1)
+                .expect("save schema");
+            save_steam_player_achievement_cache(
+                &connection,
+                first_steam_id,
+                app_id,
+                r#"[{"apiname":"FIRST","achieved":1}]"#,
+                1,
+                1,
+            )
+            .expect("save first account achievements");
+
+            let first_candidates = list_steam_enrichment_candidates(
+                &connection,
+                first_steam_id,
+                &[app_id.to_string()],
+                50,
+                false,
+            )
+            .expect("list first candidates");
+            let second_candidates = list_steam_enrichment_candidates(
+                &connection,
+                second_steam_id,
+                &[app_id.to_string()],
+                50,
+                false,
+            )
+            .expect("list second candidates");
+
+            assert!(first_candidates.is_empty());
+            assert_eq!(second_candidates.len(), 1);
+            assert!(!second_candidates[0].needs_artwork);
+            assert!(!second_candidates[0].needs_achievement_schema);
+            assert!(second_candidates[0].needs_player_achievements);
+
+            save_steam_player_achievement_cache(
+                &connection,
+                second_steam_id,
+                app_id,
+                r#"[{"apiname":"FIRST","achieved":0}]"#,
+                0,
+                1,
+            )
+            .expect("save second account achievements");
+
+            let mut statement = connection
+                .prepare(
+                    r#"
+                    SELECT steam_id64, unlocked_count
+                    FROM steam_player_achievement_cache
+                    WHERE app_id = ?1
+                    ORDER BY steam_id64
+                    "#,
+                )
+                .expect("prepare cache query");
+            let rows = statement
+                .query_map(params![app_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .expect("query cache")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("collect cache rows");
+
+            assert_eq!(
+                rows,
+                vec![
+                    (first_steam_id.to_string(), 1),
+                    (second_steam_id.to_string(), 0)
+                ]
+            );
+        }
+
+        #[test]
+        fn list_library_entries_includes_detailed_steam_achievements() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let steam_id = "76561198000000000";
+            let app_id = "413150";
+            let remote_games = vec![steam_web_api::RemoteSteamGame {
+                app_id: app_id.to_string(),
+                title: "Stardew Valley".to_string(),
+                playtime_forever: Some(321),
+            }];
+
+            sync_steam_account_games(&mut connection, steam_id, &remote_games)
+                .expect("sync remote steam account");
+            save_steam_achievement_schema_cache(
+                &connection,
+                app_id,
+                r#"[
+                    {
+                      "name":"FIRST_WIN",
+                      "displayName":"Primeira vitoria",
+                      "description":"Ganhe pela primeira vez.",
+                      "icon":"https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/413150/first.jpg",
+                      "icongray":"https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/413150/first-gray.jpg",
+                      "hidden":0
+                    },
+                    {
+                      "name":"SECRET_ROOM",
+                      "displayName":"Sala secreta",
+                      "description":"Encontre a sala escondida.",
+                      "icon":"https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/413150/secret.jpg",
+                      "icongray":"https://cdn.akamai.steamstatic.com/steamcommunity/public/images/apps/413150/secret-gray.jpg",
+                      "hidden":1
+                    }
+                  ]"#,
+                2,
+            )
+            .expect("save schema");
+            save_steam_player_achievement_cache(
+                &connection,
+                steam_id,
+                app_id,
+                r#"[
+                    {"apiname":"FIRST_WIN","achieved":1,"unlocktime":1710000000},
+                    {"apiname":"SECRET_ROOM","achieved":0,"unlocktime":0}
+                  ]"#,
+                1,
+                2,
+            )
+            .expect("save player achievements");
+
+            let entries = list_library_entries(&connection).expect("list entries");
+            let achievements = entries[0]
+                .game
+                .achievements
+                .as_ref()
+                .expect("steam achievements dto");
+
+            assert_eq!(achievements.provider_id, "steam");
+            assert_eq!(achievements.app_id, app_id);
+            assert_eq!(achievements.total, 2);
+            assert_eq!(achievements.unlocked, 1);
+            assert_eq!(achievements.percentage, 50.0);
+            assert_eq!(achievements.items.len(), 2);
+            assert_eq!(achievements.items[0].api_name, "FIRST_WIN");
+            assert_eq!(achievements.items[0].name, "Primeira vitoria");
+            assert!(achievements.items[0].achieved);
+            assert_eq!(achievements.items[0].unlock_time, Some(1710000000));
+            assert_eq!(achievements.items[1].api_name, "SECRET_ROOM");
+            assert!(achievements.items[1].hidden);
+            assert!(!achievements.items[1].achieved);
         }
 
         #[test]

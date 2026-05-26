@@ -1,6 +1,6 @@
 import { useDeferredValue, useMemo } from 'react'
 import { INSTALL_STATUS, PLATFORM_LABELS, QUICK_FILTER_IDS, SORT_MODE_IDS } from '../constants/libraryConstants.js'
-import { getPlaytimeHours } from '../adapters/libraryEntryAdapter.js'
+import { getAchievementProgress, getPlaytimeHours } from '../adapters/libraryEntryAdapter.js'
 
 const titleCollator = new Intl.Collator('pt-BR', {
   numeric: true,
@@ -82,51 +82,27 @@ export const isFavoriteEntry = (entry) => {
   return entry?.memberEntries?.some((memberEntry) => isFavoriteEntry(memberEntry)) ?? false
 }
 
-const readProgressValue = (value) => {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value
-  }
+const getAchievementProgressValue = (entry) => {
+  const progress = getAchievementProgress(entry)
 
-  if (!value || typeof value !== 'object') {
-    return 0
-  }
-
-  const directValue =
-    value.progress ??
-    value.percentage ??
-    value.percent ??
-    value.completionPercent ??
-    value.completion_percent ??
-    value.ratio
-
-  if (typeof directValue === 'number' && Number.isFinite(directValue)) {
-    return directValue
-  }
-
-  const unlocked = value.unlocked ?? value.earned ?? value.completed
-  const total = value.total ?? value.available ?? value.count
-
-  if (Number.isFinite(unlocked) && Number.isFinite(total) && total > 0) {
-    return (unlocked / total) * 100
-  }
-
-  return 0
+  return progress.hasData ? progress.percentage : null
 }
 
-const getAchievementProgressValue = (entry) => {
-  const candidates = [
-    entry?.achievementProgress,
-    entry?.achievement_progress,
-    entry?.achievements,
-    entry?.game?.achievementProgress,
-    entry?.game?.achievement_progress,
-    entry?.game?.achievements,
-  ]
+const compareByAchievementProgress = (leftEntry, rightEntry, direction) => {
+  const leftProgress = getAchievementProgressValue(leftEntry)
+  const rightProgress = getAchievementProgressValue(rightEntry)
+  const leftHasData = leftProgress !== null
+  const rightHasData = rightProgress !== null
 
-  const ownProgress = Math.max(0, ...candidates.map(readProgressValue))
-  const memberProgress = entry?.memberEntries?.map(getAchievementProgressValue) ?? []
+  if (leftHasData !== rightHasData) {
+    return leftHasData ? -1 : 1
+  }
 
-  return Math.max(ownProgress, ...memberProgress)
+  if (!leftHasData && !rightHasData) {
+    return compareByTitle(leftEntry, rightEntry)
+  }
+
+  return (leftProgress - rightProgress) * direction || compareByTitle(leftEntry, rightEntry)
 }
 
 export function sortLibraryEntries(entries, sortMode = SORT_MODE_IDS.ALPHA_ASC) {
@@ -149,12 +125,10 @@ export function sortLibraryEntries(entries, sortMode = SORT_MODE_IDS.ALPHA_ASC) 
         return favoriteComparison || compareByTitle(leftEntry, rightEntry)
       }
       case SORT_MODE_IDS.ACHIEVEMENTS_DESC: {
-        const progressComparison = getAchievementProgressValue(rightEntry) - getAchievementProgressValue(leftEntry)
-        return progressComparison || compareByTitle(leftEntry, rightEntry)
+        return compareByAchievementProgress(leftEntry, rightEntry, -1)
       }
       case SORT_MODE_IDS.ACHIEVEMENTS_ASC: {
-        const progressComparison = getAchievementProgressValue(leftEntry) - getAchievementProgressValue(rightEntry)
-        return progressComparison || compareByTitle(leftEntry, rightEntry)
+        return compareByAchievementProgress(leftEntry, rightEntry, 1)
       }
       case SORT_MODE_IDS.ALPHA_ASC:
       default:

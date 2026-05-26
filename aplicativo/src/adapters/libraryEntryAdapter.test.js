@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   buildManualLibraryEntry,
+  filterAchievementItems,
+  getAchievementDisplayState,
+  sortAchievementItems,
   validateManualGameInput,
 } from './libraryEntryAdapter.js'
 import { INSTALL_STATUS, LAUNCH_ACTION_KIND } from '../constants/libraryConstants.js'
@@ -83,4 +86,65 @@ test('buildManualLibraryEntry infers uri launch actions and preserves existing i
   assert.equal(nextEntry.game.installed, true)
   assert.deepEqual(nextEntry.game.tags, ['fav'])
   assert.deepEqual(nextEntry.game.userOverrides, { note: 'keep' })
+})
+
+test('sortAchievementItems orders achieved, visible locked and secret locked by visible text', () => {
+  const achievements = [
+    { apiName: 'LOCKED_SECRET_B', name: 'B hidden', description: 'Secret B', hidden: true, achieved: false },
+    { apiName: 'LOCKED_VISIBLE_B', name: 'Beta', description: 'Visible B', hidden: false, achieved: false },
+    { apiName: 'ACHIEVED_B', name: 'Bravo', description: 'Done B', hidden: false, achieved: true },
+    { apiName: 'LOCKED_VISIBLE_A', name: 'Alpha', description: 'Visible A', hidden: false, achieved: false },
+    { apiName: 'ACHIEVED_A', name: 'Alpha done', description: 'Done A', hidden: true, achieved: true },
+    { apiName: 'LOCKED_SECRET_A', name: 'A hidden', description: 'Secret A', hidden: true, achieved: false },
+  ]
+
+  const sortedApiNames = sortAchievementItems(achievements).map((achievement) => achievement.apiName)
+
+  assert.deepEqual(sortedApiNames, [
+    'ACHIEVED_A',
+    'ACHIEVED_B',
+    'LOCKED_VISIBLE_A',
+    'LOCKED_VISIBLE_B',
+    'LOCKED_SECRET_B',
+    'LOCKED_SECRET_A',
+  ])
+})
+
+test('filterAchievementItems searches visible text without leaking unrevealed secret achievements', () => {
+  const secret = { apiName: 'SECRET_ONE', name: 'Dragon Room', description: 'Find the hidden dragon.', hidden: true, achieved: false }
+  const visible = { apiName: 'VISIBLE_ONE', name: 'Explorer', description: 'Find a map.', hidden: false, achieved: false }
+
+  assert.deepEqual(filterAchievementItems([secret, visible], 'dragon'), [])
+  assert.deepEqual(filterAchievementItems([secret, visible], 'secreta'), [secret])
+
+  const revealed = new Set(['SECRET_ONE'])
+
+  assert.deepEqual(filterAchievementItems([secret, visible], 'dragon', revealed), [secret])
+})
+
+test('filterAchievementItems keeps large achievement lists complete when there is no query', () => {
+  const achievements = Array.from({ length: 637 }, (_, index) => ({
+    apiName: `COOKIE_${index}`,
+    name: `Cookie ${index}`,
+    description: `Achievement ${index}`,
+    hidden: false,
+    achieved: index % 2 === 0,
+  }))
+
+  assert.equal(filterAchievementItems(achievements, '').length, 637)
+})
+
+test('getAchievementDisplayState marks unlocked hidden achievements without masking them', () => {
+  const display = getAchievementDisplayState({
+    apiName: 'SECRET_DONE',
+    name: 'Hidden path',
+    description: 'Unlock a secret path.',
+    hidden: true,
+    achieved: true,
+  })
+
+  assert.equal(display.shouldMask, false)
+  assert.equal(display.isHidden, true)
+  assert.equal(display.isAchieved, true)
+  assert.equal(display.name, 'Hidden path')
 })

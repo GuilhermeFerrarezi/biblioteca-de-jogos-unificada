@@ -85,3 +85,17 @@ test('getVisibleLibraryEntries sorts by achievement progress when available and 
 
   assert.deepEqual(getTitles(sortedEntries), ['Complete', 'Half Done', 'No Data'])
 })
+
+test('sortLibraryEntries keeps games without achievement data at the end in both achievement modes', () => {
+  const entries = [
+    makeEntry({ id: '1', title: 'No Data' }),
+    makeEntry({ id: '2', title: 'Low', achievements: { unlocked: 1, total: 10 } }),
+    makeEntry({ id: '3', title: 'High', achievements: { unlocked: 8, total: 10 } }),
+  ]
+
+  const descendingEntries = sortLibraryEntries(entries, SORT_MODE_IDS.ACHIEVEMENTS_DESC)
+  const ascendingEntries = sortLibraryEntries(entries, SORT_MODE_IDS.ACHIEVEMENTS_ASC)
+
+  assert.deepEqual(getTitles(descendingEntries), ['High', 'Low', 'No Data'])
+  assert.deepEqual(getTitles(ascendingEntries), ['Low', 'High', 'No Data'])
+})

@@ -1,6 +1,14 @@
-import { Archive, Clock3, Download, Heart, Pencil, Play, Store } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-import { getPlaytimeHours } from '../adapters/libraryEntryAdapter'
+import { Archive, Clock3, Download, Eye, Heart, LockKeyhole, Pencil, Play, Search, Store, Trophy, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import {
+  filterAchievementItems,
+  getAchievementDisplayState,
+  getAchievementKey,
+  getAchievementProgress,
+  getPlaytimeHours,
+  sortAchievementItems,
+} from '../adapters/libraryEntryAdapter'
 import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, LAUNCH_ACTION_KIND, PLATFORM_LABELS } from '../constants/libraryConstants'
 import { getDetailsEntryForSelectedPlatform, getLaunchActionState, getLaunchChoices, isMicrosoftStoreUri } from '../domain/libraryLaunch'
 import StatusDisclosure from './StatusDisclosure'
@@ -64,6 +72,10 @@ function GameDetailsPanel({
   onToggleFavoriteEntry,
 }) {
   const [isLaunchChooserOpen, setIsLaunchChooserOpen] = useState(false)
+  const [isAchievementsModalOpen, setIsAchievementsModalOpen] = useState(false)
+  const [achievementSearchTerm, setAchievementSearchTerm] = useState('')
+  const [revealedSecretAchievements, setRevealedSecretAchievements] = useState(() => new Set())
+  const achievementsModalTriggerRef = useRef(null)
   const launchChooserButtonRef = useRef(null)
   const launchChooserRef = useRef(null)
   const detailsEntry = getDetailsEntryForSelectedPlatform(selectedEntry, selectedLaunchPlatformId)
@@ -91,6 +103,7 @@ function GameDetailsPanel({
   const primaryActionLabel = isMicrosoftStoreAction ? 'Abrir Microsoft Store' : 'Jogar'
   const PrimaryActionIcon = isMicrosoftStoreAction ? Store : Play
   const installedGamePath = resolveInstalledGamePath(detailsEntry, primaryLaunchAction)
+  const achievementProgress = getAchievementProgress(detailsEntry)
   const displayedPlatformLabel =
     detailsEntry && hasMultipleLaunchChoices
       ? PLATFORM_LABELS[detailsEntry.primaryPlatformId] ?? detailsEntry.primaryPlatformId
@@ -102,6 +115,9 @@ function GameDetailsPanel({
 
   useEffect(() => {
     setIsLaunchChooserOpen(false)
+    setIsAchievementsModalOpen(false)
+    setAchievementSearchTerm('')
+    setRevealedSecretAchievements(new Set())
   }, [selectedEntry?.id])
 
   useEffect(() => {
@@ -124,6 +140,18 @@ function GameDetailsPanel({
       window.removeEventListener('keydown', handleKeyDown)
     }
   }, [isLaunchChooserOpen])
+
+  useEffect(() => {
+    if (!isAchievementsModalOpen) {
+      return undefined
+    }
+
+    document.body.classList.add('achievement-modal-open')
+
+    return () => {
+      document.body.classList.remove('achievement-modal-open')
+    }
+  }, [isAchievementsModalOpen])
 
   useEffect(() => {
     if (!isLaunchChooserOpen) {
@@ -287,6 +315,33 @@ function GameDetailsPanel({
                   : 'Xbox nao instalado: abrir Microsoft Store.'}
               </div>
             ) : null}
+            <SteamAchievementsSection
+              achievements={achievementProgress}
+              gameTitle={selectedEntry.game.title}
+              libraryLabel={displayedPlatformLabel}
+              isModalOpen={isAchievementsModalOpen}
+              modalTriggerRef={achievementsModalTriggerRef}
+              revealedSecretAchievements={revealedSecretAchievements}
+              searchTerm={achievementSearchTerm}
+              onCloseModal={() => {
+                setIsAchievementsModalOpen(false)
+                setAchievementSearchTerm('')
+                window.requestAnimationFrame(() => {
+                  achievementsModalTriggerRef.current?.focus()
+                })
+              }}
+              onOpenModal={() => {
+                setIsAchievementsModalOpen(true)
+              }}
+              onRevealSecretAchievement={(apiName) => {
+                setRevealedSecretAchievements((currentAchievements) => {
+                  const nextAchievements = new Set(currentAchievements)
+                  nextAchievements.add(apiName)
+                  return nextAchievements
+                })
+              }}
+              onSearchTermChange={setAchievementSearchTerm}
+            />
             <div className="timeline-note">
               <Clock3 size={16} aria-hidden="true" />
               Steam local, jogos locais e cadastro manual ja podem ser sincronizados.
@@ -311,6 +366,329 @@ function GameDetailsPanel({
       )}
     </aside>
   )
+}
+
+const ACHIEVEMENT_PREVIEW_ACHIEVED_LIMIT = 3
+const ACHIEVEMENT_PREVIEW_LOCKED_LIMIT = 3
+
+function SteamAchievementsSection({
+  achievements,
+  gameTitle,
+  libraryLabel,
+  isModalOpen,
+  modalTriggerRef,
+  revealedSecretAchievements,
+  searchTerm,
+  onCloseModal,
+  onOpenModal,
+  onRevealSecretAchievement,
+  onSearchTermChange,
+}) {
+  const sortedItems = useMemo(
+    () => sortAchievementItems(achievements.items, revealedSecretAchievements),
+    [achievements.items, revealedSecretAchievements],
+  )
+  const achievedPreviewItems = sortedItems
+    .filter((achievement) => achievement.achieved === true)
+    .slice(0, ACHIEVEMENT_PREVIEW_ACHIEVED_LIMIT)
+  const lockedPreviewItems = sortedItems
+    .filter((achievement) => achievement.achieved !== true)
+    .slice(0, ACHIEVEMENT_PREVIEW_LOCKED_LIMIT)
+  const previewItems = [...achievedPreviewItems, ...lockedPreviewItems]
+  const remainingCount = Math.max(0, achievements.items.length - previewItems.length)
+  const achievementLibraryTitle = `${libraryLabel || 'Biblioteca'} achievements`
+
+  return (
+    <section className="achievement-panel" aria-label={`Conquistas ${libraryLabel || 'da biblioteca'}`}>
+      <div className="achievement-panel-header">
+        <div>
+          <span>{achievementLibraryTitle}</span>
+          <strong>{achievements.hasData ? `${achievements.unlocked}/${achievements.total}` : 'Sem dados'}</strong>
+        </div>
+        {achievements.hasData ? (
+          <span className="achievement-progress-value">{Math.round(achievements.percentage)}%</span>
+        ) : null}
+      </div>
+      {achievements.hasData ? (
+        <>
+          <div
+            className="achievement-progress-bar"
+            role="progressbar"
+            aria-label="Progresso de conquistas Steam"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(achievements.percentage)}
+            aria-valuetext={`${achievements.unlocked} de ${achievements.total} conquistas alcancadas`}
+          >
+            <span style={{ width: `${Math.min(100, Math.max(0, achievements.percentage))}%` }} />
+          </div>
+          <div className="achievement-preview-grid">
+            <AchievementPreviewColumn
+              emptyLabel="Nenhuma conquista alcancada ainda."
+              items={achievedPreviewItems}
+              label="Alcancadas"
+              revealedSecretAchievements={revealedSecretAchievements}
+              onRevealSecretAchievement={onRevealSecretAchievement}
+            />
+            <AchievementPreviewColumn
+              emptyLabel="Sem conquistas pendentes no cache."
+              items={lockedPreviewItems}
+              label="Pendentes"
+              revealedSecretAchievements={revealedSecretAchievements}
+              onRevealSecretAchievement={onRevealSecretAchievement}
+            />
+          </div>
+          <div className="achievement-panel-footer">
+            <span>{remainingCount > 0 ? `+${remainingCount} conquistas no modal` : `${achievements.items.length} conquistas no total`}</span>
+            <button
+              ref={modalTriggerRef}
+              className="secondary-button compact"
+              type="button"
+              aria-label={`Ver todas as ${achievements.items.length} conquistas Steam`}
+              onClick={onOpenModal}
+            >
+              Ver todas
+            </button>
+          </div>
+          {isModalOpen ? (
+            <SteamAchievementsModal
+              achievements={achievements}
+              achievementLibraryTitle={achievementLibraryTitle}
+              gameTitle={gameTitle}
+              items={sortedItems}
+              revealedSecretAchievements={revealedSecretAchievements}
+              searchTerm={searchTerm}
+              onClose={onCloseModal}
+              onRevealSecretAchievement={onRevealSecretAchievement}
+              onSearchTermChange={onSearchTermChange}
+            />
+          ) : null}
+        </>
+      ) : (
+        <p className="achievement-empty-state">Sem dados de conquistas para este jogo.</p>
+      )}
+    </section>
+  )
+}
+
+function AchievementPreviewColumn({ emptyLabel, items, label, revealedSecretAchievements, onRevealSecretAchievement }) {
+  return (
+    <div className="achievement-preview-column">
+      <span>{label}</span>
+      {items.length > 0 ? (
+        <div className="achievement-list preview">
+          {items.map((achievement, index) => (
+            <AchievementListItem
+              achievement={achievement}
+              isCompact
+              key={getAchievementKey(achievement, index)}
+              revealedSecretAchievements={revealedSecretAchievements}
+              onRevealSecretAchievement={onRevealSecretAchievement}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="achievement-empty-state">{emptyLabel}</p>
+      )}
+    </div>
+  )
+}
+
+function SteamAchievementsModal({
+  achievements,
+  achievementLibraryTitle,
+  gameTitle,
+  items,
+  revealedSecretAchievements,
+  searchTerm,
+  onClose,
+  onRevealSecretAchievement,
+  onSearchTermChange,
+}) {
+  const searchInputRef = useRef(null)
+  const filteredItems = useMemo(
+    () => filterAchievementItems(items, searchTerm, revealedSecretAchievements),
+    [items, revealedSecretAchievements, searchTerm],
+  )
+
+  useEffect(() => {
+    window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus()
+    })
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [onClose])
+
+  const preventBackgroundScroll = (event) => {
+    if (!event.target.closest('.achievement-list.modal-list')) {
+      event.preventDefault()
+    }
+  }
+
+  const modalContent = (
+    <div
+      className="modal-backdrop achievement-modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+      onTouchMove={preventBackgroundScroll}
+      onWheel={preventBackgroundScroll}
+    >
+      <section
+        className="modal-panel achievement-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="steam-achievements-modal-title"
+      >
+        <header className="modal-header achievement-modal-header">
+          <div>
+            <span>{achievementLibraryTitle}</span>
+            <h2 id="steam-achievements-modal-title">{gameTitle}</h2>
+            <p>{achievements.unlocked}/{achievements.total} alcancadas</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Fechar conquistas" title="Fechar" onClick={onClose}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </header>
+        <div className="achievement-modal-toolbar">
+          <div
+            className="achievement-progress-bar"
+            role="progressbar"
+            aria-label="Progresso de conquistas Steam"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(achievements.percentage)}
+            aria-valuetext={`${achievements.unlocked} de ${achievements.total} conquistas alcancadas`}
+          >
+            <span style={{ width: `${Math.min(100, Math.max(0, achievements.percentage))}%` }} />
+          </div>
+          <label className="achievement-search">
+            <Search size={16} aria-hidden="true" />
+            <span className="sr-only">Buscar conquistas</span>
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={searchTerm}
+              placeholder="Buscar conquistas"
+              onChange={(event) => onSearchTermChange(event.target.value)}
+            />
+          </label>
+          <span className="achievement-modal-count">
+            {filteredItems.length} de {achievements.items.length}
+          </span>
+        </div>
+        <div className="achievement-list modal-list">
+          {filteredItems.length > 0 ? (
+            filteredItems.map((achievement, index) => (
+              <AchievementListItem
+                achievement={achievement}
+                key={getAchievementKey(achievement, index)}
+                revealedSecretAchievements={revealedSecretAchievements}
+                onRevealSecretAchievement={onRevealSecretAchievement}
+              />
+            ))
+          ) : (
+            <p className="achievement-empty-state modal-empty-state">Nenhuma conquista encontrada.</p>
+          )}
+        </div>
+      </section>
+    </div>
+  )
+
+  return createPortal(modalContent, document.body)
+}
+
+function AchievementListItem({ achievement, isCompact = false, revealedSecretAchievements, onRevealSecretAchievement }) {
+  const { apiName, description, iconUrl, isAchieved, isHidden, name, shouldMask } = getAchievementDisplayState(
+    achievement,
+    revealedSecretAchievements,
+  )
+  const unlockLabel = isAchieved ? formatUnlockTime(achievement.unlockTime ?? achievement.unlock_time) : 'Bloqueada'
+
+  const content = (
+    <>
+      <AchievementIcon iconUrl={iconUrl} isMasked={shouldMask} fallbackIcon={shouldMask ? LockKeyhole : Trophy} />
+      <span className="achievement-copy">
+        <strong>
+          {name}
+          {isHidden && isAchieved ? <small className="achievement-secret-label">(secreta)</small> : null}
+        </strong>
+        <span>{description}</span>
+        <small>{unlockLabel}</small>
+      </span>
+      {shouldMask ? (
+        <span className="achievement-reveal-hint">
+          <Eye size={14} aria-hidden="true" />
+          Clique para mostrar
+        </span>
+      ) : null}
+    </>
+  )
+
+  if (shouldMask) {
+    return (
+      <button
+        className={isCompact ? 'achievement-item compact secret' : 'achievement-item secret'}
+        type="button"
+        aria-label="Revelar conquista secreta"
+        title="Clique para mostrar o conteudo"
+        onClick={() => onRevealSecretAchievement(apiName)}
+      >
+        {content}
+      </button>
+    )
+  }
+
+  return (
+    <div className={isCompact ? `achievement-item compact ${isAchieved ? 'achieved' : 'locked'}` : `achievement-item ${isAchieved ? 'achieved' : 'locked'}`}>
+      {content}
+    </div>
+  )
+}
+
+function AchievementIcon({ iconUrl, isMasked, fallbackIcon: FallbackIcon }) {
+  const [hasImageError, setHasImageError] = useState(false)
+
+  if (iconUrl && !hasImageError) {
+    return (
+      <span className={isMasked ? 'achievement-icon masked' : 'achievement-icon'}>
+        <img src={iconUrl} alt="" loading="lazy" onError={() => setHasImageError(true)} />
+      </span>
+    )
+  }
+
+  return (
+    <span className={isMasked ? 'achievement-icon masked' : 'achievement-icon'}>
+      <FallbackIcon size={18} aria-hidden="true" />
+    </span>
+  )
+}
+
+function formatUnlockTime(unlockTime) {
+  const timestamp = Number(unlockTime)
+
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return 'Desbloqueada'
+  }
+
+  return new Intl.DateTimeFormat('pt-BR', {
+    dateStyle: 'short',
+  }).format(new Date(timestamp * 1000))
 }
 
 function DetailArtworkFrame({ imageUrls, accentColor, fallbackText, imageAlt }) {

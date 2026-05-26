@@ -268,3 +268,31 @@ Resultado validado: lint/build aprovados, smoke frontend com 29 testes passando 
 - Os wrappers `#[tauri::command]` permanecem finos e continuam fora dos testes unitarios diretos quando isso exigiria carregar o runtime nativo; a logica de negocio por tras deles voltou a ser testada por helpers puros.
 - Validacoes do corte: `cargo test` com `CARGO_TARGET_DIR` local passou com 141 testes executados, `cargo fmt -- --check` passou e `cargo check` passou. Tambem foi confirmado por `dumpbin /imports` que o binario unitario filtrado nao voltou a importar `comctl32.dll`/`TaskDialogIndirect`.
 - O proximo ciclo de roadmap permanece achievements, nao Epic.
+
+## Atualizacao 2026-05-26 - Steam achievements best-effort
+
+- O backend Steam achievements foi reforcado como enrichment complementar em background, sem virar pre-condicao para boot, listagem, login, sincronizacao principal ou launch.
+- A decisao de falhas do enrichment saiu do modulo Tauri para helper testavel: rate limit encerra a rodada atual com evento sanitizado, erros recuperaveis de provider viram marcador de retry/backoff e falhas de rede continuam transientes sem poluir o cache de tentativa.
+- Respostas de achievements privados/indisponiveis da Steam Web API agora sao tratadas como cache vazio esperado, sem gravar mensagem bruta de privacidade/API no cache e sem falhar o enrichment.
+- O cache de progresso de player achievements permanece isolado por `steam_id64 + app_id`, preservando dados de outras contas para o mesmo jogo.
+- Validacao do corte: `cargo test` passou com 146 testes, mantendo o binario unitario sem carregar wrappers Tauri de comandos.
+- Xbox achievements continuam em hold por compliance; Epic nao foi iniciado neste ciclo.
+
+## Atualizacao 2026-05-26 - Steam achievements na UI
+
+- O contrato `LibraryEntry` passou a expor `game.achievements` quando o cache Steam tem progresso do jogador, com totais, percentual, data de cache e lista de conquistas derivada de schema + player achievements.
+- A biblioteca agora mostra resumo de conquistas nos cards/lista e o painel de detalhes ganhou uma secao compacta com progresso e lista de achievements.
+- A ordenacao `Conquistas: maior` e `Conquistas: menor` passou a usar progresso real e envia jogos sem dados de achievements para o fim em ambos os modos.
+- O seletor de ordenacao foi ajustado para manter contraste legivel no tema escuro do Windows.
+- Achievements Steam hidden bloqueadas aparecem como `Conquista secreta`, com conteudo oculto por padrao e revelacao manual por clique/teclado; hidden ja desbloqueadas aparecem normalmente.
+- O fluxo permanece best-effort: falta de achievements nao bloqueia boot, listagem, login, sincronizacao principal ou launch.
+- Xbox achievements continuam em hold por compliance; Epic nao foi iniciado neste ciclo.
+
+## Atualizacao 2026-05-26 - Preview e modal de Steam achievements
+
+- A secao de conquistas no painel de detalhes passou de lista inline longa para preview compacto, com progresso, barra, grupos de conquistas alcancadas/pendentes, contador `+N` quando ha mais itens e acao `Ver todas`.
+- O modal de Steam achievements mostra a lista completa recebida pelo frontend, com busca, contador de resultados, scroll interno e fechamento por botao, clique fora ou `Escape`, mantendo suporte a listas grandes como jogos com centenas de achievements.
+- A ordenacao da lista de achievements foi centralizada no frontend: alcancadas primeiro, depois bloqueadas, com hidden bloqueadas apos as nao-hidden e ordenacao alfabetica pelo texto visivel.
+- A busca usa apenas o texto visivel: hidden bloqueadas nao reveladas nao vazam nome/descricao reais, mas passam a ser encontradas por esse conteudo depois da revelacao manual.
+- Hidden ja desbloqueadas continuam visiveis normalmente e agora exibem indicador discreto `(secreta)`.
+- Percentual global de jogadores ficou fora deste ciclo; Xbox achievements continuam em hold por compliance; Epic nao foi iniciado.
