@@ -258,3 +258,13 @@ Resultado validado: lint/build aprovados, smoke frontend com 29 testes passando 
 - Escopo registrado: Steam enrichment best-effort em background; Xbox achievements cross-title aguardando confirmacao oficial/compliance.
 - O backend passou a preparar cache SQLite para achievements Steam e eventos de enrichment em background; a UI mostra um indicador discreto sem bloquear a biblioteca.
 - O enrichment Steam foi atualizado de um limite unico de 50 para processamento continuo em background, respeitando lote interno conservador, backoff/pausa entre requisicoes e parada imediata quando houver rate limit.
+
+## Atualizacao 2026-05-26
+
+- O gate Rust do backend Tauri no Windows foi restaurado depois de `cargo test` compilar, mas o binario unitario abortar antes da suite com `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)`.
+- A causa confirmada foi carregamento de superficies nativas Tauri/Wry/Tao no binario unitario `app_lib-*.exe`, que importavam `TaskDialogIndirect` de `comctl32.dll`; sem manifesto Common Controls v6, o Windows resolvia o `comctl32` antigo e encerrava o processo antes do harness de testes.
+- Para manter o gate estavel, `run()`, `bootstrap_library`, o modulo de comandos Tauri e os fluxos Steam OpenID/Xbox Live dependentes de `AppHandle`, eventos ou webview ficaram fora do build unitario por `cfg(test)`, sem alterar o runtime normal do aplicativo.
+- Em seguida, a cobertura command-adjacent foi recuperada sem reintroduzir Tauri/Wry/Tao no binario unitario: a logica de preflight da sincronizacao Steam por conta foi extraida para `command_logic`, incluindo resolucao de SteamID64/API key, mapeamento de erros do AuthVault e guarda contra sincronizacao concorrente.
+- Os wrappers `#[tauri::command]` permanecem finos e continuam fora dos testes unitarios diretos quando isso exigiria carregar o runtime nativo; a logica de negocio por tras deles voltou a ser testada por helpers puros.
+- Validacoes do corte: `cargo test` com `CARGO_TARGET_DIR` local passou com 141 testes executados, `cargo fmt -- --check` passou e `cargo check` passou. Tambem foi confirmado por `dumpbin /imports` que o binario unitario filtrado nao voltou a importar `comctl32.dll`/`TaskDialogIndirect`.
+- O proximo ciclo de roadmap permanece achievements, nao Epic.
