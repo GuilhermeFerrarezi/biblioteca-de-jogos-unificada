@@ -6,8 +6,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+#[cfg(not(test))]
 use std::sync::{mpsc, Arc, Mutex};
+#[cfg(not(test))]
 use std::time::Duration;
+#[cfg(not(test))]
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use url::form_urlencoded;
 use url::Url;
@@ -215,6 +218,7 @@ impl fmt::Display for XboxLiveAuthError {
     }
 }
 
+#[cfg(not(test))]
 pub fn start_login(
     app: AppHandle,
     connection: Arc<Mutex<rusqlite::Connection>>,

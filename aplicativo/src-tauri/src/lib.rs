@@ -1,3 +1,6 @@
+#![cfg_attr(test, allow(dead_code))]
+
+#[cfg(not(test))]
 use tauri::{Emitter, Manager};
 
 mod events;
@@ -5,6 +8,7 @@ mod xbox_live_auth;
 mod xbox_provider;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(not(test))]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -81,6 +85,9 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+#[cfg(test)]
+pub fn run() {}
+
 struct AppState {
     connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
     auth_vault: std::sync::Arc<security::AuthVault>,
@@ -135,6 +142,7 @@ impl ProviderErrorDto {
     }
 }
 
+#[cfg(not(test))]
 fn bootstrap_library(
     handle: tauri::AppHandle,
     connection: std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
@@ -161,10 +169,244 @@ fn bootstrap_library(
     });
 }
 
+mod command_logic {
+    use super::{security, storage, AppState, ProviderErrorDto};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    pub(super) fn prepare_steam_account_sync(
+        state: &AppState,
+    ) -> Result<(SteamAccountSyncGuard<'_>, String, String), ProviderErrorDto> {
+        let sync_guard = SteamAccountSyncGuard::acquire(&state.steam_account_sync_in_progress)?;
+        let steam_id = {
+            let connection = state.connection.lock().map_err(|_| {
+                ProviderErrorDto::steam(
+                    "local_database_lock_unavailable",
+                    "Nao foi possivel acessar o banco local para ler a conta Steam.",
+                    true,
+                    "preflight",
+                    Some("falha ao adquirir o lock local".to_string()),
+                )
+            })?;
+
+            storage::read_steam_account_config(&connection).map_err(|error| {
+                ProviderErrorDto::steam(
+                    "steam_account_read_failed",
+                    "Nao foi possivel ler a conta Steam configurada.",
+                    true,
+                    "preflight",
+                    Some(error.to_string()),
+                )
+            })?
+        };
+
+        let (steam_id, api_key) =
+            resolve_steam_sync_credentials(steam_id, state.auth_vault.steam_web_api_key())?;
+
+        Ok((sync_guard, steam_id, api_key))
+    }
+
+    fn resolve_steam_sync_credentials(
+        steam_id: Option<String>,
+        api_key: Result<Option<String>, security::AuthVaultError>,
+    ) -> Result<(String, String), ProviderErrorDto> {
+        let steam_id = steam_id.ok_or_else(|| {
+            ProviderErrorDto::steam(
+                "steam_account_missing",
+                "Configure o SteamID64 da conta Steam antes de sincronizar pela Web API.",
+                true,
+                "preflight",
+                Some("steam_id64 ausente".to_string()),
+            )
+        })?;
+
+        let api_key = api_key
+            .map_err(|error| {
+                ProviderErrorDto::steam(
+                    "steam_web_api_key_unavailable",
+                    "Nao foi possivel acessar a Steam Web API key no cofre seguro.",
+                    true,
+                    "preflight",
+                    Some(error.to_string()),
+                )
+            })?
+            .ok_or_else(|| {
+                ProviderErrorDto::steam(
+                    "steam_web_api_key_missing",
+                    "Configure a Steam Web API key no cofre seguro antes de sincronizar.",
+                    true,
+                    "preflight",
+                    Some("credencial ausente no AuthVault".to_string()),
+                )
+            })?;
+
+        Ok((steam_id, api_key))
+    }
+
+    #[derive(Debug)]
+    pub(super) struct SteamAccountSyncGuard<'a> {
+        flag: &'a AtomicBool,
+    }
+
+    impl<'a> SteamAccountSyncGuard<'a> {
+        fn acquire(flag: &'a AtomicBool) -> Result<Self, ProviderErrorDto> {
+            flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .map(|_| Self { flag })
+                .map_err(|_| {
+                    ProviderErrorDto::steam(
+                        "steam_sync_already_running",
+                        "A sincronizacao da conta Steam ja esta em andamento. Aguarde terminar antes de iniciar novamente.",
+                        true,
+                        "preflight",
+                        Some("tentativa duplicada de sincronizacao Steam".to_string()),
+                    )
+                })
+        }
+    }
+
+    impl Drop for SteamAccountSyncGuard<'_> {
+        fn drop(&mut self) {
+            self.flag.store(false, Ordering::Release);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn resolve_steam_sync_credentials_rejects_missing_account() {
+            let error = resolve_steam_sync_credentials(None, Ok(Some("abcdef".to_string())))
+                .expect_err("missing steam account");
+
+            assert_eq!(error.code, "steam_account_missing");
+            assert_eq!(error.phase, "preflight");
+            assert!(error.recoverable);
+            assert_eq!(error.provider_id, "steam");
+            assert_eq!(
+                error.details_sanitized.as_deref(),
+                Some("steam_id64 ausente")
+            );
+        }
+
+        #[test]
+        fn resolve_steam_sync_credentials_rejects_missing_api_key() {
+            let error =
+                resolve_steam_sync_credentials(Some("76561198000000000".to_string()), Ok(None))
+                    .expect_err("missing api key");
+
+            assert_eq!(error.code, "steam_web_api_key_missing");
+            assert_eq!(error.phase, "preflight");
+            assert!(error.recoverable);
+            assert_eq!(error.provider_id, "steam");
+            assert_eq!(
+                error.details_sanitized.as_deref(),
+                Some("credencial ausente no AuthVault")
+            );
+        }
+
+        #[test]
+        fn resolve_steam_sync_credentials_maps_vault_errors() {
+            let error = resolve_steam_sync_credentials(
+                Some("76561198000000000".to_string()),
+                Err(security::AuthVaultError::LockUnavailable),
+            )
+            .expect_err("vault error");
+
+            assert_eq!(error.code, "steam_web_api_key_unavailable");
+            assert_eq!(error.phase, "preflight");
+            assert!(error.recoverable);
+            assert_eq!(error.provider_id, "steam");
+            assert!(!error
+                .details_sanitized
+                .as_deref()
+                .expect("details")
+                .is_empty());
+        }
+
+        #[test]
+        fn steam_account_sync_guard_rejects_duplicate_and_releases_on_drop() {
+            let flag = AtomicBool::new(false);
+            let guard = SteamAccountSyncGuard::acquire(&flag).expect("acquire first sync guard");
+            let duplicate =
+                SteamAccountSyncGuard::acquire(&flag).expect_err("reject duplicate sync guard");
+
+            assert_eq!(duplicate.code, "steam_sync_already_running");
+            assert_eq!(duplicate.phase, "preflight");
+            assert!(flag.load(Ordering::Acquire));
+
+            drop(guard);
+
+            assert!(!flag.load(Ordering::Acquire));
+            assert!(SteamAccountSyncGuard::acquire(&flag).is_ok());
+        }
+
+        #[test]
+        fn prepare_steam_account_sync_rejects_duplicate_sync() {
+            let state = test_app_state_with_database(
+                std::env::temp_dir().join(format!(
+                    "biblioteca-jogos-steam-duplicate-sync-{}.sqlite3",
+                    test_timestamp_millis()
+                )),
+                true,
+            );
+
+            let error =
+                prepare_steam_account_sync(&state).expect_err("reject duplicate steam sync");
+
+            assert_eq!(error.code, "steam_sync_already_running");
+            assert_eq!(error.phase, "preflight");
+            assert!(error.recoverable);
+        }
+
+        #[test]
+        fn prepare_steam_account_sync_releases_guard_after_preflight_error() {
+            let state = test_app_state_with_database(
+                std::env::temp_dir().join(format!(
+                    "biblioteca-jogos-steam-preflight-sync-{}.sqlite3",
+                    test_timestamp_millis()
+                )),
+                false,
+            );
+
+            let first_error =
+                prepare_steam_account_sync(&state).expect_err("missing steam account");
+            let second_error =
+                prepare_steam_account_sync(&state).expect_err("missing steam account again");
+
+            assert_eq!(first_error.code, "steam_account_missing");
+            assert_eq!(second_error.code, "steam_account_missing");
+            assert!(!state.steam_account_sync_in_progress.load(Ordering::Acquire));
+        }
+
+        fn test_app_state_with_database(path: std::path::PathBuf, sync_running: bool) -> AppState {
+            let connection = storage::open_database(&path).expect("open test database");
+            AppState {
+                connection: std::sync::Arc::new(std::sync::Mutex::new(connection)),
+                auth_vault: std::sync::Arc::new(security::AuthVault::system(
+                    std::env::temp_dir().join(format!(
+                        "biblioteca-jogos-auth-vault-{}",
+                        test_timestamp_millis()
+                    )),
+                )),
+                steam_account_sync_in_progress: std::sync::Arc::new(AtomicBool::new(sync_running)),
+                steam_enrichment_in_progress: std::sync::Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        fn test_timestamp_millis() -> u128 {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time after unix epoch")
+                .as_millis()
+        }
+    }
+}
+
+#[cfg(not(test))]
 mod commands {
     use super::{
-        launcher, security, steam_openid, steam_web_api, storage, xbox_live_auth, xbox_provider,
-        AppState,
+        command_logic, launcher, security, steam_openid, steam_web_api, storage, xbox_live_auth,
+        xbox_provider, AppState,
     };
     use crate::ProviderErrorDto;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -599,43 +841,6 @@ mod commands {
             .map_err(|error| error.to_string())?;
 
         Ok(state_dto)
-    }
-
-    fn resolve_steam_sync_credentials(
-        steam_id: Option<String>,
-        api_key: Result<Option<String>, security::AuthVaultError>,
-    ) -> Result<(String, String), ProviderErrorDto> {
-        let steam_id = steam_id.ok_or_else(|| {
-            ProviderErrorDto::steam(
-                "steam_account_missing",
-                "Configure o SteamID64 da conta Steam antes de sincronizar pela Web API.",
-                true,
-                "preflight",
-                Some("steam_id64 ausente".to_string()),
-            )
-        })?;
-
-        let api_key = api_key
-            .map_err(|error| {
-                ProviderErrorDto::steam(
-                    "steam_web_api_key_unavailable",
-                    "Nao foi possivel acessar a Steam Web API key no cofre seguro.",
-                    true,
-                    "preflight",
-                    Some(error.to_string()),
-                )
-            })?
-            .ok_or_else(|| {
-                ProviderErrorDto::steam(
-                    "steam_web_api_key_missing",
-                    "Configure a Steam Web API key no cofre seguro antes de sincronizar.",
-                    true,
-                    "preflight",
-                    Some("credencial ausente no AuthVault".to_string()),
-                )
-            })?;
-
-        Ok((steam_id, api_key))
     }
 
     fn warm_steam_artwork_cache_best_effort(
@@ -1242,31 +1447,7 @@ mod commands {
         state: &AppState,
         retry_marked_enrichment: bool,
     ) -> Result<storage::SyncSummaryDto, ProviderErrorDto> {
-        let _sync_guard = SteamAccountSyncGuard::acquire(&state.steam_account_sync_in_progress)?;
-        let steam_id = {
-            let connection = state.connection.lock().map_err(|_| {
-                ProviderErrorDto::steam(
-                    "local_database_lock_unavailable",
-                    "Nao foi possivel acessar o banco local para ler a conta Steam.",
-                    true,
-                    "preflight",
-                    Some("falha ao adquirir o lock local".to_string()),
-                )
-            })?;
-
-            storage::read_steam_account_config(&connection).map_err(|error| {
-                ProviderErrorDto::steam(
-                    "steam_account_read_failed",
-                    "Nao foi possivel ler a conta Steam configurada.",
-                    true,
-                    "preflight",
-                    Some(error.to_string()),
-                )
-            })?
-        };
-
-        let (steam_id, api_key) =
-            resolve_steam_sync_credentials(steam_id, state.auth_vault.steam_web_api_key())?;
+        let (_sync_guard, steam_id, api_key) = command_logic::prepare_steam_account_sync(state)?;
 
         let client = steam_web_api::ReqwestSteamWebApiClient::default();
         let remote_games = steam_web_api::fetch_owned_games(&client, &api_key, &steam_id)
@@ -1329,33 +1510,6 @@ mod commands {
         Ok(summary)
     }
 
-    #[derive(Debug)]
-    struct SteamAccountSyncGuard<'a> {
-        flag: &'a AtomicBool,
-    }
-
-    impl<'a> SteamAccountSyncGuard<'a> {
-        fn acquire(flag: &'a AtomicBool) -> Result<Self, ProviderErrorDto> {
-            flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .map(|_| Self { flag })
-                .map_err(|_| {
-                    ProviderErrorDto::steam(
-                        "steam_sync_already_running",
-                        "A sincronizacao da conta Steam ja esta em andamento. Aguarde terminar antes de iniciar novamente.",
-                        true,
-                        "preflight",
-                        Some("tentativa duplicada de sincronizacao Steam".to_string()),
-                    )
-                })
-        }
-    }
-
-    impl Drop for SteamAccountSyncGuard<'_> {
-        fn drop(&mut self) {
-            self.flag.store(false, Ordering::Release);
-        }
-    }
-
     #[tauri::command]
     pub fn update_manual_game(
         entry_id: String,
@@ -1412,138 +1566,6 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         launcher::launch_library_entry(&connection, &entry_id).map_err(|error| error.to_string())
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn resolve_steam_sync_credentials_rejects_missing_account() {
-            let error = resolve_steam_sync_credentials(None, Ok(Some("abcdef".to_string())))
-                .expect_err("missing steam account");
-
-            assert_eq!(error.code, "steam_account_missing");
-            assert_eq!(error.phase, "preflight");
-            assert!(error.recoverable);
-            assert_eq!(error.provider_id, "steam");
-            assert_eq!(
-                error.details_sanitized.as_deref(),
-                Some("steam_id64 ausente")
-            );
-        }
-
-        #[test]
-        fn resolve_steam_sync_credentials_rejects_missing_api_key() {
-            let error =
-                resolve_steam_sync_credentials(Some("76561198000000000".to_string()), Ok(None))
-                    .expect_err("missing api key");
-
-            assert_eq!(error.code, "steam_web_api_key_missing");
-            assert_eq!(error.phase, "preflight");
-            assert!(error.recoverable);
-            assert_eq!(error.provider_id, "steam");
-            assert_eq!(
-                error.details_sanitized.as_deref(),
-                Some("credencial ausente no AuthVault")
-            );
-        }
-
-        #[test]
-        fn resolve_steam_sync_credentials_maps_vault_errors() {
-            let error = resolve_steam_sync_credentials(
-                Some("76561198000000000".to_string()),
-                Err(security::AuthVaultError::LockUnavailable),
-            )
-            .expect_err("vault error");
-
-            assert_eq!(error.code, "steam_web_api_key_unavailable");
-            assert_eq!(error.phase, "preflight");
-            assert!(error.recoverable);
-            assert_eq!(error.provider_id, "steam");
-            assert!(!error
-                .details_sanitized
-                .as_deref()
-                .expect("details")
-                .is_empty());
-        }
-
-        #[test]
-        fn steam_account_sync_guard_rejects_duplicate_and_releases_on_drop() {
-            let flag = AtomicBool::new(false);
-            let guard = SteamAccountSyncGuard::acquire(&flag).expect("acquire first sync guard");
-            let duplicate =
-                SteamAccountSyncGuard::acquire(&flag).expect_err("reject duplicate sync guard");
-
-            assert_eq!(duplicate.code, "steam_sync_already_running");
-            assert_eq!(duplicate.phase, "preflight");
-            assert!(flag.load(Ordering::Acquire));
-
-            drop(guard);
-
-            assert!(!flag.load(Ordering::Acquire));
-            assert!(SteamAccountSyncGuard::acquire(&flag).is_ok());
-        }
-
-        #[test]
-        fn sync_steam_account_games_impl_rejects_duplicate_sync() {
-            let state = test_app_state_with_database(
-                std::env::temp_dir().join(format!(
-                    "biblioteca-jogos-steam-duplicate-sync-{}.sqlite3",
-                    test_timestamp_millis()
-                )),
-                true,
-            );
-
-            let error = sync_steam_account_games_impl(None, &state, false)
-                .expect_err("reject duplicate steam sync");
-
-            assert_eq!(error.code, "steam_sync_already_running");
-            assert_eq!(error.phase, "preflight");
-            assert!(error.recoverable);
-        }
-
-        #[test]
-        fn sync_steam_account_games_impl_releases_guard_after_preflight_error() {
-            let state = test_app_state_with_database(
-                std::env::temp_dir().join(format!(
-                    "biblioteca-jogos-steam-preflight-sync-{}.sqlite3",
-                    test_timestamp_millis()
-                )),
-                false,
-            );
-
-            let first_error = sync_steam_account_games_impl(None, &state, false)
-                .expect_err("missing steam account");
-            let second_error = sync_steam_account_games_impl(None, &state, false)
-                .expect_err("missing steam account again");
-
-            assert_eq!(first_error.code, "steam_account_missing");
-            assert_eq!(second_error.code, "steam_account_missing");
-            assert!(!state.steam_account_sync_in_progress.load(Ordering::Acquire));
-        }
-
-        fn test_app_state_with_database(path: std::path::PathBuf, sync_running: bool) -> AppState {
-            let connection = storage::open_database(&path).expect("open test database");
-            AppState {
-                connection: std::sync::Arc::new(std::sync::Mutex::new(connection)),
-                auth_vault: std::sync::Arc::new(security::AuthVault::system(
-                    std::env::temp_dir().join(format!(
-                        "biblioteca-jogos-auth-vault-{}",
-                        test_timestamp_millis()
-                    )),
-                )),
-                steam_account_sync_in_progress: std::sync::Arc::new(AtomicBool::new(sync_running)),
-                steam_enrichment_in_progress: std::sync::Arc::new(AtomicBool::new(false)),
-            }
-        }
-
-        fn test_timestamp_millis() -> u128 {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time after unix epoch")
-                .as_millis()
-        }
     }
 }
 
@@ -4096,14 +4118,17 @@ mod steam_web_api {
 }
 
 mod steam_openid {
+    #[cfg(not(test))]
     use super::storage;
     use rand::{rngs::OsRng, RngCore};
     use serde::Serialize;
     use std::fmt;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    #[cfg(not(test))]
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+    #[cfg(not(test))]
     use tauri::{AppHandle, Emitter};
     use url::Url;
 
@@ -4147,6 +4172,7 @@ mod steam_openid {
         }
     }
 
+    #[cfg(not(test))]
     pub fn start_login(
         app: AppHandle,
         connection: Arc<Mutex<rusqlite::Connection>>,
