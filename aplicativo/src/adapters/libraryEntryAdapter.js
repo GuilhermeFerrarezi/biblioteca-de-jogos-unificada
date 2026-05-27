@@ -26,8 +26,11 @@ export const getAchievementProgress = (entry) => {
       memberEntry?.game?.achievements,
     ]) ?? []),
   ]
+  const normalizedCandidates = candidates.map(normalizeAchievementProgress)
 
-  return candidates.map(normalizeAchievementProgress).find((progress) => progress.hasData) ?? normalizeAchievementProgress(null)
+  return normalizedCandidates.find((progress) => progress.hasData) ??
+    normalizedCandidates.find((progress) => progress.hasCache) ??
+    normalizeAchievementProgress(null)
 }
 
 export const getAchievementSummaryLabel = (entry) => {
@@ -116,10 +119,66 @@ export const filterAchievementItems = (items, searchTerm, revealedSecretAchievem
   )
 }
 
+export const buildAchievementObservability = (progress, steamEnrichmentStatus = null, now = new Date()) => {
+  if (steamEnrichmentStatus?.rateLimited) {
+    return {
+      tone: 'warning',
+      text: 'Limite da Steam atingido',
+      detail: steamEnrichmentStatus.detail || 'Nova tentativa depois, sem bloquear a biblioteca.',
+      expandable: true,
+    }
+  }
+
+  if (steamEnrichmentStatus?.phase === 'running') {
+    return {
+      tone: 'running',
+      text: 'Sincronizando conquistas...',
+      detail: steamEnrichmentStatus.detail || 'O enrichment Steam roda em background.',
+      expandable: false,
+    }
+  }
+
+  if (steamEnrichmentStatus?.phase === 'failed') {
+    return {
+      tone: 'warning',
+      text: steamEnrichmentStatus.recoverable === false ? 'Falha no enrichment' : 'Falha temporaria',
+      detail: steamEnrichmentStatus.detail || 'O enrichment Steam falhou sem expor payload bruto.',
+      expandable: true,
+    }
+  }
+
+  if (progress?.hasCache && progress?.hasData) {
+    return {
+      tone: 'ready',
+      text: formatAchievementCacheAge(progress.fetchedAt, now),
+      detail: `Cache Steam atualizado em ${formatAchievementCacheDate(progress.fetchedAt)}.`,
+      expandable: false,
+    }
+  }
+
+  if (progress?.hasCache) {
+    return {
+      tone: 'muted',
+      text: 'Sem dados da Steam',
+      detail: 'A Steam não disponibilizou dados para este jogo. Pode ser privacidade, indisponibilidade ou ausencia de conquistas conhecidas.',
+      expandable: true,
+    }
+  }
+
+  return {
+    tone: 'pending',
+    text: 'Dados ainda não sincronizados',
+    detail: 'As conquistas e metadados Steam serao preenchidos pelo enrichment em background quando disponiveis.',
+    expandable: false,
+  }
+}
+
 function normalizeAchievementProgress(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return {
       hasData: true,
+      hasCache: true,
+      fetchedAt: '',
       unlocked: 0,
       total: 0,
       percentage: Math.max(0, value),
@@ -130,6 +189,8 @@ function normalizeAchievementProgress(value) {
   if (!value || typeof value !== 'object') {
     return {
       hasData: false,
+      hasCache: false,
+      fetchedAt: '',
       unlocked: 0,
       total: 0,
       percentage: 0,
@@ -148,15 +209,65 @@ function normalizeAchievementProgress(value) {
       ? (unlocked / total) * 100
       : 0
   const items = Array.isArray(value.items) ? value.items : []
+  const fetchedAt = String(value.fetchedAt ?? value.fetched_at ?? value.cachedAt ?? value.cached_at ?? '').trim()
   const hasData = total > 0 || items.length > 0 || Number.isFinite(directPercentage)
+  const hasCache = hasData || Boolean(fetchedAt)
 
   return {
     hasData,
+    hasCache,
+    fetchedAt,
     unlocked: Number.isFinite(unlocked) ? unlocked : 0,
     total: Number.isFinite(total) ? total : items.length,
     percentage: Math.max(0, percentage),
     items,
   }
+}
+
+function formatAchievementCacheAge(fetchedAt, now) {
+  const fetchedDate = parseDate(fetchedAt)
+  const currentDate = now instanceof Date ? now : parseDate(now)
+
+  if (!fetchedDate || !currentDate) {
+    return 'Cache atualizado'
+  }
+
+  const diffMinutes = Math.max(0, Math.floor((currentDate.getTime() - fetchedDate.getTime()) / 60000))
+
+  if (diffMinutes < 1) {
+    return 'Atualizado agora'
+  }
+
+  if (diffMinutes < 60) {
+    return `Atualizado ha ${diffMinutes} min`
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60)
+
+  if (diffHours < 24) {
+    return `Atualizado ha ${diffHours}h`
+  }
+
+  const diffDays = Math.floor(diffHours / 24)
+  return `Atualizado ha ${diffDays}d`
+}
+
+function formatAchievementCacheDate(fetchedAt) {
+  const fetchedDate = parseDate(fetchedAt)
+
+  if (!fetchedDate) {
+    return 'data desconhecida'
+  }
+
+  return new Intl.DateTimeFormat('pt-BR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(fetchedDate)
+}
+
+function parseDate(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
 }
 
 const createSlug = (value) =>

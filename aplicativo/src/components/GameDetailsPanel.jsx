@@ -2,6 +2,7 @@ import { Archive, Clock3, Download, Eye, Heart, LockKeyhole, Pencil, Play, Searc
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  buildAchievementObservability,
   filterAchievementItems,
   getAchievementDisplayState,
   getAchievementKey,
@@ -64,6 +65,7 @@ function GameDetailsPanel({
   selectedLaunchPlatformId,
   selectedEntry,
   showLibraryLoading,
+  steamEnrichmentStatus,
   onArchiveEntry,
   onEditEntry,
   onInstallAction,
@@ -316,10 +318,12 @@ function GameDetailsPanel({
             <SteamAchievementsSection
               achievements={achievementProgress}
               gameTitle={selectedEntry.game.title}
+              isSteamGame={detailsEntry?.primaryPlatformId === 'steam'}
               libraryLabel={displayedPlatformLabel}
               isModalOpen={isAchievementsModalOpen}
               modalTriggerRef={achievementsModalTriggerRef}
               searchTerm={achievementSearchTerm}
+              steamEnrichmentStatus={steamEnrichmentStatus}
               onCloseModal={() => {
                 setIsAchievementsModalOpen(false)
                 setAchievementSearchTerm('')
@@ -364,10 +368,12 @@ const ACHIEVEMENT_PREVIEW_LOCKED_LIMIT = 3
 function SteamAchievementsSection({
   achievements,
   gameTitle,
+  isSteamGame,
   libraryLabel,
   isModalOpen,
   modalTriggerRef,
   searchTerm,
+  steamEnrichmentStatus,
   onCloseModal,
   onOpenModal,
   onSearchTermChange,
@@ -385,6 +391,17 @@ function SteamAchievementsSection({
   const previewItems = [...achievedPreviewItems, ...lockedPreviewItems]
   const remainingCount = Math.max(0, achievements.items.length - previewItems.length)
   const achievementLibraryTitle = `${libraryLabel || 'Biblioteca'} achievements`
+  const achievementObservability = useMemo(
+    () => isSteamGame
+      ? buildAchievementObservability(achievements, steamEnrichmentStatus)
+      : {
+          tone: 'muted',
+          text: 'Sem dados',
+          detail: 'Sem dados de conquistas para este jogo.',
+          expandable: false,
+        },
+    [achievements, isSteamGame, steamEnrichmentStatus],
+  )
 
   return (
     <section className="achievement-panel" aria-label={`Conquistas ${libraryLabel || 'da biblioteca'}`}>
@@ -393,9 +410,12 @@ function SteamAchievementsSection({
           <span>{achievementLibraryTitle}</span>
           <strong>{achievements.hasData ? `${achievements.unlocked}/${achievements.total}` : 'Sem dados'}</strong>
         </div>
-        {achievements.hasData ? (
-          <span className="achievement-progress-value">{Math.round(achievements.percentage)}%</span>
-        ) : null}
+        <div className="achievement-panel-status">
+          {achievements.hasData ? (
+            <span className="achievement-progress-value">{Math.round(achievements.percentage)}%</span>
+          ) : null}
+          <AchievementObservabilityChip status={achievementObservability} />
+        </div>
       </div>
       {achievements.hasData ? (
         <>
@@ -447,9 +467,39 @@ function SteamAchievementsSection({
           ) : null}
         </>
       ) : (
-        <p className="achievement-empty-state">Sem dados de conquistas para este jogo.</p>
+        <p className="achievement-empty-state">{achievementObservability.detail}</p>
       )}
     </section>
+  )
+}
+
+function AchievementObservabilityChip({ status }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  if (!status) {
+    return null
+  }
+
+  return (
+    <div className="achievement-status-wrap" role="status" aria-live="polite">
+      <span className="achievement-status-chip" data-tone={status.tone} title={status.detail}>
+        <span className="achievement-status-dot" aria-hidden="true" />
+        {status.text}
+      </span>
+      {status.expandable ? (
+        <>
+          <button
+            className="achievement-status-toggle"
+            type="button"
+            aria-expanded={isExpanded}
+            onClick={() => setIsExpanded((currentValue) => !currentValue)}
+          >
+            {isExpanded ? 'Ocultar' : 'Detalhes'}
+          </button>
+          {isExpanded ? <p className="achievement-status-detail">{status.detail}</p> : null}
+        </>
+      ) : null}
+    </div>
   )
 }
 

@@ -1,18 +1,17 @@
 import { FolderPlus, RefreshCw, SlidersHorizontal } from 'lucide-react'
-import { useSteamEnrichmentStatus } from '../hooks/events/useSteamEnrichmentStatus'
 import SteamIcon from './icons/SteamIcon'
 
 function Topbar({
   entriesCount,
   isLocalSyncing,
   isSteamSyncing,
+  steamEnrichmentStatus,
   onAddManualGame,
   onFilterClick,
   onSyncLocalGames,
   onSyncSteamGames,
 }) {
   const isSyncing = isLocalSyncing || isSteamSyncing
-  const steamEnrichmentStatus = useSteamEnrichmentStatus()
 
   return (
     <header className="topbar" aria-busy={isSyncing}>

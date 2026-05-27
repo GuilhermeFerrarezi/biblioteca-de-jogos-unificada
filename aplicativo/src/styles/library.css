@@ -713,11 +713,109 @@ button:disabled {
   font-size: 16px;
 }
 
+.achievement-panel-status {
+  display: flex !important;
+  align-items: flex-end;
+  gap: 8px !important;
+}
+
 .achievement-progress-value {
   padding: 4px 7px;
   border-radius: 999px;
   background: #1f3b25;
   color: #d9f99d !important;
+}
+
+.achievement-status-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.achievement-status-chip {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid #263741;
+  border-radius: 999px;
+  background: #101a20;
+  color: #b5c5c1;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.achievement-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #91a39f;
+}
+
+.achievement-status-chip[data-tone='ready'] {
+  border-color: #1f5f45;
+  color: #bbf7d0;
+}
+
+.achievement-status-chip[data-tone='ready'] .achievement-status-dot {
+  background: #86efac;
+}
+
+.achievement-status-chip[data-tone='running'] {
+  border-color: #1f4c5f;
+  color: #bae6fd;
+}
+
+.achievement-status-chip[data-tone='running'] .achievement-status-dot {
+  background: #38bdf8;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+.achievement-status-chip[data-tone='warning'] {
+  border-color: #66511e;
+  color: #fde68a;
+}
+
+.achievement-status-chip[data-tone='warning'] .achievement-status-dot {
+  background: #facc15;
+}
+
+.achievement-status-chip[data-tone='pending'],
+.achievement-status-chip[data-tone='muted'] {
+  border-color: #263741;
+  color: #b5c5c1;
+}
+
+.achievement-status-toggle {
+  border: 0;
+  background: transparent;
+  color: #b5c5c1;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.achievement-status-toggle:hover,
+.achievement-status-toggle:focus-visible {
+  color: #edf4f2;
+  outline: 0;
+  text-decoration: underline;
+}
+
+.achievement-status-detail {
+  flex-basis: 100%;
+  margin: 0;
+  color: #91a39f;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: right;
 }
 
 .achievement-progress-bar {

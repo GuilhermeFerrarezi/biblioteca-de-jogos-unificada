@@ -312,3 +312,18 @@ Resultado validado: lint/build aprovados, smoke frontend com 29 testes passando 
 - A UI de hidden bloqueada revelada agora mostra o indicador discreto `(secreta)` e usa o fallback especifico `A Steam não disponibilizou a descrição desta conquista secreta.` quando a descricao real nao estiver disponivel.
 - Nao foi identificado endpoint oficial para listar a biblioteca compartilhada completa do Steam Families; o tema permanece como pesquisa futura/experimental, sem implementacao neste ciclo.
 - Observabilidade completa nao foi implementada; Steam Families nao foi implementado; Xbox achievements continuam em hold por compliance; Epic nao foi iniciado.
+
+## Atualizacao 2026-05-27 - Observabilidade leve Steam enrichment
+
+- A area compacta de Steam achievements no painel de detalhes passou a exibir um chip discreto de observabilidade, reaproveitando o contrato existente `game.achievements.fetchedAt` e os eventos sanitizados `steam-enrichment-*`.
+- O painel diferencia cache atualizado (`Atualizado ha ...`), dados ainda nao sincronizados, cache presente sem dados (`A Steam nao disponibilizou dados para este jogo`), enrichment em andamento, falha temporaria e rate limit/backoff. Estados com alerta podem ser expandidos para detalhes curtos, sem payload bruto ou segredo.
+- Nao foi adicionado dashboard nem tela grande; o feedback global da Topbar continua usando os eventos em background e o painel do jogo mostra apenas o estado relevante para aquele registro.
+- O backend nao precisou de novo DTO neste corte: rate limit, erro recuperavel e progresso continuam vindo de eventos sanitizados; estados por jogo usam cache presente/ausente e `fetchedAt`.
+- Steam Families permanece pesquisa futura/experimental sem endpoint oficial identificado; Xbox achievements continuam em hold por compliance; Epic nao foi iniciado.
+
+## Atualizacao 2026-05-27 - Testes React de Steam achievements
+
+- Foi adicionada infraestrutura minima de testes React com Vitest, jsdom e React Testing Library, separada da suite legada `node:test`.
+- O novo comando `npm run test:unit` cobre componentes React em `src/components/**/*.test.jsx`; `npm run test:smoke` continua responsavel pelos testes de dominio/adapters/services existentes.
+- A primeira suite de componente cobre o painel de Steam achievements: preview, modal via portal, foco na busca, fechamento por `Escape`/botao, busca segura, revelacao de hidden por clique/teclado, fallback especifico, ordem do modal, preview sem herdar revelacao e chips de observabilidade.
+- Nenhum backend foi alterado; DTO granular por AppID nao foi implementado; Xbox achievements continuam em hold por compliance; Epic nao foi iniciado.

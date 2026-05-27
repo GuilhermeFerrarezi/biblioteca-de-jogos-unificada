@@ -130,6 +130,8 @@ const buildSteamEnrichmentDetail = ({
 }
 
 export const normalizeSteamEnrichmentStatus = (phase, payload) => {
+  const errorPayload = payload?.error && typeof payload.error === 'object' ? payload.error : null
+  const partialSummary = payload?.partialSummary ?? payload?.partial_summary ?? null
   const totalCandidates = getPayloadNumber(payload, ['totalCandidates', 'total_candidates'])
   const legacyTotal = getPayloadNumber(payload, ['total', 'count', 'totalGames', 'total_games'])
   const total = totalCandidates ?? legacyTotal
@@ -141,10 +143,24 @@ export const normalizeSteamEnrichmentStatus = (phase, payload) => {
   const percent = rawPercent === null
     ? null
     : Math.max(0, Math.min(100, Math.round(rawPercent <= 1 ? rawPercent * 100 : rawPercent)))
-  const detail = getPayloadText(payload, ['message', 'detail', 'stage', 'title'])
+  const detail = getPayloadText(errorPayload, ['message', 'detail', 'details', 'detailsSanitized', 'details_sanitized']) ||
+    getPayloadText(payload, ['message', 'detail', 'stage', 'title'])
+  const recoverable = errorPayload ? getPayloadBoolean(errorPayload, ['recoverable']) : null
+  const errorCode = getPayloadText(errorPayload, ['code'])
+  const errorPhase = getPayloadText(errorPayload, ['phase'])
   const rateLimited = hasPayloadValue(payload, ['rateLimited', 'rate_limited'])
     ? getPayloadBoolean(payload, ['rateLimited', 'rate_limited'])
-    : false
+    : hasPayloadValue(partialSummary, ['rateLimited', 'rate_limited'])
+      ? getPayloadBoolean(partialSummary, ['rateLimited', 'rate_limited'])
+      : errorCode === 'steam_web_api_rate_limited'
+  const failedSummaryDetail = buildFailedSummaryDetail({ errorCode, errorPhase, recoverable })
+  const failedDetail = [detail, failedSummaryDetail].filter(Boolean).join(' ')
+  const completedPayload = partialSummary && phase === 'failed' ? partialSummary : payload
+  const failedCompleted = getPayloadNumber(completedPayload, ['completed', 'processed', 'current', 'done'])
+  const failedTotal = getPayloadNumber(completedPayload, ['totalCandidates', 'total_candidates', 'total'])
+  const failedProgress = failedCompleted !== null && failedTotal
+    ? `${failedCompleted}/${failedTotal} candidatos processados.`
+    : ''
   const fetchedArtwork = getPayloadBoolean(payload, ['fetchedArtwork', 'fetched_artwork'])
   const fetchedAchievementSchemas = getPayloadBoolean(payload, [
     'fetchedAchievementSchemas',
@@ -164,7 +180,7 @@ export const normalizeSteamEnrichmentStatus = (phase, payload) => {
     batchCompleted,
     batchTotal,
     batchesCompleted,
-    rateLimited,
+    rateLimited: phase === 'completed' ? false : rateLimited,
     fetchedArtwork,
     fetchedAchievementSchemas,
     fetchedPlayerAchievements,
@@ -182,9 +198,12 @@ export const normalizeSteamEnrichmentStatus = (phase, payload) => {
   if (phase === 'failed') {
     return {
       phase,
-      rateLimited: false,
+      code: errorCode,
+      errorPhase,
+      recoverable,
+      rateLimited,
       text: 'Falha ao enriquecer Steam',
-      detail: detail || 'O enriquecimento Steam em background falhou.',
+      detail: [failedDetail || 'O enriquecimento Steam em background falhou.', failedProgress].filter(Boolean).join(' '),
     }
   }
 
@@ -221,4 +240,22 @@ export const normalizeSteamEnrichmentStatus = (phase, payload) => {
     text: 'Enriquecendo Steam',
     detail: detailText,
   }
+}
+
+function buildFailedSummaryDetail({ errorCode, errorPhase, recoverable }) {
+  const details = []
+
+  if (errorCode) {
+    details.push(`Codigo: ${errorCode}.`)
+  }
+
+  if (errorPhase) {
+    details.push(`Fase: ${errorPhase}.`)
+  }
+
+  if (recoverable !== null) {
+    details.push(`Recuperavel: ${recoverable ? 'sim' : 'nao'}.`)
+  }
+
+  return details.join(' ')
 }

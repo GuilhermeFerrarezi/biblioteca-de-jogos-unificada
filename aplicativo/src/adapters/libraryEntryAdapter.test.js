@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  buildAchievementObservability,
   buildManualLibraryEntry,
   filterAchievementItems,
   getAchievementDisplayState,
+  getAchievementProgress,
   sortAchievementItems,
   validateManualGameInput,
 } from './libraryEntryAdapter.js'
@@ -200,4 +202,74 @@ test('getAchievementDisplayState marks unlocked hidden achievements without mask
   assert.equal(display.isHidden, true)
   assert.equal(display.isAchieved, true)
   assert.equal(display.name, 'Hidden path')
+})
+
+test('getAchievementProgress keeps empty Steam cache distinct from absent cache', () => {
+  const progress = getAchievementProgress({
+    game: {
+      achievements: {
+        providerId: 'steam',
+        appId: '413150',
+        total: 0,
+        unlocked: 0,
+        fetchedAt: '2026-05-27T12:00:00.000Z',
+        items: [],
+      },
+    },
+  })
+
+  assert.equal(progress.hasData, false)
+  assert.equal(progress.hasCache, true)
+  assert.equal(progress.fetchedAt, '2026-05-27T12:00:00.000Z')
+})
+
+test('buildAchievementObservability describes updated and missing Steam achievement cache', () => {
+  const updated = buildAchievementObservability(
+    {
+      hasData: true,
+      hasCache: true,
+      fetchedAt: '2026-05-27T11:30:00.000Z',
+      items: [{ apiName: 'FIRST' }],
+    },
+    null,
+    new Date('2026-05-27T12:00:00.000Z'),
+  )
+  const missing = buildAchievementObservability({ hasData: false, hasCache: false, items: [] })
+
+  assert.equal(updated.tone, 'ready')
+  assert.equal(updated.text, 'Atualizado ha 30 min')
+  assert.equal(missing.tone, 'pending')
+  assert.equal(missing.text, 'Dados ainda não sincronizados')
+})
+
+test('buildAchievementObservability distinguishes unavailable data and Steam limits', () => {
+  const unavailable = buildAchievementObservability({
+    hasData: false,
+    hasCache: true,
+    fetchedAt: '2026-05-27T12:00:00.000Z',
+    items: [],
+  })
+  const rateLimited = buildAchievementObservability(
+    { hasData: true, hasCache: true, items: [{ apiName: 'FIRST' }] },
+    {
+      phase: 'failed',
+      rateLimited: true,
+      detail: 'Aguardando limite de requisicoes da Steam.',
+    },
+  )
+  const recoverable = buildAchievementObservability(
+    { hasData: false, hasCache: false, items: [] },
+    {
+      phase: 'failed',
+      recoverable: true,
+      detail: 'Codigo: steam_web_api_network_unavailable. Recuperavel: sim.',
+    },
+  )
+
+  assert.equal(unavailable.tone, 'muted')
+  assert.equal(unavailable.text, 'Sem dados da Steam')
+  assert.equal(rateLimited.tone, 'warning')
+  assert.equal(rateLimited.text, 'Limite da Steam atingido')
+  assert.equal(recoverable.tone, 'warning')
+  assert.equal(recoverable.text, 'Falha temporaria')
 })

@@ -13,4 +13,9 @@ export default defineConfig({
     exclude: ['@tauri-apps/api/core'],
   },
   plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    include: ['src/components/**/*.test.jsx'],
+    setupFiles: './src/test/setup.js',
+  },
 })

@@ -5,6 +5,7 @@ import ManualGameModal from '../components/ManualGameModal'
 import Sidebar from '../components/Sidebar'
 import StatsGrid from '../components/StatsGrid'
 import Topbar from '../components/Topbar'
+import { useSteamEnrichmentStatus } from '../hooks/events/useSteamEnrichmentStatus'
 import { useLibraryPageState } from '../hooks/useLibraryPageState'
 import '../styles/library.css'
 
@@ -12,6 +13,7 @@ const AccountsSettingsPage = lazy(() => import('./AccountsSettingsPage'))
 
 function LibraryPage() {
   const library = useLibraryPageState()
+  const steamEnrichmentStatus = useSteamEnrichmentStatus()
   const [activeSection, setActiveSection] = useState('library')
 
   const handleLibraryFilterChange = (filter) => {
@@ -72,6 +74,7 @@ function LibraryPage() {
               entriesCount={library.groupedEntries.length}
               isLocalSyncing={library.isLocalSyncing}
               isSteamSyncing={library.isSteamSyncing}
+              steamEnrichmentStatus={steamEnrichmentStatus}
               onAddManualGame={library.openManualGameModal}
               onFilterClick={library.handleClearLibraryFilters}
               onSyncLocalGames={library.handleSyncLocalGames}
@@ -107,6 +110,7 @@ function LibraryPage() {
                 selectedLaunchPlatformId={library.selectedLaunchPlatformId}
                 selectedEntry={library.selectedEntry}
                 showLibraryLoading={library.showLibraryLoading}
+                steamEnrichmentStatus={steamEnrichmentStatus}
                 onArchiveEntry={library.handleArchiveSelectedEntry}
                 onEditEntry={library.handleEditSelectedEntry}
                 onInstallAction={library.handleInstallAction}

@@ -7,6 +7,7 @@
     "dev": "set VITE_CACHE_DIR=%LOCALAPPDATA%\\BibliotecaJogosUnificada\\vite-cache&& vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test:unit": "vitest run",
     "test:smoke": "node --test src/domain/libraryLaunch.test.js src/domain/libraryGrouping.test.js src/domain/steamEnrichmentStatus.test.js src/adapters/libraryEntryAdapter.test.js src/services/providerErrorFeedback.test.js src/services/librarySettings.test.js src/hooks/useLibraryFiltering.test.js",
     "onedrive:keep-local": "attrib +P -U .\\* /S /D",
     "preview": "vite preview",
@@ -24,13 +25,17 @@
   "devDependencies": {
     "@eslint/js": "9.28.0",
     "@tauri-apps/cli": "2.11.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react": "4.3.4",
     "eslint": "9.28.0",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "5.1.0",
     "eslint-plugin-react-refresh": "0.4.14",
     "globals": "15.13.0",
-    "vite": "6.4.2"
+    "jsdom": "^24.1.3",
+    "vite": "6.4.2",
+    "vitest": "^4.1.7"
   },
   "overrides": {
     "@eslint/plugin-kit": "0.3.4"
