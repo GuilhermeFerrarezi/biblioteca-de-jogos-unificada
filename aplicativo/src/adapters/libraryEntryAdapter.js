@@ -50,13 +50,14 @@ export const getAchievementDisplayState = (achievement, revealedSecretAchievemen
   const isSecretLocked = isHidden && !isAchieved
   const isRevealed = isSecretLocked && revealedSecretAchievements.has(apiName)
   const shouldMask = isSecretLocked && !isRevealed
-  const name = shouldMask ? 'Conquista secreta' : achievement?.name || apiName || 'Conquista'
+  const name = shouldMask ? 'Conquista secreta' : achievement?.name || apiName || 'Conquista sem nome'
   const description = shouldMask
     ? 'Conteudo oculto ate voce revelar manualmente.'
-    : achievement?.description || (isAchieved ? 'Conquista desbloqueada.' : 'Ainda bloqueada.')
+    : achievement?.description || 'A Steam não disponibilizou a descrição desta conquista secreta.'
   const iconUrl = shouldMask
     ? achievement?.lockedIconUrl ?? achievement?.locked_icon_url ?? achievement?.iconUrl ?? achievement?.icon_url
     : achievement?.iconUrl ?? achievement?.icon_url ?? achievement?.lockedIconUrl ?? achievement?.locked_icon_url
+  const visibleText = `${name} ${description} ${isHidden ? 'secreta' : ''}`.trim()
 
   return {
     apiName,
@@ -68,7 +69,7 @@ export const getAchievementDisplayState = (achievement, revealedSecretAchievemen
     isSecretLocked,
     name,
     shouldMask,
-    visibleText: `${name} ${description}`.trim(),
+    visibleText,
   }
 }
 
@@ -91,7 +92,9 @@ export const sortAchievementItems = (items, revealedSecretAchievements = new Set
         return leftSecretRank - rightSecretRank
       }
 
-      const textComparison = left.display.name.localeCompare(right.display.name, 'pt-BR', {
+      const leftSortName = left.display.isSecretLocked ? 'Conquista secreta' : left.display.name
+      const rightSortName = right.display.isSecretLocked ? 'Conquista secreta' : right.display.name
+      const textComparison = leftSortName.localeCompare(rightSortName, 'pt-BR', {
         sensitivity: 'base',
       })
 

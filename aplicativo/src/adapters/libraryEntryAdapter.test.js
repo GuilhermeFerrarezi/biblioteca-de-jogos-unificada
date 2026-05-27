@@ -110,16 +110,69 @@ test('sortAchievementItems orders achieved, visible locked and secret locked by 
   ])
 })
 
+test('sortAchievementItems keeps locked secret order stable after reveal', () => {
+  const achievements = [
+    { apiName: 'VISIBLE_LOCKED', name: 'Alpha', description: 'Visible A', hidden: false, achieved: false },
+    { apiName: 'LOCKED_SECRET_B', name: 'Hidden B', description: 'Secret B', hidden: true, achieved: false },
+    { apiName: 'LOCKED_SECRET_A', name: 'Hidden A', description: 'Secret A', hidden: true, achieved: false },
+  ]
+  const initialOrder = sortAchievementItems(achievements).map((achievement) => achievement.apiName)
+  const revealedOrder = sortAchievementItems(achievements, new Set(['LOCKED_SECRET_A'])).map((achievement) => achievement.apiName)
+
+  assert.deepEqual(initialOrder, ['VISIBLE_LOCKED', 'LOCKED_SECRET_B', 'LOCKED_SECRET_A'])
+  assert.deepEqual(revealedOrder, initialOrder)
+})
+
 test('filterAchievementItems searches visible text without leaking unrevealed secret achievements', () => {
   const secret = { apiName: 'SECRET_ONE', name: 'Dragon Room', description: 'Find the hidden dragon.', hidden: true, achieved: false }
   const visible = { apiName: 'VISIBLE_ONE', name: 'Explorer', description: 'Find a map.', hidden: false, achieved: false }
 
   assert.deepEqual(filterAchievementItems([secret, visible], 'dragon'), [])
+  assert.deepEqual(filterAchievementItems([secret, visible], 'Dragon Room'), [])
+  assert.deepEqual(filterAchievementItems([secret, visible], 'SECRET_ONE'), [])
   assert.deepEqual(filterAchievementItems([secret, visible], 'secreta'), [secret])
 
   const revealed = new Set(['SECRET_ONE'])
 
   assert.deepEqual(filterAchievementItems([secret, visible], 'dragon', revealed), [secret])
+})
+
+test('getAchievementDisplayState reveals real secret text without generic content fallback', () => {
+  const secret = {
+    apiName: 'SECRET_ROOM',
+    name: 'Sala secreta',
+    description: 'Abra a porta escondida.',
+    hidden: true,
+    achieved: false,
+  }
+
+  const masked = getAchievementDisplayState(secret)
+  const revealed = getAchievementDisplayState(secret, new Set(['SECRET_ROOM']))
+
+  assert.equal(masked.name, 'Conquista secreta')
+  assert.equal(masked.description, 'Conteudo oculto ate voce revelar manualmente.')
+  assert.equal(revealed.name, 'Sala secreta')
+  assert.equal(revealed.description, 'Abra a porta escondida.')
+})
+
+test('getAchievementDisplayState uses specific fallback when revealed secret text is incomplete', () => {
+  const display = getAchievementDisplayState(
+    {
+      apiName: 'SECRET_NO_DESCRIPTION',
+      name: '',
+      description: '',
+      hidden: true,
+      achieved: false,
+    },
+    new Set(['SECRET_NO_DESCRIPTION']),
+  )
+
+  assert.equal(display.name, 'SECRET_NO_DESCRIPTION')
+  assert.equal(display.description, 'A Steam não disponibilizou a descrição desta conquista secreta.')
+  assert.equal(display.isHidden, true)
+  assert.equal(display.isSecretLocked, true)
+  assert.equal(display.isRevealed, true)
+  assert.equal(display.shouldMask, false)
 })
 
 test('filterAchievementItems keeps large achievement lists complete when there is no query', () => {

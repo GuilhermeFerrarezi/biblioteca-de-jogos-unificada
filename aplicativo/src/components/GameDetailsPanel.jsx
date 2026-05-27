@@ -74,7 +74,6 @@ function GameDetailsPanel({
   const [isLaunchChooserOpen, setIsLaunchChooserOpen] = useState(false)
   const [isAchievementsModalOpen, setIsAchievementsModalOpen] = useState(false)
   const [achievementSearchTerm, setAchievementSearchTerm] = useState('')
-  const [revealedSecretAchievements, setRevealedSecretAchievements] = useState(() => new Set())
   const achievementsModalTriggerRef = useRef(null)
   const launchChooserButtonRef = useRef(null)
   const launchChooserRef = useRef(null)
@@ -117,7 +116,6 @@ function GameDetailsPanel({
     setIsLaunchChooserOpen(false)
     setIsAchievementsModalOpen(false)
     setAchievementSearchTerm('')
-    setRevealedSecretAchievements(new Set())
   }, [selectedEntry?.id])
 
   useEffect(() => {
@@ -321,7 +319,6 @@ function GameDetailsPanel({
               libraryLabel={displayedPlatformLabel}
               isModalOpen={isAchievementsModalOpen}
               modalTriggerRef={achievementsModalTriggerRef}
-              revealedSecretAchievements={revealedSecretAchievements}
               searchTerm={achievementSearchTerm}
               onCloseModal={() => {
                 setIsAchievementsModalOpen(false)
@@ -332,13 +329,6 @@ function GameDetailsPanel({
               }}
               onOpenModal={() => {
                 setIsAchievementsModalOpen(true)
-              }}
-              onRevealSecretAchievement={(apiName) => {
-                setRevealedSecretAchievements((currentAchievements) => {
-                  const nextAchievements = new Set(currentAchievements)
-                  nextAchievements.add(apiName)
-                  return nextAchievements
-                })
               }}
               onSearchTermChange={setAchievementSearchTerm}
             />
@@ -377,16 +367,14 @@ function SteamAchievementsSection({
   libraryLabel,
   isModalOpen,
   modalTriggerRef,
-  revealedSecretAchievements,
   searchTerm,
   onCloseModal,
   onOpenModal,
-  onRevealSecretAchievement,
   onSearchTermChange,
 }) {
   const sortedItems = useMemo(
-    () => sortAchievementItems(achievements.items, revealedSecretAchievements),
-    [achievements.items, revealedSecretAchievements],
+    () => sortAchievementItems(achievements.items),
+    [achievements.items],
   )
   const achievedPreviewItems = sortedItems
     .filter((achievement) => achievement.achieved === true)
@@ -427,15 +415,11 @@ function SteamAchievementsSection({
               emptyLabel="Nenhuma conquista alcancada ainda."
               items={achievedPreviewItems}
               label="Alcancadas"
-              revealedSecretAchievements={revealedSecretAchievements}
-              onRevealSecretAchievement={onRevealSecretAchievement}
             />
             <AchievementPreviewColumn
               emptyLabel="Sem conquistas pendentes no cache."
               items={lockedPreviewItems}
               label="Pendentes"
-              revealedSecretAchievements={revealedSecretAchievements}
-              onRevealSecretAchievement={onRevealSecretAchievement}
             />
           </div>
           <div className="achievement-panel-footer">
@@ -455,11 +439,9 @@ function SteamAchievementsSection({
               achievements={achievements}
               achievementLibraryTitle={achievementLibraryTitle}
               gameTitle={gameTitle}
-              items={sortedItems}
-              revealedSecretAchievements={revealedSecretAchievements}
+              sourceItems={achievements.items}
               searchTerm={searchTerm}
               onClose={onCloseModal}
-              onRevealSecretAchievement={onRevealSecretAchievement}
               onSearchTermChange={onSearchTermChange}
             />
           ) : null}
@@ -471,7 +453,7 @@ function SteamAchievementsSection({
   )
 }
 
-function AchievementPreviewColumn({ emptyLabel, items, label, revealedSecretAchievements, onRevealSecretAchievement }) {
+function AchievementPreviewColumn({ emptyLabel, items, label }) {
   return (
     <div className="achievement-preview-column">
       <span>{label}</span>
@@ -482,8 +464,6 @@ function AchievementPreviewColumn({ emptyLabel, items, label, revealedSecretAchi
               achievement={achievement}
               isCompact
               key={getAchievementKey(achievement, index)}
-              revealedSecretAchievements={revealedSecretAchievements}
-              onRevealSecretAchievement={onRevealSecretAchievement}
             />
           ))}
         </div>
@@ -498,18 +478,28 @@ function SteamAchievementsModal({
   achievements,
   achievementLibraryTitle,
   gameTitle,
-  items,
-  revealedSecretAchievements,
+  sourceItems,
   searchTerm,
   onClose,
-  onRevealSecretAchievement,
   onSearchTermChange,
 }) {
   const searchInputRef = useRef(null)
-  const filteredItems = useMemo(
-    () => filterAchievementItems(items, searchTerm, revealedSecretAchievements),
-    [items, revealedSecretAchievements, searchTerm],
+  const [revealedSecretAchievements, setRevealedSecretAchievements] = useState(() => new Set())
+  const orderedItems = useMemo(
+    () => sortAchievementItems(sourceItems),
+    [sourceItems],
   )
+  const filteredItems = useMemo(
+    () => filterAchievementItems(orderedItems, searchTerm, revealedSecretAchievements),
+    [orderedItems, revealedSecretAchievements, searchTerm],
+  )
+  const handleRevealSecretAchievement = (apiName) => {
+    setRevealedSecretAchievements((currentAchievements) => {
+      const nextAchievements = new Set(currentAchievements)
+      nextAchievements.add(apiName)
+      return nextAchievements
+    })
+  }
 
   useEffect(() => {
     window.requestAnimationFrame(() => {
@@ -599,7 +589,7 @@ function SteamAchievementsModal({
                 achievement={achievement}
                 key={getAchievementKey(achievement, index)}
                 revealedSecretAchievements={revealedSecretAchievements}
-                onRevealSecretAchievement={onRevealSecretAchievement}
+                onRevealSecretAchievement={handleRevealSecretAchievement}
               />
             ))
           ) : (
@@ -613,7 +603,7 @@ function SteamAchievementsModal({
   return createPortal(modalContent, document.body)
 }
 
-function AchievementListItem({ achievement, isCompact = false, revealedSecretAchievements, onRevealSecretAchievement }) {
+function AchievementListItem({ achievement, isCompact = false, revealedSecretAchievements = new Set(), onRevealSecretAchievement }) {
   const { apiName, description, iconUrl, isAchieved, isHidden, name, shouldMask } = getAchievementDisplayState(
     achievement,
     revealedSecretAchievements,
@@ -626,12 +616,12 @@ function AchievementListItem({ achievement, isCompact = false, revealedSecretAch
       <span className="achievement-copy">
         <strong>
           {name}
-          {isHidden && isAchieved ? <small className="achievement-secret-label">(secreta)</small> : null}
+          {isHidden && !shouldMask ? <small className="achievement-secret-label">(secreta)</small> : null}
         </strong>
         <span>{description}</span>
         <small>{unlockLabel}</small>
       </span>
-      {shouldMask ? (
+      {shouldMask && onRevealSecretAchievement ? (
         <span className="achievement-reveal-hint">
           <Eye size={14} aria-hidden="true" />
           Clique para mostrar
@@ -640,7 +630,7 @@ function AchievementListItem({ achievement, isCompact = false, revealedSecretAch
     </>
   )
 
-  if (shouldMask) {
+  if (shouldMask && onRevealSecretAchievement) {
     return (
       <button
         className={isCompact ? 'achievement-item compact secret' : 'achievement-item secret'}

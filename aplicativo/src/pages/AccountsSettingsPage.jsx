@@ -43,6 +43,13 @@ const emptySteamApiKeyForm = Object.freeze({
   apiKey: '',
 })
 
+const waitForUiFeedback = () =>
+  new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(resolve)
+    })
+  })
+
 const emptySteamAccountForm = Object.freeze({
   steamId64: '',
 })
@@ -830,6 +837,7 @@ function AccountsSettingsPage({
         ? 'Sincronizacao por conta em andamento, tentando novamente jogos adiados.'
         : 'Sincronizacao por conta em andamento.',
     )
+    await waitForUiFeedback()
 
     try {
       await onSyncSteamAccountGames({ retryMarkedEnrichment })
@@ -881,6 +889,7 @@ function AccountsSettingsPage({
     setIsSteamEnrichmentRetryChecking(true)
     setSteamAccountError(null)
     setSteamAccountStatusMessage('Verificando jogos Steam adiados pelo enrichment.')
+    await waitForUiFeedback()
 
     try {
       const retrySummary = await getSteamEnrichmentRetrySummary()

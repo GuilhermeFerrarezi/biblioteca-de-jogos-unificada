@@ -6451,7 +6451,9 @@ mod storage {
                 read_string_field(player, &["displayName", "display_name", "name", "apiname"])
             })
             .unwrap_or_else(|| api_name.to_string());
-        let description = read_string_field(schema, &["description", "desc"]).unwrap_or_default();
+        let description = read_string_field(schema, &["description", "desc"])
+            .or_else(|| read_string_field(player, &["description", "desc"]))
+            .unwrap_or_default();
         let hidden = read_bool_field(schema, &["hidden", "secret"]).unwrap_or(false);
         let achieved = player
             .and_then(|value| value.get("achieved"))
@@ -10542,8 +10544,64 @@ mod storage {
             assert!(achievements.items[0].achieved);
             assert_eq!(achievements.items[0].unlock_time, Some(1710000000));
             assert_eq!(achievements.items[1].api_name, "SECRET_ROOM");
+            assert_eq!(achievements.items[1].name, "Sala secreta");
+            assert_eq!(
+                achievements.items[1].description,
+                "Encontre a sala escondida."
+            );
             assert!(achievements.items[1].hidden);
             assert!(!achievements.items[1].achieved);
+        }
+
+        #[test]
+        fn list_library_entries_preserves_player_achievement_description_when_schema_is_minimal() {
+            let mut connection = Connection::open_in_memory().expect("open in-memory database");
+            migrate(&connection).expect("apply migration");
+            let steam_id = "76561198000000000";
+            let app_id = "413150";
+            let remote_games = vec![steam_web_api::RemoteSteamGame {
+                app_id: app_id.to_string(),
+                title: "Stardew Valley".to_string(),
+                playtime_forever: Some(321),
+            }];
+
+            sync_steam_account_games(&mut connection, steam_id, &remote_games)
+                .expect("sync remote steam account");
+            save_steam_achievement_schema_cache(
+                &connection,
+                app_id,
+                r#"[{"name":"SECRET_ROOM","displayName":"Sala secreta","hidden":1}]"#,
+                1,
+            )
+            .expect("save schema");
+            save_steam_player_achievement_cache(
+                &connection,
+                steam_id,
+                app_id,
+                r#"[{"apiname":"SECRET_ROOM","achieved":0,"description":"Descricao vinda do player payload."}]"#,
+                0,
+                1,
+            )
+            .expect("save player achievements");
+
+            let entries = list_library_entries(&connection).expect("list entries");
+            let achievement = entries[0]
+                .game
+                .achievements
+                .as_ref()
+                .expect("steam achievements dto")
+                .items
+                .first()
+                .expect("achievement item");
+
+            assert_eq!(achievement.api_name, "SECRET_ROOM");
+            assert_eq!(achievement.name, "Sala secreta");
+            assert_eq!(
+                achievement.description,
+                "Descricao vinda do player payload."
+            );
+            assert!(achievement.hidden);
+            assert!(!achievement.achieved);
         }
 
         #[test]

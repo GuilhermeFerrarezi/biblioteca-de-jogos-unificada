@@ -296,3 +296,19 @@ Resultado validado: lint/build aprovados, smoke frontend com 29 testes passando 
 - A busca usa apenas o texto visivel: hidden bloqueadas nao reveladas nao vazam nome/descricao reais, mas passam a ser encontradas por esse conteudo depois da revelacao manual.
 - Hidden ja desbloqueadas continuam visiveis normalmente e agora exibem indicador discreto `(secreta)`.
 - Percentual global de jogadores ficou fora deste ciclo; Xbox achievements continuam em hold por compliance; Epic nao foi iniciado.
+
+## Atualizacao 2026-05-26 - Ajustes de hidden achievements e sync Steam
+
+- A revelacao de hidden achievements bloqueadas passou a ser estado local do modal: a ordem inicial fica congelada durante a abertura, a busca filtra preservando a ordem relativa e o preview do painel continua censurado ao fechar o modal.
+- Hidden bloqueadas reveladas no modal agora usam nome, descricao e icone reais quando disponiveis, com fallback especifico para descricao indisponivel, sem trocar conteudo por textos genericos de status.
+- A busca por `secreta` encontra conquistas hidden pelo indicador visivel, sem vazar nome, descricao ou identificador tecnico de hidden bloqueada nao revelada; depois da revelacao no modal, o conteudo real tambem passa a ser pesquisavel.
+- O fluxo de sincronizacao por conta Steam na tela de contas passou a renderizar o estado de verificacao/sincronizacao antes de iniciar as chamadas de retry summary e sync, reduzindo a sensacao de travamento em ambiente sem cache.
+- Observabilidade completa nao foi implementada neste ciclo; Xbox achievements continuam em hold por compliance; Epic nao foi iniciado.
+
+## Atualizacao 2026-05-26 - Evidencia de hidden Steam API
+
+- Foi inspecionado o cache bruto salvo pelo enrichment autenticado da Steam para o caso local `appid 4286550 / ach_secretWorld`, sem imprimir chave, headers ou payload completo: o schema cacheado trouxe `displayName`, `hidden`, `icon` e `icongray`, mas nao trouxe `description`; o player achievements cacheado trouxe `name` e chave `description`, porem vazia. A chamada direta sem chave ao endpoint retornou HTTP 400, entao a evidencia usada foi o cache bruto preservado da chamada autenticada anterior.
+- Classificacao do caso testado: comportamento variavel/limitacao do payload retornado pela Steam API para essa hidden bloqueada; o app nao estava perdendo a descricao real nesse caso, porque ela nao veio preenchida no cache bruto. Ainda assim, o backend foi reforcado para preservar `description` vinda do player payload quando o schema estiver sem descricao.
+- A UI de hidden bloqueada revelada agora mostra o indicador discreto `(secreta)` e usa o fallback especifico `A Steam não disponibilizou a descrição desta conquista secreta.` quando a descricao real nao estiver disponivel.
+- Nao foi identificado endpoint oficial para listar a biblioteca compartilhada completa do Steam Families; o tema permanece como pesquisa futura/experimental, sem implementacao neste ciclo.
+- Observabilidade completa nao foi implementada; Steam Families nao foi implementado; Xbox achievements continuam em hold por compliance; Epic nao foi iniciado.
