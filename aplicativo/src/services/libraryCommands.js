@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { validateManualGameInput } from '../adapters/libraryEntryAdapter.js'
+import { markBootStep } from './bootInstrumentation.js'
 import { hasTauriRuntime } from './tauriRuntime.js'
 
 const loadDevelopmentLibraryEntries = async () => {
@@ -20,11 +21,17 @@ const validateManualInputOrThrow = (input) => {
 }
 
 export const listLibraryEntries = async () => {
+  markBootStep('frontend.list_library_entries.start')
+
   if (!hasTauriRuntime()) {
-    return loadDevelopmentLibraryEntries()
+    const entries = await loadDevelopmentLibraryEntries()
+    markBootStep('frontend.list_library_entries.complete', { entries: entries.length, runtime: 'web' })
+    return entries
   }
 
-  return invoke('list_library_entries')
+  const entries = await invoke('list_library_entries')
+  markBootStep('frontend.list_library_entries.complete', { entries: entries.length, runtime: 'tauri' })
+  return entries
 }
 
 export const addPersistedManualGame = async (input) => {

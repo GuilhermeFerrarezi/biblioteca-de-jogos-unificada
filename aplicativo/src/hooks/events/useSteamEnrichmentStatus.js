@@ -1,6 +1,7 @@
 import { listen } from '@tauri-apps/api/event'
 import { useEffect, useRef, useState } from 'react'
 import { normalizeSteamEnrichmentStatus } from '../../domain/steamEnrichmentStatus.js'
+import { markBootStep } from '../../services/bootInstrumentation.js'
 import { hasTauriRuntime } from '../../services/tauriRuntime.js'
 
 const STEAM_ENRICHMENT_STARTED_EVENT = 'steam-enrichment-started'
@@ -29,6 +30,7 @@ export function useSteamEnrichmentStatus() {
         return
       }
 
+      markBootStep(`frontend.steam_enrichment.${phase}`, { critical: false })
       clearStatusTimeout()
       setSteamEnrichmentStatus(normalizeSteamEnrichmentStatus(phase, payload))
 

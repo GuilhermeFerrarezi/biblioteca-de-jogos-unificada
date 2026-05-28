@@ -11,6 +11,7 @@
     "dialog:allow-open",
     "core:webview:allow-create-webview-window",
     "allow-list-library-entries",
+    "allow-record-boot-marker",
     "allow-add-manual-game",
     "allow-update-manual-game",
     "allow-sync-local-games",

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-record-boot-marker"
+description = "Enables the record_boot_marker command without any pre-configured scope."
+commands.allow = ["record_boot_marker"]
+
+[[permission]]
+identifier = "deny-record-boot-marker"
+description = "Denies the record_boot_marker command without any pre-configured scope."
+commands.deny = ["record_boot_marker"]

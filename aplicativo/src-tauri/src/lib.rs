@@ -13,6 +13,15 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            let setup_started_at = std::time::Instant::now();
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+            log::info!("[library-boot] backend.setup.start");
             let app_data_dir = app
                 .path()
                 .app_data_dir()
@@ -20,8 +29,13 @@ pub fn run() {
             std::fs::create_dir_all(&app_data_dir)
                 .map_err(|error| format!("failed to create app data dir: {error}"))?;
             let db_path = app_data_dir.join("library.sqlite3");
+            let database_open_started_at = std::time::Instant::now();
             let connection = storage::open_database(&db_path)
                 .map_err(|error| format!("failed to open local database: {error}"))?;
+            log::info!(
+                "[library-boot] backend.database_open.ready elapsed_ms={}",
+                database_open_started_at.elapsed().as_millis()
+            );
             let connection = std::sync::Arc::new(std::sync::Mutex::new(connection));
             let auth_vault_dir = app_data_dir.join("auth-vault");
             let auth_vault = std::sync::Arc::new(security::AuthVault::system(auth_vault_dir));
@@ -37,18 +51,15 @@ pub fn run() {
                 ),
             });
             bootstrap_library(app.handle().clone(), connection);
-
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            log::info!(
+                "[library-boot] backend.setup.complete elapsed_ms={}",
+                setup_started_at.elapsed().as_millis()
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_library_entries,
+            commands::record_boot_marker,
             commands::list_manual_games,
             commands::add_manual_game,
             commands::update_manual_game,
@@ -153,6 +164,8 @@ fn bootstrap_library(
     }
 
     std::thread::spawn(move || {
+        let bootstrap_started_at = std::time::Instant::now();
+        log::info!("[library-boot] backend.bootstrap_seed.start critical=false");
         let result = connection
             .lock()
             .map_err(|_| "failed to lock local database".to_string())
@@ -165,6 +178,11 @@ fn bootstrap_library(
             eprintln!("library bootstrap failed: {error}");
         }
 
+        log::info!(
+            "[library-boot] backend.bootstrap_seed.complete critical=false ok={} elapsed_ms={}",
+            result.is_ok(),
+            bootstrap_started_at.elapsed().as_millis()
+        );
         let _ = handle.emit(events::LIBRARY_BOOTSTRAP_COMPLETE, result.is_ok());
     });
 }
@@ -502,16 +520,96 @@ mod commands {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tauri::{AppHandle, Emitter, State};
 
+    #[derive(Debug, Clone, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct BootMarkerInput {
+        step: String,
+        elapsed_ms: u64,
+        #[serde(default)]
+        details: std::collections::HashMap<String, serde_json::Value>,
+    }
+
+    #[tauri::command]
+    pub fn record_boot_marker(input: BootMarkerInput) -> Result<(), String> {
+        let step = input
+            .step
+            .chars()
+            .filter(|character| {
+                character.is_ascii_alphanumeric()
+                    || matches!(character, '.' | '_' | '-' | ':' | '=')
+            })
+            .take(80)
+            .collect::<String>();
+        let mut details = input
+            .details
+            .iter()
+            .filter_map(|(key, value)| {
+                let sanitized_key = key
+                    .chars()
+                    .filter(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | ':')
+                    })
+                    .take(48)
+                    .collect::<String>();
+
+                if sanitized_key.is_empty() {
+                    return None;
+                }
+
+                match value {
+                    serde_json::Value::Bool(flag) => Some(format!("{sanitized_key}={flag}")),
+                    serde_json::Value::Number(number) => Some(format!("{sanitized_key}={number}")),
+                    serde_json::Value::String(text) => {
+                        let sanitized_text = text
+                            .chars()
+                            .filter(|character| {
+                                character.is_ascii_alphanumeric()
+                                    || matches!(character, '.' | '_' | '-' | ':' | '=')
+                            })
+                            .take(48)
+                            .collect::<String>();
+                        Some(format!("{sanitized_key}={sanitized_text}"))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        details.sort();
+        log::info!(
+            "[library-boot] frontend.marker step={} elapsed_ms={} details={}",
+            step,
+            input.elapsed_ms,
+            details.join(",")
+        );
+
+        Ok(())
+    }
+
     #[tauri::command]
     pub fn list_library_entries(
         state: State<'_, AppState>,
     ) -> Result<Vec<storage::LibraryEntryDto>, String> {
+        let command_started_at = std::time::Instant::now();
+        let lock_started_at = std::time::Instant::now();
         let connection = state
             .connection
             .lock()
             .map_err(|_| "failed to lock local database".to_string())?;
+        let lock_wait_ms = lock_started_at.elapsed().as_millis();
+        let query_started_at = std::time::Instant::now();
 
-        storage::list_library_entries(&connection).map_err(|error| error.to_string())
+        let entries =
+            storage::list_library_entries(&connection).map_err(|error| error.to_string())?;
+        log::info!(
+            "[library-boot] backend.list_library_entries.complete entries={} lock_wait_ms={} query_ms={} total_ms={}",
+            entries.len(),
+            lock_wait_ms,
+            query_started_at.elapsed().as_millis(),
+            command_started_at.elapsed().as_millis()
+        );
+
+        Ok(entries)
     }
 
     #[tauri::command]
@@ -4639,16 +4737,38 @@ mod storage {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     pub fn open_database(path: &Path) -> rusqlite::Result<Connection> {
+        let open_started_at = std::time::Instant::now();
+        log::info!("[library-boot] backend.open_database.start");
         let connection = Connection::open(path)?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
+        let migrate_started_at = std::time::Instant::now();
         migrate(&connection)?;
+        log::info!(
+            "[library-boot] backend.open_database.migrate_complete elapsed_ms={}",
+            migrate_started_at.elapsed().as_millis()
+        );
+        let compatibility_started_at = std::time::Instant::now();
         ensure_archived_column(&connection)?;
         ensure_favorite_column(&connection)?;
         ensure_active_entries_index(&connection)?;
         ensure_favorite_entries_index(&connection)?;
         ensure_local_cleanup_indexes(&connection)?;
         ensure_provider_account_configs_table(&connection)?;
-        archive_rejected_local_entries(&connection)?;
+        log::info!(
+            "[library-boot] backend.open_database.compatibility_complete elapsed_ms={}",
+            compatibility_started_at.elapsed().as_millis()
+        );
+        let cleanup_started_at = std::time::Instant::now();
+        let cleaned_entries = archive_rejected_local_entries(&connection)?;
+        log::info!(
+            "[library-boot] backend.local_cleanup.complete affected={} elapsed_ms={}",
+            cleaned_entries,
+            cleanup_started_at.elapsed().as_millis()
+        );
+        log::info!(
+            "[library-boot] backend.open_database.complete elapsed_ms={}",
+            open_started_at.elapsed().as_millis()
+        );
         Ok(connection)
     }
 
@@ -5904,6 +6024,7 @@ mod storage {
     }
 
     pub fn list_library_entries(connection: &Connection) -> rusqlite::Result<Vec<LibraryEntryDto>> {
+        let list_started_at = std::time::Instant::now();
         let mut statement = connection.prepare(
             r#"
       SELECT
@@ -5948,9 +6069,36 @@ mod storage {
                 source_account_id: None,
             })
         })?;
+        let query_ms = list_started_at.elapsed().as_millis();
+        let hydrate_started_at = std::time::Instant::now();
 
-        rows.map(|row| row.and_then(|entry| hydrate_entry(connection, entry)))
-            .collect()
+        let entries = rows
+            .map(|row| row.and_then(|entry| hydrate_entry(connection, entry)))
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let steam_entries = entries
+            .iter()
+            .filter(|entry| entry.primary_platform_id == "steam")
+            .count();
+        let local_entries = entries
+            .iter()
+            .filter(|entry| entry.primary_platform_id == "local")
+            .count();
+        let achievement_entries = entries
+            .iter()
+            .filter(|entry| entry.game.achievements.is_some())
+            .count();
+        log::info!(
+            "[library-boot] backend.storage.list_library_entries.complete entries={} steam_entries={} local_entries={} achievement_entries={} query_ms={} hydrate_ms={} total_ms={}",
+            entries.len(),
+            steam_entries,
+            local_entries,
+            achievement_entries,
+            query_ms,
+            hydrate_started_at.elapsed().as_millis(),
+            list_started_at.elapsed().as_millis()
+        );
+
+        Ok(entries)
     }
 
     pub fn list_manual_games(connection: &Connection) -> rusqlite::Result<Vec<LibraryEntryDto>> {

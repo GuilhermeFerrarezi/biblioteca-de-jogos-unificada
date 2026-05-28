@@ -1,5 +1,6 @@
 const COMMANDS: &[&str] = &[
     "list_library_entries",
+    "record_boot_marker",
     "add_manual_game",
     "update_manual_game",
     "sync_local_games",

@@ -25,6 +25,7 @@ import {
 } from '../adapters/libraryEntryAdapter'
 import { INSTALL_STATUS, QUICK_FILTER_IDS, SORT_MODE_IDS } from '../constants/libraryConstants'
 import { groupLibraryEntries } from '../domain/libraryGrouping'
+import { markBootStep } from '../services/bootInstrumentation'
 import {
   getLaunchActionState,
   getPreferredLaunchEntryId,
@@ -83,6 +84,7 @@ export function useLibraryPageState() {
   const [editingEntryId, setEditingEntryId] = useState('')
   const [manualGameForm, setManualGameForm] = useState(emptyManualGameForm)
   const [manualGameErrors, setManualGameErrors] = useState({})
+  const hasMarkedUsableRef = useRef(false)
   const xboxSyncFailureHandledRef = useRef(false)
   const isEditingManualGame = editingEntryId !== ''
   const showLibraryLoading = isLibraryLoading
@@ -99,6 +101,7 @@ export function useLibraryPageState() {
 
     const loadLibrarySettings = async () => {
       try {
+        markBootStep('frontend.provider_settings.start', { critical: false })
         const settings = await getLibrarySettings()
 
         if (!isMounted) {
@@ -122,16 +125,19 @@ export function useLibraryPageState() {
       } finally {
         if (isMounted) {
           setIsLibrarySettingsLoading(false)
+          markBootStep('frontend.provider_settings.complete', { critical: false })
         }
       }
     }
 
-    void loadLibrarySettings()
+    if (!isLibraryLoading || !hasTauriRuntime()) {
+      void loadLibrarySettings()
+    }
 
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [isLibraryLoading])
 
   useEffect(() => {
     let isMounted = true
@@ -152,6 +158,8 @@ export function useLibraryPageState() {
       : null
 
     const syncLibraryEntries = async () => {
+      markBootStep('frontend.library_sync.start')
+
       if (!bootstrapLibraryEntriesPromise) {
         bootstrapLibraryEntriesPromise = listLibraryEntries().finally(() => {
           bootstrapLibraryEntriesPromise = null
@@ -159,16 +167,14 @@ export function useLibraryPageState() {
       }
 
       const libraryEntries = await bootstrapLibraryEntriesPromise
+      markBootStep('frontend.library_sync.entries_received', { entries: libraryEntries.length })
 
       if (!isMounted) {
         return
       }
 
       setEntries(libraryEntries)
-      const groupedLibraryEntries = groupLibraryEntries(libraryEntries)
-      setSelectedEntryId((currentSelectedEntryId) =>
-        getSelectedEntryIdForEntries(groupedLibraryEntries, currentSelectedEntryId),
-      )
+      markBootStep('frontend.library_sync.entries_committed', { entries: libraryEntries.length })
     }
 
     const registerBootstrapListener = async () => {
@@ -182,6 +188,7 @@ export function useLibraryPageState() {
             return
           }
 
+          markBootStep('frontend.bootstrap_seed.complete', { critical: false })
           if (bootstrapTimeoutId !== null) {
             clearTimeout(bootstrapTimeoutId)
             bootstrapTimeoutId = null
@@ -279,6 +286,7 @@ export function useLibraryPageState() {
     void registerSteamEnrichmentCompletionListener()
     void registerXboxSyncFailureListener()
     void registerXboxAchievementsSyncFailureListener()
+    markBootStep('frontend.mounted')
     syncLibraryEntries()
       .catch(() => {
         if (isMounted) {
@@ -289,6 +297,7 @@ export function useLibraryPageState() {
       .finally(() => {
         if (isMounted) {
           setIsLibraryLoading(false)
+          markBootStep('frontend.library_loading.complete')
         }
       })
 
@@ -311,6 +320,25 @@ export function useLibraryPageState() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (showLibraryLoading || hasMarkedUsableRef.current) {
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      hasMarkedUsableRef.current = true
+      markBootStep('frontend.library_usable.painted', {
+        entries: groupedEntries.length,
+        filteredEntries: filteredEntries.length,
+        selected: Boolean(selectedEntry),
+      })
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [filteredEntries.length, groupedEntries.length, selectedEntry, showLibraryLoading])
 
   useEffect(() => {
     if (!selectedEntryId && filteredEntries.length > 0) {

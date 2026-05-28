@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import GameDetailsPanel from '../components/GameDetailsPanel'
 import LibraryBrowser from '../components/LibraryBrowser'
 import ManualGameModal from '../components/ManualGameModal'
@@ -7,14 +7,31 @@ import StatsGrid from '../components/StatsGrid'
 import Topbar from '../components/Topbar'
 import { useSteamEnrichmentStatus } from '../hooks/events/useSteamEnrichmentStatus'
 import { useLibraryPageState } from '../hooks/useLibraryPageState'
+import { markBootStep } from '../services/bootInstrumentation'
 import '../styles/library.css'
 
 const AccountsSettingsPage = lazy(() => import('./AccountsSettingsPage'))
+let hasMarkedLibraryShellPaint = false
 
 function LibraryPage() {
   const library = useLibraryPageState()
   const steamEnrichmentStatus = useSteamEnrichmentStatus()
   const [activeSection, setActiveSection] = useState('library')
+
+  useEffect(() => {
+    if (hasMarkedLibraryShellPaint) {
+      return undefined
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      hasMarkedLibraryShellPaint = true
+      markBootStep('react.library_shell.painted')
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+    }
+  }, [])
 
   const handleLibraryFilterChange = (filter) => {
     setActiveSection('library')
