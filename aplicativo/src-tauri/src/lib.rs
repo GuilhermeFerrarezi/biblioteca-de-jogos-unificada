@@ -1,7 +1,7 @@
 #![cfg_attr(test, allow(dead_code))]
 
 #[cfg(not(test))]
-use tauri::{Emitter, Manager};
+use tauri::{webview::PageLoadEvent, Emitter, Manager};
 
 mod events;
 mod xbox_live_auth;
@@ -10,9 +10,11 @@ mod xbox_provider;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg(not(test))]
 pub fn run() {
+    let process_started_at = std::time::Instant::now();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
             let setup_started_at = std::time::Instant::now();
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -50,12 +52,48 @@ pub fn run() {
                     std::sync::atomic::AtomicBool::new(false),
                 ),
             });
+            if let Some(main_window) = app.get_webview_window("main") {
+                let fallback_window = main_window.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(12));
+                    if matches!(fallback_window.is_visible(), Ok(false)) {
+                        log::warn!(
+                            "[library-boot] backend.main_window.fallback_show elapsed_ms={}",
+                            process_started_at.elapsed().as_millis()
+                        );
+                        let _ = fallback_window.show();
+                    }
+                });
+            }
             bootstrap_library(app.handle().clone(), connection);
             log::info!(
                 "[library-boot] backend.setup.complete elapsed_ms={}",
                 setup_started_at.elapsed().as_millis()
             );
             Ok(())
+        })
+        .on_page_load(move |webview, payload| {
+            let event = match payload.event() {
+                PageLoadEvent::Started => "started",
+                PageLoadEvent::Finished => "finished",
+            };
+            log::info!(
+                "[library-boot] webview.page_load.{} url={} elapsed_ms={}",
+                event,
+                payload.url(),
+                process_started_at.elapsed().as_millis()
+            );
+
+            let window = webview.window();
+            if payload.event() == PageLoadEvent::Finished
+                && matches!(window.is_visible(), Ok(false))
+            {
+                log::info!(
+                    "[library-boot] webview.page_load.finished_show elapsed_ms={}",
+                    process_started_at.elapsed().as_millis()
+                );
+                let _ = window.show();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_library_entries,

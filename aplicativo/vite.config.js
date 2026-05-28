@@ -6,6 +6,7 @@ import process from 'node:process'
 export default defineConfig({
   cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite',
   server: {
+    host: '127.0.0.1',
     port: 5173,
     strictPort: true,
   },

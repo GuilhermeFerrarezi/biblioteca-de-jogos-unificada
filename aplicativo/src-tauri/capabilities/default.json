@@ -8,6 +8,7 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "core:window:allow-show",
     "dialog:allow-open",
     "core:webview:allow-create-webview-window",
     "allow-list-library-entries",
