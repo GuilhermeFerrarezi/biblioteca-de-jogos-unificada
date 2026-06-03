@@ -12,7 +12,7 @@ Estas diretrizes orientam a evolucao tecnica da Biblioteca de Jogos Unificada pa
 - Manter um modelo interno unico de biblioteca, independentemente da origem do jogo.
 - Integrar plataformas por camadas, evitando chamadas diretas de API dentro de componentes visuais.
 - Preferir evolucao incremental, mas manter a organizacao atual de `components`, `pages`, `services`, `adapters`, `hooks`, `constants` e `styles` como base para novos desenvolvimentos.
-- Preservar verificacoes antes de cada marco: `npm run lint`, `npm run build` e `cargo test` com `CARGO_TARGET_DIR` local.
+- Preservar verificacoes antes de cada marco: `npm run lint`, `npm run test:unit`, `npm run test:smoke`, `npm run build` e, quando houver backend, `cargo test` com `CARGO_TARGET_DIR` local.
 - Antes de iniciar integracoes, migrations, seguranca, UX complexa ou metadados, consultar os agentes e skills em `cloud - biblioteca de jogos`.
 - Em todo desenvolvimento, identificar explicitamente o agente local e as skills aplicaveis antes de implementar, revisar ou delegar trabalho.
 
@@ -76,6 +76,8 @@ Diretriz atual:
 
 - Componentes grandes devem ser quebrados em subcomponentes menores quando ultrapassarem responsabilidades claras.
 - Hooks complexos devem ser divididos por responsabilidade, como filtragem, CRUD manual e sincronizacao.
+- Componentes React com interacoes relevantes devem ter testes unitarios focados em comportamento via `npm run test:unit`, evitando snapshots pesados ou verificacoes visuais frageis.
+- A suite `npm run test:smoke` continua cobrindo contratos de dominio/adapters/services e fluxos amplos existentes.
 - Controles selecionaveis devem usar `aria-pressed` quando representarem estado ativo.
 - Processos em andamento devem expor estado acessivel, como `aria-busy`.
 - Modais devem aceitar fechamento por `Escape` e sinalizar campos invalidos com `aria-invalid`.
@@ -157,6 +159,6 @@ Exemplos:
 - Mocks de desenvolvimento nao devem ser importados estaticamente por services usados em producao.
 - Integracoes novas documentam viabilidade, risco, autenticacao, limites, fallback e criterio de QA.
 - Mudancas de banco atualizam schema/migration e preservam dados existentes.
-- `npm run lint` e `npm run build` passam.
+- `npm run lint`, `npm run test:unit`, `npm run test:smoke` e `npm run build` passam quando a mudanca afetar o frontend.
 - Mudancas no backend passam em `cargo test`.
 - Documentacao relevante e atualizada no mesmo marco.
