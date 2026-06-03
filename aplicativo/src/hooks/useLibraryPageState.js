@@ -8,6 +8,7 @@ import {
   setLibraryEntryArchived,
   setLibraryEntryFavorite,
   syncSteamAccountGames,
+  syncEpicGames,
   syncLocalGames,
   syncSteamGames,
   syncXboxAchievementGames,
@@ -23,7 +24,7 @@ import {
   getSelectedEntryIdForEntries,
   validateManualGameInput,
 } from '../adapters/libraryEntryAdapter'
-import { INSTALL_STATUS, QUICK_FILTER_IDS, SORT_MODE_IDS } from '../constants/libraryConstants'
+import { QUICK_FILTER_IDS, SORT_MODE_IDS } from '../constants/libraryConstants'
 import { groupLibraryEntries } from '../domain/libraryGrouping'
 import { markBootStep } from '../services/bootInstrumentation'
 import {
@@ -31,7 +32,7 @@ import {
   getPreferredLaunchEntryId,
   getVisibleSelectedEntry,
   isMicrosoftStoreUri,
-  resolveMicrosoftStoreTarget,
+  isSteamInstallUri,
 } from '../domain/libraryLaunch'
 import { hasTauriRuntime } from '../services/tauriRuntime'
 import { useLibraryFiltering } from './useLibraryFiltering'
@@ -71,6 +72,7 @@ export function useLibraryPageState() {
   const [isLocalSyncing, setIsLocalSyncing] = useState(false)
   const [isSteamSyncing, setIsSteamSyncing] = useState(false)
   const [isXboxSyncing, setIsXboxSyncing] = useState(false)
+  const [isEpicSyncing, setIsEpicSyncing] = useState(false)
   const [isSteamAccountSyncing, setIsSteamAccountSyncing] = useState(false)
   const [preferredStoreId, setPreferredStoreId] = useState('steam')
   const [localScanMode, setLocalScanMode] = useState('automatic')
@@ -457,10 +459,13 @@ export function useLibraryPageState() {
     }
 
     const isStoreAction = primaryAction.label === 'Abrir Microsoft Store' || isMicrosoftStoreUri(primaryAction.target)
+    const isSteamInstallAction = primaryAction.label === 'Instalar' || isSteamInstallUri(primaryAction.target)
 
     setLaunchMessage(
       isStoreAction
       ? `Abrindo ${targetEntry.game.title} na Microsoft Store.`
+      : isSteamInstallAction
+        ? `Abrindo instalacao de ${targetEntry.game.title} na Steam.`
       : `Tentando iniciar ${targetEntry.game.title} por ${primaryAction.label}.`,
     )
     setLaunchFeedback(null)
@@ -618,6 +623,42 @@ export function useLibraryPageState() {
     }
   }
 
+  const handleSyncEpicGames = async () => {
+    if (isEpicSyncing) {
+      return
+    }
+
+    setIsEpicSyncing(true)
+    setLaunchMessage('Sincronizando manifestos locais da Epic Games...')
+    setLaunchFeedback(null)
+
+    try {
+      const summary = await syncEpicGames()
+
+      if (!summary) {
+        setLaunchMessage('Sincronizacao Epic disponivel apenas no aplicativo Tauri.')
+        setLaunchFeedback(null)
+        return
+      }
+
+      await refreshEntries()
+      setLaunchMessage(
+        `Sincronizacao Epic concluida: ${summary.inserted} novos, ${summary.updated} atualizados, ${summary.archived ?? 0} arquivados e ${summary.unavailable ?? 0} indisponiveis em ${summary.discovered} manifestos encontrados.`,
+      )
+      setLaunchFeedback(null)
+    } catch (error) {
+      const feedback = normalizeProviderErrorFeedback(
+        error,
+        'Nao foi possivel sincronizar os manifestos locais da Epic.',
+        'Sincronizacao Epic local',
+      )
+      setLaunchMessage(feedback.message)
+      setLaunchFeedback(feedback)
+    } finally {
+      setIsEpicSyncing(false)
+    }
+  }
+
   const handleSyncXboxTitleHistory = async () => {
     setLaunchMessage('Importando titulos do historico do Xbox...')
     setLaunchFeedback(null)
@@ -693,37 +734,6 @@ export function useLibraryPageState() {
       setIsSteamAccountSyncing(false)
       setIsSteamSyncing(false)
     }
-  }
-
-  const handleInstallAction = () => {
-    if (!selectedEntry) {
-      setLaunchMessage('Nenhum jogo selecionado.')
-      setLaunchFeedback(null)
-      return
-    }
-
-    const xboxTargetEntry =
-      selectedEntry.memberEntries?.find(
-        (entry) => entry.primaryPlatformId === 'xbox' && entry.installStatus !== INSTALL_STATUS.INSTALLED,
-      ) ?? (selectedEntry.primaryPlatformId === 'xbox' && selectedEntry.installStatus !== INSTALL_STATUS.INSTALLED ? selectedEntry : null)
-
-    if (xboxTargetEntry) {
-      const storeTarget = resolveMicrosoftStoreTarget(xboxTargetEntry)
-
-      if (storeTarget) {
-        setLaunchMessage(`Abrindo ${selectedEntry.game.title} na Microsoft Store.`)
-        setLaunchFeedback(null)
-        window.location.href = storeTarget
-        return
-      }
-
-      setLaunchMessage(`Microsoft Store ainda nao foi vinculada para ${selectedEntry.game.title}.`)
-      setLaunchFeedback(null)
-      return
-    }
-
-    setLaunchMessage(`Instalacao/localizacao de arquivos ainda sera implementada para ${selectedEntry.game.title}.`)
-    setLaunchFeedback(null)
   }
 
   const handleArchiveSelectedEntry = async () => {
@@ -828,7 +838,7 @@ export function useLibraryPageState() {
   const handleLaunchPlatformChange = useCallback((nextPlatformId) => {
     const normalizedPlatformId = String(nextPlatformId ?? '').trim().toLowerCase()
 
-    if (!selectedEntry?.id || !['steam', 'xbox'].includes(normalizedPlatformId)) {
+    if (!selectedEntry?.id || !['steam', 'xbox', 'epic'].includes(normalizedPlatformId)) {
       return
     }
 
@@ -836,7 +846,8 @@ export function useLibraryPageState() {
       ...currentSelections,
       [selectedEntry.id]: normalizedPlatformId,
     }))
-    setLaunchMessage(normalizedPlatformId === 'xbox' ? 'Biblioteca selecionada: Xbox.' : 'Biblioteca selecionada: Steam.')
+    const selectedPlatformLabel = normalizedPlatformId === 'xbox' ? 'Xbox' : normalizedPlatformId === 'epic' ? 'Epic Games' : 'Steam'
+    setLaunchMessage(`Biblioteca selecionada: ${selectedPlatformLabel}.`)
     setLaunchFeedback(null)
   }, [selectedEntry?.id])
 
@@ -983,6 +994,7 @@ export function useLibraryPageState() {
     isLocalSyncing,
     isSteamSyncing,
     isXboxSyncing,
+    isEpicSyncing,
     isSteamAccountSyncing,
     isManualModalOpen,
     manualGameForm,
@@ -995,7 +1007,6 @@ export function useLibraryPageState() {
     handleArchiveSelectedEntry,
     handleToggleFavoriteSelectedEntry,
     handleEditSelectedEntry,
-    handleInstallAction,
     handleLaunchSelectedEntry,
     handleLaunchPlatformChange,
     handleClearLibraryFilters,
@@ -1014,6 +1025,7 @@ export function useLibraryPageState() {
     handleSyncSteamGames,
     handleSyncXboxTitleHistory,
     handleSyncXboxGames,
+    handleSyncEpicGames,
     handleSyncSteamAccountGames,
   }
 }

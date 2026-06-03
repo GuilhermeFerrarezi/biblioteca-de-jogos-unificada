@@ -86,6 +86,17 @@ test('getVisibleLibraryEntries sorts by achievement progress when available and 
   assert.deepEqual(getTitles(sortedEntries), ['Complete', 'Half Done', 'No Data'])
 })
 
+test('filterLibraryEntries recognizes the Epic platform quick filter', () => {
+  const entries = [
+    makeEntry({ id: '1', title: 'Steam Game', primaryPlatformId: 'steam' }),
+    makeEntry({ id: '2', title: 'Epic Game', primaryPlatformId: 'epic' }),
+  ]
+
+  const filteredEntries = filterLibraryEntries(entries, '', [QUICK_FILTER_IDS.EPIC])
+
+  assert.deepEqual(getTitles(filteredEntries), ['Epic Game'])
+})
+
 test('sortLibraryEntries keeps games without achievement data at the end in both achievement modes', () => {
   const entries = [
     makeEntry({ id: '1', title: 'No Data' }),

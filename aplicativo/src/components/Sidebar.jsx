@@ -1,4 +1,4 @@
-import { CircleDot, Gamepad2, HardDrive, Heart, Library, Settings } from 'lucide-react'
+import { CircleDot, Gamepad2, HardDrive, Heart, Library, Settings, Store } from 'lucide-react'
 import { QUICK_FILTER_IDS } from '../constants/libraryConstants'
 import SteamIcon from './icons/SteamIcon'
 import XboxIcon from './icons/XboxIcon'
@@ -10,6 +10,7 @@ const navItems = Object.freeze([
   { id: QUICK_FILTER_IDS.NOT_INSTALLED, label: 'Nao instalados', icon: HardDrive },
   { id: QUICK_FILTER_IDS.STEAM, label: 'Steam', icon: SteamIcon },
   { id: QUICK_FILTER_IDS.XBOX, label: 'Xbox', icon: XboxIcon },
+  { id: QUICK_FILTER_IDS.EPIC, label: 'Epic', icon: Store },
   { id: QUICK_FILTER_IDS.LOCAL, label: 'Locais', icon: HardDrive },
 ])
 

@@ -39,7 +39,7 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - A ponte com Tauri fica em `src/services/libraryService.js`, com fallback web carregado dinamicamente apenas em desenvolvimento.
 - Visualizacao padrao por capas, com alternativa em lista.
 - Sidebar, resumo da biblioteca, busca, filtros rapidos e painel de detalhes.
-- Area de `Contas e integracoes` acessivel pela sidebar, com Steam, Xbox/Game Pass e Epic preparados para evolucao.
+- Area de `Contas e integracoes` acessivel pela sidebar, com Steam, Xbox/Game Pass e Epic. Epic ja possui primeiro corte local manifest-only, sem login/API remota.
 - Fluxo `Entrar com Steam` implementado com Steam OpenID no navegador externo; o backend valida o retorno e salva apenas o SteamID64 no SQLite.
 - Selecao real de jogo por clique ou teclado.
 - Cadastro manual de jogos implementado com persistencia SQLite no Tauri e fallback em memoria no navegador.
@@ -54,6 +54,9 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - A limpeza de falsos positivos locais no boot usa indices especificos em `library_entries` e `launch_actions`, e e ignorada rapidamente quando nao ha entradas locais ativas.
 - O `LocalGamesProvider` nao varre bibliotecas Steam por padrao. A importacao Steam fica no comando `sync_steam_games`, que le `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos instalados sem exigir credenciais.
 - O frontend tem acoes separadas para sincronizar Steam local, conectar conta Steam e sincronizar biblioteca da conta. A sincronizacao Steam local cobre instalacoes locais e cria acoes `steam://rungameid/<appid>`.
+- A integracao Epic local usa manifestos `.item` do Epic Games Launcher em `%ProgramData%\Epic\EpicGamesLauncher\Data\Manifests` e em pastas adicionais configuradas pelo usuario. Essas pastas ficam persistidas em SQLite via `provider_account_configs` para o provider `epic`. O corte e manifest-only: nao usa login Epic, API remota Epic/EOS, Legendary/Heroic, scraping, cookies, sessao de navegador ou credenciais.
+- Jogos Epic importados usam plataforma/origem `epic`, aparecem nos filtros/agrupamento/launch choices e recebem launch action `com.epicgames.launcher://` somente quando ha IDs confiaveis no manifesto. A deduplicacao com jogos locais usa caminho/instalacao normalizada, sem merge por titulo puro.
+- O EpicLocalProvider filtra Epic Games Launcher, EpicOnlineServices, Unreal Engine, runtimes, redistributables, prereqs, DirectX, installers, services, helpers, support tools e DLC isolado. Na validacao manual em Tauri, Epic apareceu corretamente, a sincronizacao local funcionou, apenas o jogo Epic instalado foi importado, nao houve falso positivo no cenario testado e a acao de iniciar funcionou.
 - A integracao Web API por conta usa SteamID64 salvo no SQLite e Steam Web API key legivel no AuthVault/keyring do sistema operacional. Marcadores SQLite nao liberam sincronizacao sem o segredo no cofre. Senha, Steam Guard, cookies e sessoes de navegador nao sao capturados nem persistidos.
 - O corte de Steam enrichment/achievements roda best-effort em background: complementa artwork, metadados e sinais publicos de achievements sem bloquear boot, listagem, sincronizacao principal, login ou launch. Ele nao e mais um limite unico de 50 jogos; roda em lotes continuos com lote interno conservador, pausa/backoff e parada em rate limit.
 - Xbox achievements cross-title/title history ficam aguardando confirmacao oficial de compliance antes de serem usados como enrichment/catalogo; ate la, Xbox permanece conservador como descoberta local, launcher e associacao experimental.
@@ -72,6 +75,18 @@ npm run tauri:dev
 ```
 
 A pasta deve conter `steamapps\appmanifest_<appid>.acf`. Se houver `steamapps\libraryfolders.vdf`, bibliotecas extras tambem sao lidas.
+
+## Sincronizacao Epic local
+
+No Tauri, o botao de sincronizar Epic le manifestos `.item` do Epic Games Launcher no caminho padrao:
+
+```powershell
+%ProgramData%\Epic\EpicGamesLauncher\Data\Manifests
+```
+
+Pastas adicionais podem ser configuradas na tela de `Contas e integracoes` e sao salvas no SQLite em `provider_account_configs` para o provider `epic`.
+
+Este corte importa apenas jogos instalados com evidencia local forte. Continuam fora do escopo: login Epic, API remota Epic/EOS para biblioteca, Legendary/Heroic, download/install/update, achievements, cloud saves, scraping, cookies e sessao de navegador.
 
 ## Conta Steam e Web API
 
@@ -119,6 +134,7 @@ A estrutura do SQLite local fica em:
 
 - Validar manualmente o Steam enrichment best-effort em background no Tauri, com lotes continuos, degradacao graciosa, pausa/backoff, parada em rate limit e feedback sanitizado.
 - Manter Xbox achievements cross-title/title history bloqueados ate confirmacao oficial de compliance.
+- Coletar mais evidencia de manifests reais da Epic em diferentes jogos/instalacoes antes de expandir o provider alem do corte local manifest-only.
 - Validacao manual do fluxo completo de adicionar, editar, arquivar, sincronizar Steam e sincronizar locais no Tauri.
 - Consulta filtrada/paginacao no backend para bibliotecas maiores.
 

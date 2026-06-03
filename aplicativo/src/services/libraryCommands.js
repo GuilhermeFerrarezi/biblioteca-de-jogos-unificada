@@ -82,6 +82,14 @@ export const syncXboxGames = async () => {
   return invoke('sync_xbox_games')
 }
 
+export const syncEpicGames = async () => {
+  if (!hasTauriRuntime()) {
+    return null
+  }
+
+  return invoke('sync_epic_games')
+}
+
 export const syncXboxAchievementGames = async () => {
   if (!hasTauriRuntime()) {
     return null
@@ -144,6 +152,14 @@ export const getXboxLibraryRoots = async () => {
   return invoke('get_xbox_library_roots')
 }
 
+export const getEpicLibraryRoots = async () => {
+  if (!hasTauriRuntime()) {
+    return { providerId: 'epic', roots: [] }
+  }
+
+  return invoke('get_epic_library_roots')
+}
+
 export const saveSteamAccountConfig = async (steamId64) => {
   const normalizedSteamId64 = String(steamId64 ?? '').trim()
 
@@ -180,6 +196,18 @@ export const saveXboxLibraryRoots = async (roots) => {
   }
 
   return invoke('save_xbox_library_roots', { input: { roots: normalizedRoots } })
+}
+
+export const saveEpicLibraryRoots = async (roots) => {
+  const normalizedRoots = Array.isArray(roots)
+    ? roots.map((root) => String(root ?? '').trim()).filter(Boolean)
+    : []
+
+  if (!hasTauriRuntime()) {
+    return { providerId: 'epic', roots: normalizedRoots }
+  }
+
+  return invoke('save_epic_library_roots', { input: { roots: normalizedRoots } })
 }
 
 export const startSteamLogin = async () => {

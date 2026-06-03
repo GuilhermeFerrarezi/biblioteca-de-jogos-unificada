@@ -11,7 +11,7 @@ import {
   sortAchievementItems,
 } from '../adapters/libraryEntryAdapter'
 import { DEFAULT_ACCENT_COLOR, INSTALL_STATUS, LAUNCH_ACTION_KIND, PLATFORM_LABELS } from '../constants/libraryConstants'
-import { getDetailsEntryForSelectedPlatform, getLaunchActionState, getLaunchChoices, isMicrosoftStoreUri } from '../domain/libraryLaunch'
+import { getDetailsEntryForSelectedPlatform, getLaunchActionState, getLaunchChoices, isMicrosoftStoreUri, isSteamInstallUri } from '../domain/libraryLaunch'
 import StatusDisclosure from './StatusDisclosure'
 
 const WINDOWS_EXECUTABLE_PATH_PATTERN = /^[a-zA-Z]:[\\/].+\.exe$/i
@@ -68,7 +68,6 @@ function GameDetailsPanel({
   steamEnrichmentStatus,
   onArchiveEntry,
   onEditEntry,
-  onInstallAction,
   onLaunchEntry,
   onLaunchPlatformChange,
   onToggleFavoriteEntry,
@@ -101,14 +100,16 @@ function GameDetailsPanel({
   const hasMultipleLaunchChoices = launchChoices.length > 1
   const isMicrosoftStoreAction =
     primaryLaunchAction?.label === 'Abrir Microsoft Store' || isMicrosoftStoreUri(primaryLaunchAction?.target)
-  const primaryActionLabel = isMicrosoftStoreAction ? 'Abrir Microsoft Store' : 'Jogar'
-  const PrimaryActionIcon = isMicrosoftStoreAction ? Store : Play
+  const isSteamInstallAction = isSteamInstallUri(primaryLaunchAction?.target)
+  const primaryActionLabel = isMicrosoftStoreAction ? 'Abrir Microsoft Store' : isSteamInstallAction ? 'Instalar' : 'Jogar'
+  const PrimaryActionIcon = isMicrosoftStoreAction ? Store : isSteamInstallAction ? Download : Play
   const installedGamePath = resolveInstalledGamePath(detailsEntry, primaryLaunchAction)
   const achievementProgress = getAchievementProgress(detailsEntry)
   const displayedPlatformLabel =
     detailsEntry && hasMultipleLaunchChoices
       ? PLATFORM_LABELS[detailsEntry.primaryPlatformId] ?? detailsEntry.primaryPlatformId
       : selectedEntry?.platformSummary ?? PLATFORM_LABELS[selectedEntry?.primaryPlatformId] ?? selectedEntry?.primaryPlatformId
+  const selectedPlatformLabel = PLATFORM_LABELS[selectedLaunchPlatformId] ?? selectedLaunchPlatformId
   const isFavorite =
     selectedEntry?.isFavorite === true ||
     selectedEntry?.is_favorite === true ||
@@ -187,7 +188,7 @@ function GameDetailsPanel({
             {hasMultipleLaunchChoices ? (
               <div className="timeline-note launch-selection-note">
                 <Store size={16} aria-hidden="true" />
-                {selectedLaunchPlatformId === 'xbox' ? 'Biblioteca selecionada: Xbox.' : 'Biblioteca selecionada: Steam.'}
+                {`Biblioteca selecionada: ${selectedPlatformLabel}.`}
               </div>
             ) : null}
             <div className="detail-actions">
@@ -199,7 +200,7 @@ function GameDetailsPanel({
                 title={!canLaunchSelectedEntry ? launchActionHint : primaryActionLabel}
                 onClick={onLaunchEntry}
               >
-                <PrimaryActionIcon size={18} fill={isMicrosoftStoreAction ? 'none' : 'currentColor'} aria-hidden="true" />
+                <PrimaryActionIcon size={18} fill={isMicrosoftStoreAction || isSteamInstallAction ? 'none' : 'currentColor'} aria-hidden="true" />
                 {primaryActionLabel}
               </button>
               {hasMultipleLaunchChoices ? (
@@ -240,9 +241,6 @@ function GameDetailsPanel({
                   ) : null}
                 </div>
               ) : null}
-              <button className="icon-button" type="button" aria-label="Instalar ou localizar arquivos" title="Instalar ou localizar arquivos" onClick={onInstallAction}>
-                <Download size={18} aria-hidden="true" />
-              </button>
               <button
                 className={isFavorite ? 'icon-button favorite-button active' : 'icon-button favorite-button'}
                 type="button"

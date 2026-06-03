@@ -1,6 +1,6 @@
 ﻿# Checkpoint - Biblioteca de Jogos Unificada
 
-Data: 2026-05-25
+Data: 2026-06-03
 
 ## Objetivo do projeto
 
@@ -150,7 +150,7 @@ Atualizacao em 2026-05-20: ficou definido como prioridade do proximo ciclo remov
 
 1. Steam - plataforma principal e primeira integracao real do MVP.
 2. Xbox/Game Pass - segunda prioridade, com pesquisa especifica sobre limites de API publica e integracao local no Windows.
-3. Epic Games - terceira prioridade, provavelmente com abordagem experimental por causa das limitacoes de API publica de biblioteca.
+3. Epic Games - terceiro provider com primeiro corte local manifest-only implementado; expansoes remotas seguem bloqueadas por limites de API/compliance.
 4. Outras plataformas - somente depois que Steam, Xbox e Epic estiverem bem definidas.
 
 ## Conclusoes principais
@@ -226,7 +226,7 @@ A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco
 6. Tela de biblioteca com busca, filtros e detalhes.
 7. Lancamento de jogo pelo launcher original ou executavel local.
 8. Pesquisa e prototipo do XboxProvider.
-9. Integracao experimental com Epic em etapa posterior.
+9. Integracao local Epic manifest-only, sem login/API remota.
 
 ## Riscos
 
@@ -246,7 +246,7 @@ A estrutura SQLite local esta documentada em `ESTRUTURA_BANCO_DADOS.md`. O banco
 6. Xbox/Game Pass local ja entrou como provider experimental no Windows: o app descobre jogos instalados via inventario local, abre o jogo com `explorer.exe` + `shell:AppsFolder` quando instalado e usa Microsoft Store quando nao instalado. A heuristica foi refinada para cobrir melhor pacotes reais sem reabrir helpers do Windows/Xbox. Achievements/title history remotos continuam aguardando confirmacao oficial/compliance e nao devem ser usados como ownership.
 7. Validar manualmente o Steam enrichment best-effort em background em lotes continuos, com fallback de artwork/metadados, lote interno conservador, pausa/backoff entre chamadas, parada ao detectar rate limit e sem bloquear boot, listagem, sync principal ou launch.
 8. Manter Xbox achievements cross-title/title history em espera por decisao oficial de API/compliance; enquanto isso, melhorar a UX do bloqueio para explicar por que a operacao esta indisponivel.
-9. Em paralelo ou logo depois, fazer o corte inicial de Epic Games com foco em viabilidade e limites de API/compliance antes de qualquer fluxo de conta.
+9. Para Epic Games, manter o corte local manifest-only e coletar mais evidencia com manifests reais antes de qualquer expansao alem de descoberta local/launcher.
 10. Depois das novas plataformas, adicionar consulta filtrada/paginacao no backend para bibliotecas maiores e ajustar a UI para suportar listas mais longas.
 11. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch, usando a base de contratos ja existente.
 12. Manter a tela de contas e a Steam em modo de manutencao incremental, priorizando regressao e pequenos refinamentos apenas quando surgirem gaps claros.
@@ -279,4 +279,6 @@ Atualizacao em 2026-05-26: o tratamento de hidden achievements Steam foi refinad
 Atualizacao em 2026-05-27: foi implementada observabilidade leve do Steam enrichment no painel compacto de achievements, sem criar dashboard ou bloquear a biblioteca. A UI agora reaproveita `game.achievements.fetchedAt` para mostrar cache atualizado, cache ausente como dados ainda nao sincronizados, cache presente vazio como dados nao disponibilizados pela Steam, e os eventos sanitizados `steam-enrichment-*` para indicar enrichment em andamento, falha temporaria e rate limit/backoff. Alertas podem ser expandidos para detalhes curtos e sanitizados. Nenhum novo DTO backend foi necessario neste corte; limites por jogo mais granulares, como distinguir privacidade de ausencia real de achievements, seguem dependentes de contrato futuro. Steam Families continua como pesquisa futura/experimental sem endpoint oficial identificado; Xbox achievements permanecem em hold por compliance; Epic nao foi iniciado.
 
 Atualizacao em 2026-05-27: foi adicionada infraestrutura minima de testes React para a UI de Steam achievements. O frontend agora tem `npm run test:unit` com Vitest, jsdom e React Testing Library para componentes em `src/components/**/*.test.jsx`, mantendo `npm run test:smoke` para a suite legada em `node:test`. A suite inicial cobre preview, modal por portal, foco/fechamento, hidden achievements censuradas/reveladas, busca segura, ordem relativa e chips de observabilidade. Nenhum backend foi alterado; DTO granular por AppID nao foi implementado; Xbox achievements continuam em hold por compliance; Epic nao foi iniciado.
+
+Atualizacao em 2026-06-03: foi implementado e validado manualmente o primeiro corte Epic Games como `EpicLocalProvider` manifest-only. A integracao nao usa login Epic, API remota Epic/EOS, Legendary/Heroic, scraping, cookies, sessao de navegador ou credenciais. A descoberta local le manifestos `.item` do Epic Games Launcher no caminho padrao `%ProgramData%\Epic\EpicGamesLauncher\Data\Manifests` e tambem em pastas adicionais configuradas pelo usuario, persistidas em SQLite via `provider_account_configs` para o provider `epic`. A plataforma/origem `epic` foi integrada ao contrato visual, filtros, agrupamento e escolhas de lancamento. A launch action usa URI `com.epicgames.launcher://` apenas quando o manifesto fornece IDs confiaveis. A deduplicacao com `LocalGamesProvider` usa caminho/instalacao normalizada, sem merge por titulo puro. Os filtros evitam Epic Games Launcher, EpicOnlineServices, Unreal Engine, runtimes, redistributables, prereqs, DirectX, installers, services, helpers, support tools e DLC isolado. A validacao manual em Tauri confirmou que Epic aparece corretamente, a sincronizacao local funcionou, apenas o jogo Epic instalado foi importado no cenario testado, nao apareceram falsos positivos e a acao de iniciar funcionou. Validacoes automatizadas reportadas no corte: `npm run lint`, `npm run test:unit`, `npm run test:smoke`, `npm run build`, `cargo fmt -- --check`, `cargo check` com warnings antigos de Xbox/AuthVault e `cargo test`.
 

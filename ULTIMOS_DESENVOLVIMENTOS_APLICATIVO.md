@@ -1,6 +1,6 @@
 # Ultimos Desenvolvimentos do Aplicativo
 
-Data de referencia: 2026-05-25
+Data de referencia: 2026-06-03
 
 Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Para historico completo, use `CHECKPOINT.md`.
 
@@ -49,7 +49,7 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - A classificacao do Xbox local foi endurecida para excluir apps comuns do Windows/Store como Skype, Filmes e TV, Noticias e IntelliGo Neptune, enquanto jogos de desktop como `osu!` passam a entrar como `local`.
 - A capability Tauri `default` foi atualizada para liberar `get_xbox_account_config`, `save_xbox_account_config`, `get_xbox_library_roots` e `save_xbox_library_roots`, corrigindo o erro `Command not found / not allowed` que aparecia ao expandir as configuracoes do Xbox.
 - Quando o mesmo jogo existe em mais de uma origem, o merge visual prioriza `local` como plataforma principal quando ela estiver presente no grupo.
-- Epic Games fica como integracao planejada.
+- Epic Games ja possui primeiro corte local manifest-only: a integracao le manifestos `.item` do Epic Games Launcher, sem login Epic, API remota, Legendary/Heroic, scraping, cookies, sessao de navegador ou credenciais.
 - O fluxo `Entrar com Steam` usa Steam OpenID no navegador externo, com callback local em `127.0.0.1`, valida a resposta com a Steam e persiste apenas o SteamID64 no SQLite.
 - A tela tambem permite salvar SteamID64 manualmente no banco local para diagnostico/fallback, sem depender de `localStorage` como fonte de verdade.
 - A sincronizacao por conta usa SteamID64 persistido no backend e Web API key salva no AuthVault/keyring do sistema operacional.
@@ -158,6 +158,19 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - Entradas locais antigas que apontem para esses componentes agora sao arquivadas pela limpeza local.
 - Foram adicionados testes Rust para importacao e limpeza regressiva desses falsos positivos.
 
+## EpicLocalProvider manifest-only
+
+- O primeiro corte Epic Games foi implementado como provider local manifest-only.
+- Nao ha login Epic, API remota Epic/EOS, Legendary/Heroic, scraping, cookies, sessao de navegador ou credenciais.
+- A descoberta local le manifestos `.item` do Epic Games Launcher no caminho padrao `%ProgramData%\Epic\EpicGamesLauncher\Data\Manifests`.
+- Pastas adicionais Epic podem ser configuradas pelo usuario na tela de `Contas e integracoes` e sao persistidas em SQLite via `provider_account_configs` para o provider `epic`.
+- A plataforma/origem `epic` foi integrada ao contrato visual, filtros, agrupamento e launch choices.
+- A launch action Epic usa URI `com.epicgames.launcher://` somente quando ha IDs confiaveis no manifesto.
+- A deduplicacao com `LocalGamesProvider` usa caminho/instalacao normalizada, sem merge por titulo puro.
+- Os filtros evitam Epic Games Launcher, EpicOnlineServices, Unreal Engine, runtimes, redistributables, prereqs, DirectX, installers, services, helpers, support tools e DLC isolado.
+- Validacao manual em Tauri confirmada pelo usuario em 2026-06-03: Epic apareceu corretamente, a sincronizacao local funcionou, apenas o jogo Epic instalado foi importado no cenario testado, nao apareceram falsos positivos e a acao de iniciar funcionou.
+- Continuam fora do corte: login Epic, API remota Epic/EOS para biblioteca, Legendary/Heroic, download/install/update, achievements, cloud saves, scraping/cookies/sessao de navegador.
+
 ## Validacoes recentes
 
 Ultima validacao confirmada:
@@ -221,6 +234,25 @@ cargo test
 
 Resultado validado: lint/build aprovados, smoke frontend com 29 testes passando e suite Rust com 132 testes passando apos o hardening Battle.net do scan local.
 
+Validacao do corte EpicLocalProvider em 2026-06-03:
+
+```powershell
+npm run lint
+npm run test:unit
+npm run test:smoke
+npm run build
+```
+
+```powershell
+cd aplicativo\src-tauri
+$env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\BibliotecaJogosUnificada\cargo-target"
+cargo fmt -- --check
+cargo check
+cargo test
+```
+
+Resultado validado: frontend lint/unit/smoke/build aprovados; backend fmt/check/test aprovados. O `cargo check` manteve apenas warnings antigos de Xbox/AuthVault. A validacao manual em Tauri confirmou Epic visivel, sincronizacao local funcional, importacao apenas do jogo Epic instalado no cenario testado, ausencia de falsos positivos e acao de iniciar funcionando.
+
 ## Commits recentes relevantes
 
 - `a99f0cf fix(steam): apply provider agent review`
@@ -239,7 +271,7 @@ Resultado validado: lint/build aprovados, smoke frontend com 29 testes passando 
 1. Validar manualmente o Steam enrichment best-effort em background no Tauri, com lotes continuos, fallback de artwork/metadados, pausa/backoff, parada em rate limit e sem bloquear boot, listagem, sync principal ou launch.
 2. Manter Xbox achievements cross-title/title history aguardando confirmacao oficial de compliance antes de qualquer uso como enrichment/catalogo.
 3. Consolidar e testar o Xbox/Game Pass local como provider experimental do Windows, refinando a heuristica contra apps falsos positivos e validando mais jogos de desktop que devem entrar como `local`.
-4. Em seguida, fazer o corte inicial de Epic Games, tratando compliance e limite de API como bloqueios de decisao antes de qualquer fluxo de conta.
+4. Para Epic Games, manter o corte atual em modo local manifest-only e coletar mais evidencia com manifests reais antes de qualquer expansao.
 5. Depois das novas plataformas, preparar consulta filtrada/paginacao no backend para bibliotecas maiores e ajustar a UI para listas mais longas.
 6. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch.
 7. Refinar a UX do bloqueio de importacao Xbox, explicando melhor ao usuario porque a operacao ainda pode falhar quando compliance/autenticacao nao estiverem concluidos.

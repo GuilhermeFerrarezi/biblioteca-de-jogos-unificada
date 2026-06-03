@@ -49,6 +49,33 @@ const xboxEntry = {
   },
 }
 
+const epicEntry = {
+  id: 'epic-entry',
+  primaryPlatformId: 'epic',
+  installStatus: 'installed',
+  lastPlayedLabel: 'Nunca',
+  game: {
+    title: 'Hollow Knight',
+    sortTitle: 'Hollow Knight',
+    platforms: ['epic'],
+    sources: [{ platformId: 'epic', externalId: 'ns:item:artifact' }],
+    installLocations: ['C:/Epic/HollowKnight'],
+    launchActions: [
+      {
+        isPrimary: true,
+        kind: 'uri',
+        target: 'com.epicgames.launcher://apps/ns%3Aitem%3Aartifact?action=launch&silent=true',
+        label: 'Epic Games',
+      },
+    ],
+    playtime: { totalMinutes: 0 },
+    artwork: { accentColor: '#0d9488' },
+    genres: ['Aventura'],
+    tags: ['metroidvania'],
+    userOverrides: { epic: true },
+  },
+}
+
 const manualEntry = {
   id: 'manual-entry',
   primaryPlatformId: 'manual',
@@ -85,6 +112,16 @@ test('groupLibraryEntries merges Steam and Xbox records with the same title', ()
   assert.equal(mergedEntry.game.platforms.length, 2)
   assert.deepEqual(mergedEntry.platformIds, ['steam', 'xbox'])
   assert.equal(mergedEntry.game.sources.length, 2)
+})
+
+test('groupLibraryEntries can merge Epic with another launcher for the same title', () => {
+  const groupedEntries = groupLibraryEntries([steamEntry, epicEntry])
+
+  assert.equal(groupedEntries.length, 1)
+  assert.equal(groupedEntries[0].isGroupedCrossPlatform, true)
+  assert.deepEqual(groupedEntries[0].memberEntryIds, ['steam-entry', 'epic-entry'])
+  assert.equal(groupedEntries[0].platformSummary, 'Steam + Epic Games')
+  assert.deepEqual(groupedEntries[0].platformIds, ['steam', 'epic'])
 })
 
 test('groupLibraryEntries marks a merged entry as favorite when any member is favorite', () => {

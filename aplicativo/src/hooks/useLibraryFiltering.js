@@ -20,7 +20,7 @@ const normalizeSearchValue = (value) =>
 const QUICK_FILTER_GROUPS = Object.freeze({
   favorites: new Set([QUICK_FILTER_IDS.FAVORITES]),
   status: new Set([QUICK_FILTER_IDS.INSTALLED, QUICK_FILTER_IDS.NOT_INSTALLED]),
-  platform: new Set([QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.LOCAL]),
+  platform: new Set([QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.EPIC, QUICK_FILTER_IDS.LOCAL]),
 })
 
 function matchesQuickFilter(entry, quickFilterId) {
@@ -33,6 +33,7 @@ function matchesQuickFilter(entry, quickFilterId) {
       return entry.installStatus === INSTALL_STATUS.NOT_INSTALLED
     case QUICK_FILTER_IDS.STEAM:
     case QUICK_FILTER_IDS.XBOX:
+    case QUICK_FILTER_IDS.EPIC:
     case QUICK_FILTER_IDS.LOCAL:
       return entry.platformIds?.includes(quickFilterId) || entry.primaryPlatformId === quickFilterId
     default:

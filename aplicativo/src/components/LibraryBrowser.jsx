@@ -1,4 +1,4 @@
-import { CircleDot, HardDrive, Heart, LayoutGrid, Library, List, Search, Trophy } from 'lucide-react'
+import { CircleDot, HardDrive, Heart, LayoutGrid, Library, List, Search, Store, Trophy } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getAchievementProgress, getAchievementSummaryLabel, getPlaytimeHours } from '../adapters/libraryEntryAdapter'
 import {
@@ -13,7 +13,7 @@ import SteamIcon from './icons/SteamIcon'
 import XboxIcon from './icons/XboxIcon'
 
 const STATUS_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.INSTALLED, QUICK_FILTER_IDS.NOT_INSTALLED])
-const PLATFORM_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.LOCAL])
+const PLATFORM_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.EPIC, QUICK_FILTER_IDS.LOCAL])
 const QUICK_FILTER_ICONS = Object.freeze({
   [QUICK_FILTER_IDS.ALL]: Library,
   [QUICK_FILTER_IDS.FAVORITES]: Heart,
@@ -21,6 +21,7 @@ const QUICK_FILTER_ICONS = Object.freeze({
   [QUICK_FILTER_IDS.NOT_INSTALLED]: HardDrive,
   [QUICK_FILTER_IDS.STEAM]: SteamIcon,
   [QUICK_FILTER_IDS.XBOX]: XboxIcon,
+  [QUICK_FILTER_IDS.EPIC]: Store,
   [QUICK_FILTER_IDS.LOCAL]: HardDrive,
 })
 

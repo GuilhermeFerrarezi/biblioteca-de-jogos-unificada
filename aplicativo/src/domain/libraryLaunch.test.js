@@ -8,6 +8,7 @@ import {
   getLaunchActionState,
   getPreferredLaunchEntryId,
   getVisibleSelectedEntry,
+  isSteamInstallUri,
   resolveMicrosoftStoreTarget,
 } from './libraryLaunch.js'
 
@@ -104,6 +105,50 @@ test('getLaunchActionState keeps Xbox installed entries executable', () => {
   assert.equal(xboxInstalledState.primaryLaunchAction?.target, 'C:/Games/Xbox/Test.exe')
 })
 
+test('getLaunchActionState creates a Steam install action for not installed Steam entries with AppID source', () => {
+  const steamInstallState = getLaunchActionState({
+    id: 'entry-steam-remote',
+    primaryPlatformId: 'steam',
+    installStatus: 'not_installed',
+    game: {
+      sources: [{ platformId: 'steam', externalId: '413150' }],
+      launchActions: [
+        {
+          isPrimary: true,
+          kind: 'uri',
+          target: 'steam://rungameid/413150',
+          label: 'Steam',
+        },
+      ],
+    },
+  })
+
+  assert.equal(steamInstallState.canLaunch, true)
+  assert.equal(steamInstallState.primaryLaunchAction?.label, 'Instalar')
+  assert.equal(steamInstallState.primaryLaunchAction?.target, 'steam://install/413150')
+})
+
+test('getLaunchActionState avoids Steam install promise when AppID is unavailable', () => {
+  const steamInstallState = getLaunchActionState({
+    id: 'entry-steam-unknown',
+    primaryPlatformId: 'steam',
+    installStatus: 'not_installed',
+    game: {
+      sources: [{ platformId: 'steam', externalId: '' }],
+      launchActions: [],
+    },
+  })
+
+  assert.equal(steamInstallState.canLaunch, false)
+  assert.equal(steamInstallState.primaryLaunchAction, null)
+  assert.match(steamInstallState.hint, /acao de lancamento/i)
+})
+
+test('isSteamInstallUri identifies Steam install links only', () => {
+  assert.equal(isSteamInstallUri('steam://install/413150'), true)
+  assert.equal(isSteamInstallUri('steam://rungameid/413150'), false)
+})
+
 test('resolveMicrosoftStoreTarget keeps direct Microsoft Store links intact', () => {
   const directStoreEntry = {
     primaryPlatformId: 'xbox',
@@ -176,6 +221,70 @@ test('getLaunchChoices returns one option per underlying platform entry', () => 
   assert.equal(launchChoices[0]?.platformLabel, 'Steam')
   assert.equal(launchChoices[1]?.platformLabel, 'Xbox')
   assert.equal(launchChoices[1]?.launchAction?.target, 'ms-windows-store://pdp/?productid=9NBLGGH4R315')
+})
+
+test('getLaunchChoices includes Epic manifest launch actions when present', () => {
+  const groupedEntry = {
+    memberEntries: [
+      {
+        id: 'steam-entry',
+        primaryPlatformId: 'steam',
+        game: {
+          launchActions: [
+            {
+              isPrimary: true,
+              platformId: 'steam',
+              kind: 'uri',
+              target: 'steam://rungameid/10',
+              label: 'Jogar na Steam',
+            },
+          ],
+        },
+      },
+      {
+        id: 'epic-entry',
+        primaryPlatformId: 'epic',
+        installStatus: 'installed',
+        game: {
+          launchActions: [
+            {
+              isPrimary: true,
+              platformId: 'epic',
+              kind: 'uri',
+              target: 'com.epicgames.launcher://apps/ns%3Aitem%3Aartifact?action=launch&silent=true',
+              label: 'Epic Games',
+            },
+          ],
+        },
+      },
+    ],
+  }
+
+  const launchChoices = getLaunchChoices(groupedEntry, 'epic')
+
+  assert.equal(launchChoices.length, 2)
+  assert.equal(launchChoices[0]?.platformLabel, 'Epic Games')
+  assert.equal(launchChoices[0]?.entryId, 'epic-entry')
+  assert.equal(
+    launchChoices[0]?.launchAction?.target,
+    'com.epicgames.launcher://apps/ns%3Aitem%3Aartifact?action=launch&silent=true',
+  )
+})
+
+test('getLaunchActionState does not create a fake Epic action when no launch action exists', () => {
+  const epicState = getLaunchActionState({
+    id: 'entry-epic-no-action',
+    primaryPlatformId: 'epic',
+    installStatus: 'installed',
+    game: {
+      sources: [{ platformId: 'epic', externalId: 'ns:item:artifact' }],
+      launchActions: [],
+    },
+  })
+
+  assert.equal(epicState.canLaunch, false)
+  assert.equal(epicState.primaryLaunchAction, null)
+  assert.match(epicState.hint, /acao de lancamento/i)
 })
 
 test('getLaunchActionState falls back to store search when no product id is available', () => {

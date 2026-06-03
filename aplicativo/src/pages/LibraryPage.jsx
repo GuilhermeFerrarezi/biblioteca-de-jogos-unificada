@@ -57,32 +57,34 @@ function LibraryPage() {
               </div>
             }
           >
-              <AccountsSettingsPage
-                feedbackMessage={library.launchMessage}
-                feedbackDetails={library.launchFeedback}
-                isLibrarySettingsLoading={library.isLibrarySettingsLoading}
-                isLibrarySettingsSaving={library.isLibrarySettingsSaving}
-                isSteamAccountSyncing={library.isSteamAccountSyncing}
-                isSteamSyncing={library.isSteamSyncing}
-                isXboxSyncing={library.isXboxSyncing}
-                preferredStoreId={library.preferredStoreId}
-                localScanMode={library.localScanMode}
-                localScanRootsText={library.localScanRootsText}
-                localScanExcludedRootsText={library.localScanExcludedRootsText}
-                microsoftClientId={library.microsoftClientId}
-                onBackToLibrary={() => setActiveSection('library')}
-                onPreferredStoreChange={library.handlePreferredStoreChange}
-                onLocalScanModeChange={library.handleLocalScanModeChange}
-                onLocalScanRootsChange={library.handleLocalScanRootsChange}
-                onLocalScanRootsSelect={library.handleLocalScanRootsSelect}
-                onLocalScanExcludedRootsChange={library.handleLocalScanExcludedRootsChange}
-                onLocalScanExcludedRootsSelect={library.handleLocalScanExcludedRootsSelect}
-                onMicrosoftClientIdChange={library.handleMicrosoftClientIdChange}
-                onSaveLibrarySettings={library.handleSaveLibrarySettings}
-                onSyncSteamAccountGames={library.handleSyncSteamAccountGames}
-                onSyncSteamGames={library.handleSyncSteamGames}
-                onSyncXboxTitleHistory={library.handleSyncXboxTitleHistory}
+            <AccountsSettingsPage
+              feedbackMessage={library.launchMessage}
+              feedbackDetails={library.launchFeedback}
+              isLibrarySettingsLoading={library.isLibrarySettingsLoading}
+              isLibrarySettingsSaving={library.isLibrarySettingsSaving}
+              isSteamAccountSyncing={library.isSteamAccountSyncing}
+              isSteamSyncing={library.isSteamSyncing}
+              isXboxSyncing={library.isXboxSyncing}
+              isEpicSyncing={library.isEpicSyncing}
+              preferredStoreId={library.preferredStoreId}
+              localScanMode={library.localScanMode}
+              localScanRootsText={library.localScanRootsText}
+              localScanExcludedRootsText={library.localScanExcludedRootsText}
+              microsoftClientId={library.microsoftClientId}
+              onBackToLibrary={() => setActiveSection('library')}
+              onPreferredStoreChange={library.handlePreferredStoreChange}
+              onLocalScanModeChange={library.handleLocalScanModeChange}
+              onLocalScanRootsChange={library.handleLocalScanRootsChange}
+              onLocalScanRootsSelect={library.handleLocalScanRootsSelect}
+              onLocalScanExcludedRootsChange={library.handleLocalScanExcludedRootsChange}
+              onLocalScanExcludedRootsSelect={library.handleLocalScanExcludedRootsSelect}
+              onMicrosoftClientIdChange={library.handleMicrosoftClientIdChange}
+              onSaveLibrarySettings={library.handleSaveLibrarySettings}
+              onSyncSteamAccountGames={library.handleSyncSteamAccountGames}
+              onSyncSteamGames={library.handleSyncSteamGames}
+              onSyncXboxTitleHistory={library.handleSyncXboxTitleHistory}
               onSyncXboxGames={library.handleSyncXboxGames}
+              onSyncEpicGames={library.handleSyncEpicGames}
             />
           </Suspense>
         ) : (
@@ -130,7 +132,6 @@ function LibraryPage() {
                 steamEnrichmentStatus={steamEnrichmentStatus}
                 onArchiveEntry={library.handleArchiveSelectedEntry}
                 onEditEntry={library.handleEditSelectedEntry}
-                onInstallAction={library.handleInstallAction}
                 onLaunchEntry={library.handleLaunchSelectedEntry}
                 onLaunchPlatformChange={library.handleLaunchPlatformChange}
                 onToggleFavoriteEntry={library.handleToggleFavoriteSelectedEntry}

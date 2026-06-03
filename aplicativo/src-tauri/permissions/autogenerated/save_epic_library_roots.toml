@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-epic-library-roots"
+description = "Enables the save_epic_library_roots command without any pre-configured scope."
+commands.allow = ["save_epic_library_roots"]
+
+[[permission]]
+identifier = "deny-save-epic-library-roots"
+description = "Denies the save_epic_library_roots command without any pre-configured scope."
+commands.deny = ["save_epic_library_roots"]

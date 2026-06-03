@@ -1,6 +1,6 @@
 import { PLATFORM_LABELS } from '../constants/libraryConstants.js'
 
-const CROSS_PLATFORM_IDS = new Set(['steam', 'xbox'])
+const CROSS_PLATFORM_IDS = new Set(['steam', 'xbox', 'epic'])
 
 const normalizeGroupingKey = (value) =>
   String(value ?? '')
@@ -114,14 +114,12 @@ export function groupLibraryEntries(entries) {
       kind: 'candidate',
       entries: [],
       firstIndex: index,
-      hasSteam: false,
-      hasXbox: false,
+      platformIds: new Set(),
     }
 
     currentGroup.entries.push(entry)
     currentGroup.firstIndex = Math.min(currentGroup.firstIndex, index)
-    currentGroup.hasSteam ||= platformId === 'steam'
-    currentGroup.hasXbox ||= platformId === 'xbox'
+    currentGroup.platformIds.add(platformId)
 
     groupedByKey.set(groupKey, currentGroup)
   })
@@ -134,7 +132,7 @@ export function groupLibraryEntries(entries) {
     const groupKey = normalizeGroupingKey(title)
     const candidateGroup = groupedByKey.get(groupKey)
 
-    if (candidateGroup?.kind === 'candidate' && candidateGroup.hasSteam && candidateGroup.hasXbox) {
+    if (candidateGroup?.kind === 'candidate' && candidateGroup.platformIds.size > 1) {
       if (candidateGroup.firstIndex === index && !emittedGroupKeys.has(groupKey)) {
         result.push(buildGroupedEntry(candidateGroup.entries, groupKey))
         emittedGroupKeys.add(groupKey)

@@ -24,12 +24,14 @@ import {
   deleteSteamApiKey,
   getSteamEnrichmentRetrySummary,
   getSteamAccountConfig,
+  getEpicLibraryRoots,
   getSteamApiKeyStatus,
   getSteamLibraryRoots,
   getXboxAccountConfig,
   getXboxLiveAuthState,
   getXboxLibraryRoots,
   saveSteamAccountConfig,
+  saveEpicLibraryRoots,
   saveSteamApiKey,
   saveSteamLibraryRoots,
   saveXboxLibraryRoots,
@@ -62,6 +64,10 @@ const emptyXboxLibraryRootsForm = Object.freeze({
   rootsText: '',
 })
 
+const emptyEpicLibraryRootsForm = Object.freeze({
+  rootsText: '',
+})
+
 const accountProviders = Object.freeze([
   {
     id: 'steam',
@@ -85,10 +91,10 @@ const accountProviders = Object.freeze([
     id: 'epic',
     name: 'Epic Games',
     icon: Store,
-    state: 'Planejado',
-    tone: 'planned',
-    detail: 'Provider reservado para integracao futura.',
-    nextStep: 'Sem segredo salvo agora.',
+    state: 'Descoberta local',
+    tone: 'ready',
+    detail: 'Lê manifestos instalados do Epic Games Launcher neste computador.',
+    nextStep: 'Sem login, API remota, token ou sessao de navegador.',
   },
 ])
 
@@ -247,6 +253,7 @@ function AccountsSettingsPage({
   isSteamAccountSyncing,
   isSteamSyncing,
   isXboxSyncing,
+  isEpicSyncing,
   preferredStoreId,
   localScanMode,
   localScanRootsText,
@@ -265,12 +272,14 @@ function AccountsSettingsPage({
   onSyncSteamAccountGames,
   onSyncSteamGames,
   onSyncXboxGames,
+  onSyncEpicGames,
 }) {
   const [isSteamPanelOpen, setIsSteamPanelOpen] = useState(false)
   const [steamApiKeyForm, setSteamApiKeyForm] = useState(emptySteamApiKeyForm)
   const [steamAccountForm, setSteamAccountForm] = useState(emptySteamAccountForm)
   const [steamLibraryRootsForm, setSteamLibraryRootsForm] = useState(emptySteamLibraryRootsForm)
   const [xboxLibraryRootsForm, setXboxLibraryRootsForm] = useState(emptyXboxLibraryRootsForm)
+  const [epicLibraryRootsForm, setEpicLibraryRootsForm] = useState(emptyEpicLibraryRootsForm)
   const [steamApiKeyConfigured, setSteamApiKeyConfigured] = useState(false)
   const [steamApiKeyStatusMessage, setSteamApiKeyStatusMessage] = useState('')
   const [steamApiKeyError, setSteamApiKeyError] = useState(null)
@@ -283,6 +292,8 @@ function AccountsSettingsPage({
   const [steamLibraryRootsError, setSteamLibraryRootsError] = useState(null)
   const [xboxLibraryRootsStatusMessage, setXboxLibraryRootsStatusMessage] = useState('')
   const [xboxLibraryRootsError, setXboxLibraryRootsError] = useState(null)
+  const [epicLibraryRootsStatusMessage, setEpicLibraryRootsStatusMessage] = useState('')
+  const [epicLibraryRootsError, setEpicLibraryRootsError] = useState(null)
   const [isSteamAccountConnected, setIsSteamAccountConnected] = useState(false)
   const [isSteamLoginStarting, setIsSteamLoginStarting] = useState(false)
   const [isSteamApiKeyLoading, setIsSteamApiKeyLoading] = useState(true)
@@ -292,6 +303,8 @@ function AccountsSettingsPage({
   const [isSteamLibraryRootsSaving, setIsSteamLibraryRootsSaving] = useState(false)
   const [isXboxLibraryRootsLoading, setIsXboxLibraryRootsLoading] = useState(true)
   const [isXboxLibraryRootsSaving, setIsXboxLibraryRootsSaving] = useState(false)
+  const [isEpicLibraryRootsLoading, setIsEpicLibraryRootsLoading] = useState(true)
+  const [isEpicLibraryRootsSaving, setIsEpicLibraryRootsSaving] = useState(false)
   const [xboxLiveAuthStatus, setXboxLiveAuthStatus] = useState({
     configured: false,
     providerId: 'xbox',
@@ -313,6 +326,7 @@ function AccountsSettingsPage({
   })
   const [isXboxIdentityLoading, setIsXboxIdentityLoading] = useState(true)
   const [isXboxPanelOpen, setIsXboxPanelOpen] = useState(false)
+  const [isEpicPanelOpen, setIsEpicPanelOpen] = useState(false)
 
   const steamPanelRef = useRef(null)
   const steamToggleRef = useRef(null)
@@ -320,6 +334,9 @@ function AccountsSettingsPage({
   const xboxPanelRef = useRef(null)
   const xboxToggleRef = useRef(null)
   const previousXboxPanelOpen = useRef(isXboxPanelOpen)
+  const epicPanelRef = useRef(null)
+  const epicToggleRef = useRef(null)
+  const previousEpicPanelOpen = useRef(isEpicPanelOpen)
 
   const steamApiKeyStatusLabel = useMemo(() => {
     if (!steamApiKeyConfigured) {
@@ -339,6 +356,7 @@ function AccountsSettingsPage({
       ? 'Conecte a conta Steam para sincronizar.'
       : steamId64Error || ''
   const xboxPanelContentId = 'xbox-panel-content'
+  const epicPanelContentId = 'epic-panel-content'
   const xboxIdentityConfigured = normalizeXboxIdentityStatus(xboxIdentityStatus)
   const xboxLiveAuthConfigured = normalizeXboxIdentityStatus(xboxLiveAuthStatus)
   const normalizedMicrosoftClientId = String(microsoftClientId ?? '').trim()
@@ -514,6 +532,51 @@ function AccountsSettingsPage({
     }
 
     void loadXboxLibraryRoots()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isMounted = true
+
+    const loadEpicLibraryRoots = async () => {
+      setIsEpicLibraryRootsLoading(true)
+      setEpicLibraryRootsError(null)
+
+      try {
+        const config = await getEpicLibraryRoots()
+
+        if (!isMounted) {
+          return
+        }
+
+        const roots = Array.isArray(config?.roots) ? config.roots : []
+        setEpicLibraryRootsForm({ rootsText: roots.join('\n') })
+        setEpicLibraryRootsStatusMessage(
+          roots.length > 0
+            ? `${roots.length} ${roots.length === 1 ? 'pasta Epic adicional configurada.' : 'pastas Epic adicionais configuradas.'}`
+            : 'Nenhuma pasta Epic adicional configurada.',
+        )
+      } catch (error) {
+        if (isMounted) {
+          setEpicLibraryRootsError(
+            normalizeProviderErrorFeedback(
+              error,
+              'Nao foi possivel consultar as pastas Epic adicionais.',
+              'Consulta de pastas Epic adicionais',
+            ),
+          )
+        }
+      } finally {
+        if (isMounted) {
+          setIsEpicLibraryRootsLoading(false)
+        }
+      }
+    }
+
+    void loadEpicLibraryRoots()
 
     return () => {
       isMounted = false
@@ -762,6 +825,26 @@ function AccountsSettingsPage({
 
     previousXboxPanelOpen.current = isXboxPanelOpen
   }, [isXboxPanelOpen])
+
+  useEffect(() => {
+    const wasOpen = previousEpicPanelOpen.current
+
+    if (isEpicPanelOpen && !wasOpen) {
+      const firstFocusable = epicPanelRef.current?.querySelector(
+        'button:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+      )
+
+      if (firstFocusable instanceof HTMLElement) {
+        firstFocusable.focus()
+      }
+    }
+
+    if (!isEpicPanelOpen && wasOpen) {
+      epicToggleRef.current?.focus()
+    }
+
+    previousEpicPanelOpen.current = isEpicPanelOpen
+  }, [isEpicPanelOpen])
 
   const handleSteamApiKeyChange = (event) => {
     setSteamApiKeyForm({ apiKey: event.target.value })
@@ -1149,6 +1232,76 @@ function AccountsSettingsPage({
     }
   }
 
+  const handleEpicLibraryRootsChange = (event) => {
+    setEpicLibraryRootsForm({ rootsText: event.target.value })
+    setEpicLibraryRootsError(null)
+    setEpicLibraryRootsStatusMessage('Pastas Epic prontas para salvar.')
+  }
+
+  const handleEpicLibraryRootSelect = async () => {
+    setEpicLibraryRootsError(null)
+
+    try {
+      const selectedPath = await open({
+        directory: true,
+        multiple: false,
+        title: 'Selecionar pasta de manifestos Epic',
+      })
+
+      if (typeof selectedPath !== 'string' || !selectedPath.trim()) {
+        return
+      }
+
+      setEpicLibraryRootsForm((currentForm) => {
+        const currentRoots = parseSteamLibraryRootsText(currentForm.rootsText)
+        const hasRoot = currentRoots.some((root) => root.toLowerCase() === selectedPath.trim().toLowerCase())
+        const nextRoots = hasRoot ? currentRoots : [...currentRoots, selectedPath.trim()]
+
+        return { rootsText: nextRoots.join('\n') }
+      })
+      setEpicLibraryRootsStatusMessage('Pasta adicionada. Salve para usar na proxima sincronizacao Epic local.')
+    } catch (error) {
+      setEpicLibraryRootsError(
+        normalizeProviderErrorFeedback(
+          error,
+          'Nao foi possivel abrir o seletor de pastas.',
+          'Selecionar pasta Epic',
+        ),
+      )
+    }
+  }
+
+  const handleEpicLibraryRootsSubmit = async (event) => {
+    event.preventDefault()
+
+    const roots = parseSteamLibraryRootsText(epicLibraryRootsForm.rootsText)
+    setIsEpicLibraryRootsSaving(true)
+    setEpicLibraryRootsError(null)
+    setEpicLibraryRootsStatusMessage('Salvando pastas Epic adicionais.')
+
+    try {
+      const config = await saveEpicLibraryRoots(roots)
+      const savedRoots = Array.isArray(config?.roots) ? config.roots : roots
+      setEpicLibraryRootsForm({ rootsText: savedRoots.join('\n') })
+      setEpicLibraryRootsStatusMessage(
+        savedRoots.length > 0
+          ? `${savedRoots.length} ${savedRoots.length === 1 ? 'pasta Epic adicional salva.' : 'pastas Epic adicionais salvas.'}`
+          : 'Lista de pastas Epic adicionais limpa.',
+      )
+    } catch (error) {
+      setEpicLibraryRootsError(
+        normalizeProviderErrorFeedback(
+          error,
+          'Nao foi possivel salvar as pastas Epic. Confirme se cada caminho existe e aponta para manifestos do Epic Games Launcher.',
+          'Salvar pastas Epic adicionais',
+        ),
+      )
+      setEpicLibraryRootsStatusMessage('')
+    } finally {
+      setIsEpicLibraryRootsSaving(false)
+    }
+  }
+
   const handleXboxLiveLoginStart = async () => {
     setIsXboxLoginStarting(true)
     setXboxLiveAuthError(null)
@@ -1211,6 +1364,10 @@ function AccountsSettingsPage({
 
   const handleXboxPanelToggle = () => {
     setIsXboxPanelOpen((currentValue) => !currentValue)
+  }
+
+  const handleEpicPanelToggle = () => {
+    setIsEpicPanelOpen((currentValue) => !currentValue)
   }
 
   const handleXboxTitleHistoryModalOpen = () => {
@@ -1291,6 +1448,8 @@ function AccountsSettingsPage({
               isSteamLoginStarting={isSteamLoginStarting}
               isSteamPanelOpen={isSteamPanelOpen}
               isSteamSyncing={isSteamSyncing}
+              isEpicPanelOpen={isEpicPanelOpen}
+              isEpicSyncing={isEpicSyncing}
               isXboxPanelOpen={isXboxPanelOpen}
               isXboxIdentityConfigured={xboxLiveAuthConfigured}
               isXboxTitleHistoryScanning={isXboxTitleHistoryScanning}
@@ -1373,17 +1532,37 @@ function AccountsSettingsPage({
                       onSubmit={handleXboxLibraryRootsSubmit}
                     />
                   ) : null
+                ) : provider.id === 'epic' ? (
+                  isEpicPanelOpen ? (
+                    <EpicLibraryRootsPanel
+                      errorFeedback={epicLibraryRootsError}
+                      form={epicLibraryRootsForm}
+                      isBusy={isEpicLibraryRootsLoading || isEpicLibraryRootsSaving || isEpicSyncing}
+                      isLoading={isEpicLibraryRootsLoading}
+                      isSaving={isEpicLibraryRootsSaving}
+                      panelId={epicPanelContentId}
+                      panelRef={epicPanelRef}
+                      statusMessage={epicLibraryRootsStatusMessage}
+                      onChange={handleEpicLibraryRootsChange}
+                      onSelectRoot={handleEpicLibraryRootSelect}
+                      onSubmit={handleEpicLibraryRootsSubmit}
+                    />
+                  ) : null
                 ) : null
               }
               provider={provider}
+              epicPanelContentId={epicPanelContentId}
+              epicToggleRef={epicToggleRef}
               steamPanelContentId={steamPanelContentId}
               steamToggleRef={steamToggleRef}
               xboxPanelContentId={xboxPanelContentId}
               xboxToggleRef={xboxToggleRef}
               onOpenXboxTitleHistoryModal={handleXboxTitleHistoryModalOpen}
               onSyncXboxGames={onSyncXboxGames}
+              onSyncEpicGames={onSyncEpicGames}
               onToggleSteamPanel={handleSteamPanelToggle}
               onToggleXboxPanel={handleXboxPanelToggle}
+              onToggleEpicPanel={handleEpicPanelToggle}
             />
           ))}
         </section>
@@ -2064,6 +2243,83 @@ function XboxLibraryRootsPanel({
   )
 }
 
+function EpicLibraryRootsPanel({
+  errorFeedback,
+  form,
+  isBusy,
+  isLoading,
+  isSaving,
+  onChange,
+  onSelectRoot,
+  onSubmit,
+  panelId,
+  panelRef,
+  statusMessage,
+}) {
+  return (
+    <article
+      className="xbox-library-roots-panel"
+      id={panelId}
+      ref={panelRef}
+      aria-labelledby="epic-library-roots-title"
+      aria-busy={isBusy}
+    >
+      <div className="steam-api-vault-heading">
+        <div className="account-provider-icon" aria-hidden="true">
+          <Store size={22} />
+        </div>
+
+        <div>
+          <div className="account-provider-heading">
+            <h2 id="epic-library-roots-title">Manifestos Epic</h2>
+            <span className="account-status" data-tone="ready">
+              <CheckCircle2 size={14} aria-hidden="true" />
+              Descoberta local
+            </span>
+          </div>
+          <p>Adicione uma pasta por linha contendo manifestos .item do Epic Games Launcher.</p>
+        </div>
+      </div>
+
+      <form className="steam-library-roots-form" onSubmit={onSubmit}>
+        <label htmlFor="epic-library-roots">
+          <span>Pastas Epic adicionais</span>
+          <textarea
+            id="epic-library-roots"
+            value={form.rootsText}
+            rows={4}
+            spellCheck="false"
+            placeholder={'D:\\Epic\\Manifests\nE:\\EpicGamesLauncher\\Data\\Manifests'}
+            aria-invalid={errorFeedback ? 'true' : 'false'}
+            aria-describedby="epic-library-roots-help epic-library-roots-feedback"
+            disabled={isBusy}
+            onChange={onChange}
+          />
+        </label>
+        <p id="epic-library-roots-help">
+          O caminho padrao ProgramData da Epic ja e consultado. Use este campo apenas para manifestos adicionais neste computador.
+        </p>
+        <div className="steam-api-key-actions">
+          <button className="secondary-button" type="button" disabled={isBusy} onClick={onSelectRoot}>
+            <FolderOpen size={16} aria-hidden="true" />
+            Selecionar pasta
+          </button>
+          <button className="primary-button" type="submit" disabled={isBusy}>
+            <Save size={16} aria-hidden="true" />
+            {isSaving ? 'Salvando' : 'Salvar pastas'}
+          </button>
+        </div>
+      </form>
+      <ProviderFeedback
+        defaultMessage={isLoading ? 'Consultando pastas Epic adicionais.' : 'A sincronizacao usa apenas manifestos locais validos da Epic.'}
+        errorFeedback={errorFeedback}
+        id="epic-library-roots-feedback"
+        statusMessage={statusMessage}
+      />
+    </article>
+  )
+}
+
 function SteamWebApiVaultPanel({
   errorFeedback,
   form,
@@ -2148,6 +2404,10 @@ function SteamWebApiVaultPanel({
 }
 
 function ProviderAccountRow({
+  epicPanelContentId,
+  epicToggleRef,
+  isEpicPanelOpen,
+  isEpicSyncing,
   isSteamAccountSyncing,
   isSteamPanelOpen,
   isSteamSyncing,
@@ -2159,8 +2419,10 @@ function ProviderAccountRow({
   xboxTitleHistoryDisabledReason,
   xboxTitleHistoryHint,
   xboxTitleHistoryStatusMessage,
+  onSyncEpicGames,
   onSyncXboxGames,
   onOpenXboxTitleHistoryModal,
+  onToggleEpicPanel,
   onToggleSteamPanel,
   onToggleXboxPanel,
   panelContent,
@@ -2173,12 +2435,13 @@ function ProviderAccountRow({
   const Icon = provider.icon
   const isSteam = provider.id === 'steam'
   const isXbox = provider.id === 'xbox'
+  const isEpic = provider.id === 'epic'
   const isPlanned = provider.tone === 'planned'
 
   return (
     <article
       className={isXbox ? 'account-row account-row--xbox' : 'account-row'}
-      aria-busy={isSteam ? isSteamSyncing || isSteamAccountSyncing : isXbox ? isXboxSyncing : undefined}
+      aria-busy={isSteam ? isSteamSyncing || isSteamAccountSyncing : isXbox ? isXboxSyncing : isEpic ? isEpicSyncing : undefined}
     >
       <div className="account-provider-icon" aria-hidden="true">
         <Icon size={22} />
@@ -2252,6 +2515,26 @@ function ProviderAccountRow({
               statusMessage={xboxTitleHistoryStatusMessage}
             />
           ) : null}
+        </div>
+      ) : isEpic ? (
+        <div className="account-actions account-actions--xbox">
+          <button className="secondary-button" type="button" disabled={isEpicSyncing} onClick={onSyncEpicGames}>
+            {isEpicSyncing ? 'Sincronizando Epic' : 'Sincronizar local'}
+          </button>
+          <button
+            ref={epicToggleRef}
+            className="account-expand-toggle"
+            type="button"
+            aria-expanded={isEpicPanelOpen}
+            aria-controls={epicPanelContentId}
+            aria-label={isEpicPanelOpen ? 'Fechar opcoes da Epic' : 'Abrir opcoes da Epic'}
+            onClick={onToggleEpicPanel}
+          >
+            <ChevronDown size={18} aria-hidden="true" className={isEpicPanelOpen ? 'expand-icon open' : 'expand-icon'} />
+          </button>
+          <span className="account-action-hint">
+            Manifest-only: sem login Epic, API remota ou credencial.
+          </span>
         </div>
       ) : (
         <button className="secondary-button" type="button" disabled={isPlanned}>

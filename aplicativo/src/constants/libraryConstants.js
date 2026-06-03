@@ -29,6 +29,7 @@ export const QUICK_FILTER_IDS = Object.freeze({
   NOT_INSTALLED: 'not_installed',
   STEAM: 'steam',
   XBOX: 'xbox',
+  EPIC: 'epic',
   LOCAL: 'local',
 })
 
@@ -39,6 +40,7 @@ export const QUICK_FILTERS = Object.freeze([
   { id: QUICK_FILTER_IDS.NOT_INSTALLED, label: 'Nao instalados' },
   { id: QUICK_FILTER_IDS.STEAM, label: 'Steam' },
   { id: QUICK_FILTER_IDS.XBOX, label: 'Xbox' },
+  { id: QUICK_FILTER_IDS.EPIC, label: 'Epic' },
   { id: QUICK_FILTER_IDS.LOCAL, label: 'Locais' },
 ])
 

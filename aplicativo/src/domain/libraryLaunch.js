@@ -3,6 +3,8 @@ import { INSTALL_STATUS, PLATFORM_LABELS } from '../constants/libraryConstants.j
 const MICROSOFT_STORE_URI_PREFIX = 'ms-windows-store://pdp/?productid='
 const MICROSOFT_STORE_SEARCH_URI_PREFIX = 'ms-windows-store://search/?query='
 const MICROSOFT_STORE_PRODUCT_ID_PATTERN = /^[0-9a-z]{12}$/i
+const STEAM_RUN_GAME_URI_PATTERN = /^steam:\/\/rungameid\/(\d+)$/i
+const STEAM_INSTALL_URI_PATTERN = /^steam:\/\/install\/(\d+)$/i
 const MICROSOFT_STORE_SEARCH_SUFFIX_PATTERNS = [
   /\s*[-–—:]\s*(?:deluxe|ultimate|standard|game of the year|goty|anniversary|special|collector'?s|definitive|enhanced|remastered|reloaded|complete|bundle|edition)\s*$/i,
   /\s*\((?:deluxe|ultimate|standard|game of the year|goty|anniversary|special|collector'?s|definitive|enhanced|remastered|reloaded|complete|bundle|edition|launcher|app|demo|beta|trial)\)\s*$/i,
@@ -68,6 +70,38 @@ export function isMicrosoftStoreUri(target) {
   )
 }
 
+export function isSteamInstallUri(target) {
+  return STEAM_INSTALL_URI_PATTERN.test(String(target ?? '').trim())
+}
+
+function resolveSteamAppId(selectedEntry, primaryLaunchAction) {
+  if (selectedEntry?.primaryPlatformId !== 'steam') {
+    return ''
+  }
+
+  const sourceAppId = selectedEntry?.game?.sources?.find((source) => source?.platformId === 'steam')?.externalId
+  const normalizedSourceAppId = String(sourceAppId ?? '').trim()
+
+  if (/^\d+$/.test(normalizedSourceAppId)) {
+    return normalizedSourceAppId
+  }
+
+  const launchTargets = [
+    primaryLaunchAction?.target,
+    ...(selectedEntry?.game?.launchActions ?? []).map((action) => action?.target),
+  ]
+
+  for (const target of launchTargets) {
+    const match = String(target ?? '').trim().match(STEAM_RUN_GAME_URI_PATTERN)
+
+    if (match?.[1]) {
+      return match[1]
+    }
+  }
+
+  return ''
+}
+
 export function resolveMicrosoftStoreTarget(selectedEntry) {
   const directStoreTarget = [
     selectedEntry?.game?.storeTarget,
@@ -128,7 +162,10 @@ export function getLaunchActionState(selectedEntry, preferredPlatformId = 'steam
     ? selectedEntry.game.launchActions.find((action) => action.isPrimary) ?? selectedEntry.game.launchActions[0] ?? null
     : null
   const isXboxStoreEntry = selectedEntry?.primaryPlatformId === 'xbox' && selectedEntry?.installStatus !== INSTALL_STATUS.INSTALLED
+  const isSteamInstallEntry =
+    selectedEntry?.primaryPlatformId === 'steam' && selectedEntry?.installStatus === INSTALL_STATUS.NOT_INSTALLED
   const microsoftStoreTarget = resolveMicrosoftStoreTarget(selectedEntry)
+  const steamAppId = resolveSteamAppId(selectedEntry, primaryLaunchAction)
 
   if (isXboxStoreEntry) {
     return {
@@ -142,6 +179,21 @@ export function getLaunchActionState(selectedEntry, preferredPlatformId = 'steam
       },
       canLaunch: Boolean(microsoftStoreTarget),
       hint: microsoftStoreTarget ? '' : 'A Microsoft Store sera usada quando o backend informar o link do jogo.',
+    }
+  }
+
+  if (isSteamInstallEntry && steamAppId) {
+    return {
+      primaryLaunchAction: {
+        id: selectedEntry ? `launch-steam-install-${selectedEntry.id}` : 'launch-steam-install',
+        platformId: 'steam',
+        kind: 'uri',
+        label: 'Instalar',
+        target: `steam://install/${steamAppId}`,
+        isPrimary: true,
+      },
+      canLaunch: true,
+      hint: '',
     }
   }
 
@@ -165,7 +217,7 @@ export function getLaunchActionState(selectedEntry, preferredPlatformId = 'steam
   }
 }
 
-const PREFERRED_PLATFORM_ORDER = ['steam', 'xbox']
+const PREFERRED_PLATFORM_ORDER = ['steam', 'xbox', 'epic']
 
 const compareLaunchChoices = (left, right, preferredPlatformId) => {
   if (left.platformId === preferredPlatformId && right.platformId !== preferredPlatformId) {

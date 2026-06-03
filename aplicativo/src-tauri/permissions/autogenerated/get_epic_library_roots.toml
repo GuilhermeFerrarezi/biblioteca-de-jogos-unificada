@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-epic-library-roots"
+description = "Enables the get_epic_library_roots command without any pre-configured scope."
+commands.allow = ["get_epic_library_roots"]
+
+[[permission]]
+identifier = "deny-get-epic-library-roots"
+description = "Denies the get_epic_library_roots command without any pre-configured scope."
+commands.deny = ["get_epic_library_roots"]

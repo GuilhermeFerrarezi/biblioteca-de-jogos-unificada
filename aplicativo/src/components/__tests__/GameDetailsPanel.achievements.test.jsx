@@ -47,6 +47,40 @@ function buildSteamEntry({ achievements = buildAchievements(), fetchedAt = '2026
   }
 }
 
+function buildSteamNotInstalledEntry() {
+  const entry = buildSteamEntry()
+
+  return {
+    ...entry,
+    installStatus: INSTALL_STATUS.NOT_INSTALLED,
+    game: {
+      ...entry.game,
+      sources: [{ platformId: 'steam', externalId: '123' }],
+      installLocations: [],
+    },
+  }
+}
+
+function buildManualEntryWithoutLaunchAction() {
+  return {
+    id: 'entry-manual-empty',
+    primaryPlatformId: 'manual',
+    platformSummary: 'Manual',
+    installStatus: INSTALL_STATUS.NOT_INSTALLED,
+    isArchived: false,
+    isFavorite: false,
+    lastPlayedLabel: 'Nunca',
+    game: {
+      title: 'Manual Sem Acao',
+      playtime: { totalMinutes: 0 },
+      installLocations: [],
+      artwork: { accentColor: '#475569' },
+      genres: ['Teste'],
+      launchActions: [],
+    },
+  }
+}
+
 function buildAchievements() {
   return [
     {
@@ -113,7 +147,6 @@ function renderPanel({
       steamEnrichmentStatus={steamEnrichmentStatus}
       onArchiveEntry={noop}
       onEditEntry={noop}
-      onInstallAction={noop}
       onLaunchEntry={noop}
       onLaunchPlatformChange={noop}
       onToggleFavoriteEntry={noop}
@@ -175,6 +208,53 @@ function getOrderTokens(items) {
 }
 
 describe('GameDetailsPanel Steam achievements UI', () => {
+  test('uses one contextual primary action and removes the secondary install button', () => {
+    const { rerender } = renderPanel()
+
+    assert.ok(screen.getByRole('button', { name: /^jogar$/i }))
+    assert.equal(screen.queryByRole('button', { name: /instalar ou localizar arquivos/i }), null)
+
+    rerender(
+      <GameDetailsPanel
+        launchFeedback={null}
+        launchMessage=""
+        selectedEntry={buildSteamNotInstalledEntry()}
+        selectedLaunchPlatformId="steam"
+        showLibraryLoading={false}
+        steamEnrichmentStatus={null}
+        onArchiveEntry={noop}
+        onEditEntry={noop}
+        onLaunchEntry={noop}
+        onLaunchPlatformChange={noop}
+        onToggleFavoriteEntry={noop}
+      />,
+    )
+
+    assert.ok(screen.getByRole('button', { name: /^instalar$/i }))
+    assert.equal(screen.queryByRole('button', { name: /^jogar$/i }), null)
+    assert.equal(screen.queryByRole('button', { name: /instalar ou localizar arquivos/i }), null)
+
+    rerender(
+      <GameDetailsPanel
+        launchFeedback={null}
+        launchMessage=""
+        selectedEntry={buildManualEntryWithoutLaunchAction()}
+        selectedLaunchPlatformId="manual"
+        showLibraryLoading={false}
+        steamEnrichmentStatus={null}
+        onArchiveEntry={noop}
+        onEditEntry={noop}
+        onLaunchEntry={noop}
+        onLaunchPlatformChange={noop}
+        onToggleFavoriteEntry={noop}
+      />,
+    )
+
+    assert.equal(screen.getByRole('button', { name: /^jogar$/i }).disabled, true)
+    assert.ok(screen.getByText(/ainda nao tem acao de lancamento configurada/i))
+    assert.equal(screen.queryByRole('button', { name: /instalar ou localizar arquivos/i }), null)
+  })
+
   test('renders preview progress, updated cache status and keeps locked hidden achievements masked', () => {
     renderPanel()
 
@@ -323,7 +403,6 @@ describe('GameDetailsPanel Steam achievements UI', () => {
         steamEnrichmentStatus={null}
         onArchiveEntry={noop}
         onEditEntry={noop}
-        onInstallAction={noop}
         onLaunchEntry={noop}
         onLaunchPlatformChange={noop}
         onToggleFavoriteEntry={noop}
@@ -358,7 +437,6 @@ describe('GameDetailsPanel Steam achievements UI', () => {
         }}
         onArchiveEntry={noop}
         onEditEntry={noop}
-        onInstallAction={noop}
         onLaunchEntry={noop}
         onLaunchPlatformChange={noop}
         onToggleFavoriteEntry={noop}
@@ -383,7 +461,6 @@ describe('GameDetailsPanel Steam achievements UI', () => {
         }}
         onArchiveEntry={noop}
         onEditEntry={noop}
-        onInstallAction={noop}
         onLaunchEntry={noop}
         onLaunchPlatformChange={noop}
         onToggleFavoriteEntry={noop}

@@ -103,6 +103,7 @@ pub fn run() {
             commands::update_manual_game,
             commands::sync_local_games,
             commands::sync_steam_games,
+            commands::sync_epic_games,
             commands::sync_xbox_games,
             commands::sync_xbox_achievement_games,
             commands::import_xbox_achievement_title_history,
@@ -110,6 +111,7 @@ pub fn run() {
             commands::get_steam_enrichment_retry_summary,
             commands::get_steam_account_config,
             commands::get_steam_library_roots,
+            commands::get_epic_library_roots,
             commands::start_steam_openid_login,
             commands::start_xbox_live_login,
             commands::get_xbox_live_auth_state,
@@ -117,6 +119,7 @@ pub fn run() {
             commands::get_xbox_live_client_secret_state,
             commands::save_steam_account_config,
             commands::save_steam_library_roots,
+            commands::save_epic_library_roots,
             commands::get_xbox_library_roots,
             commands::save_xbox_library_roots,
             commands::save_xbox_live_client_config,
@@ -709,6 +712,16 @@ mod commands {
     }
 
     #[tauri::command]
+    pub fn sync_epic_games(state: State<'_, AppState>) -> Result<storage::SyncSummaryDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::sync_epic_games(&mut connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
     pub fn sync_xbox_games(
         app: AppHandle,
         state: State<'_, AppState>,
@@ -941,6 +954,31 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         storage::save_steam_library_roots(&mut connection, input).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn get_epic_library_roots(
+        state: State<'_, AppState>,
+    ) -> Result<storage::EpicLibraryRootsDto, String> {
+        let connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::get_epic_library_roots(&connection).map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn save_epic_library_roots(
+        input: storage::EpicLibraryRootsInput,
+        state: State<'_, AppState>,
+    ) -> Result<storage::EpicLibraryRootsDto, String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::save_epic_library_roots(&mut connection, input).map_err(|error| error.to_string())
     }
 
     #[tauri::command]
@@ -3120,7 +3158,7 @@ mod launcher {
                 FROM library_entries
                 JOIN launch_actions ON launch_actions.game_id = library_entries.game_id
                 WHERE library_entries.id = ?1
-                  AND library_entries.primary_platform_id IN ('manual', 'local', 'xbox')
+                  AND library_entries.primary_platform_id IN ('manual', 'local', 'xbox', 'epic')
                   AND library_entries.is_archived = 0
                   AND launch_actions.is_primary = 1
                 "#,
@@ -5037,6 +5075,19 @@ mod storage {
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct EpicLibraryRootsInput {
+        roots: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct EpicLibraryRootsDto {
+        provider_id: &'static str,
+        roots: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct XboxLibraryRootsInput {
         roots: Vec<String>,
     }
@@ -5176,6 +5227,53 @@ mod storage {
         transaction.commit()?;
 
         Ok(steam_library_roots_dto(roots))
+    }
+
+    pub fn get_epic_library_roots(
+        connection: &Connection,
+    ) -> rusqlite::Result<EpicLibraryRootsDto> {
+        Ok(epic_library_roots_dto(read_epic_library_roots(connection)?))
+    }
+
+    pub fn save_epic_library_roots(
+        connection: &mut Connection,
+        input: EpicLibraryRootsInput,
+    ) -> rusqlite::Result<EpicLibraryRootsDto> {
+        let roots = normalize_epic_library_roots(&input.roots)?;
+        let transaction = connection.transaction()?;
+        let existing_config_json = read_provider_config_json(&transaction, "epic")?;
+        let mut config = existing_config_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let roots_json = roots
+            .iter()
+            .map(|root| serde_json::Value::String(root.clone()))
+            .collect::<Vec<_>>();
+
+        config.insert(
+            "additionalManifestRoots".to_string(),
+            serde_json::Value::Array(roots_json),
+        );
+
+        transaction.execute(
+            r#"
+            INSERT INTO provider_account_configs (
+              provider_id,
+              config_json,
+              updated_at
+            )
+            VALUES ('epic', ?1, ?2)
+            ON CONFLICT(provider_id) DO UPDATE SET
+              config_json = excluded.config_json,
+              updated_at = excluded.updated_at
+            "#,
+            params![serde_json::Value::Object(config).to_string(), now_iso()],
+        )?;
+        transaction.commit()?;
+
+        Ok(epic_library_roots_dto(roots))
     }
 
     pub fn get_xbox_library_roots(
@@ -5522,6 +5620,13 @@ mod storage {
         }
     }
 
+    fn epic_library_roots_dto(roots: Vec<String>) -> EpicLibraryRootsDto {
+        EpicLibraryRootsDto {
+            provider_id: "epic",
+            roots,
+        }
+    }
+
     fn xbox_library_roots_dto(roots: Vec<String>) -> XboxLibraryRootsDto {
         XboxLibraryRootsDto {
             provider_id: "xbox",
@@ -5611,6 +5716,24 @@ mod storage {
             .collect::<Vec<_>>())
     }
 
+    fn read_epic_library_roots(connection: &Connection) -> rusqlite::Result<Vec<String>> {
+        let columns = table_columns(connection, "provider_account_configs")?;
+        if columns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        Ok(read_provider_config_json(connection, "epic")?
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|value| value.as_object().cloned())
+            .and_then(|object| object.get("additionalManifestRoots").cloned())
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect::<Vec<_>>())
+    }
+
     pub(crate) fn read_xbox_library_roots(
         connection: &Connection,
     ) -> rusqlite::Result<Vec<String>> {
@@ -5666,6 +5789,30 @@ mod storage {
             }
 
             let root = normalize_steam_library_root(value)
+                .ok_or_else(|| rusqlite::Error::InvalidPath(PathBuf::from(trimmed)))?;
+            let normalized = root.to_string_lossy().to_string();
+            let normalized_key = normalize_path_string(&root);
+
+            if !roots.iter().any(|existing: &String| {
+                normalize_path_string(Path::new(existing)) == normalized_key
+            }) {
+                roots.push(normalized);
+            }
+        }
+
+        Ok(roots)
+    }
+
+    fn normalize_epic_library_roots(values: &[String]) -> rusqlite::Result<Vec<String>> {
+        let mut roots = Vec::new();
+
+        for value in values {
+            let trimmed = value.trim().trim_matches('"');
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let root = normalize_epic_library_root(value)
                 .ok_or_else(|| rusqlite::Error::InvalidPath(PathBuf::from(trimmed)))?;
             let normalized = root.to_string_lossy().to_string();
             let normalized_key = normalize_path_string(&root);
@@ -5763,6 +5910,30 @@ mod storage {
         None
     }
 
+    fn normalize_epic_library_root(value: &str) -> Option<PathBuf> {
+        let trimmed = value.trim().trim_matches('"');
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let path = PathBuf::from(trimmed);
+        let root = if is_epic_manifests_path(&path) {
+            path
+        } else if path.join("Data").join("Manifests").is_dir() {
+            path.join("Data").join("Manifests")
+        } else if path.join("Manifests").is_dir() {
+            path.join("Manifests")
+        } else {
+            path
+        };
+
+        if root.is_dir() {
+            return Some(root.canonicalize().unwrap_or(root));
+        }
+
+        None
+    }
+
     fn normalize_xbox_library_root(value: &str) -> Option<PathBuf> {
         let trimmed = value.trim().trim_matches('"');
         if trimmed.is_empty() {
@@ -5794,6 +5965,12 @@ mod storage {
         path.file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.eq_ignore_ascii_case("steamapps"))
+    }
+
+    fn is_epic_manifests_path(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("manifests"))
     }
 
     pub fn read_steam_account_config(connection: &Connection) -> rusqlite::Result<Option<String>> {
@@ -7279,6 +7456,19 @@ mod storage {
         accent_color: &'static str,
     }
 
+    #[derive(Clone)]
+    struct EpicGameCandidate {
+        external_id: String,
+        title: String,
+        install_path: String,
+        launch_uri: String,
+        source_id: String,
+        game_id: String,
+        entry_id: String,
+        launch_id: String,
+        accent_color: &'static str,
+    }
+
     struct RemoteSteamGameCandidate {
         app_id: String,
         title: String,
@@ -7300,6 +7490,11 @@ mod storage {
     pub fn sync_steam_games(connection: &mut Connection) -> rusqlite::Result<SyncSummaryDto> {
         let roots = collect_steam_roots(connection);
         sync_steam_games_from_roots(connection, &roots)
+    }
+
+    pub fn sync_epic_games(connection: &mut Connection) -> rusqlite::Result<SyncSummaryDto> {
+        let roots = collect_epic_manifest_roots(connection);
+        sync_epic_games_from_roots(connection, &roots)
     }
 
     pub fn sync_steam_account_games(
@@ -7869,6 +8064,59 @@ mod storage {
         Ok(summary)
     }
 
+    fn sync_epic_games_from_roots(
+        connection: &mut Connection,
+        roots: &[PathBuf],
+    ) -> rusqlite::Result<SyncSummaryDto> {
+        let candidates = discover_epic_game_candidates(roots);
+        let existing_entries = list_epic_entries_by_source(connection)?;
+        let local_entries = list_local_entries_with_primary_action(connection)?;
+        let mut summary = SyncSummaryDto {
+            discovered: candidates.len(),
+            inserted: 0,
+            updated: 0,
+            archived: 0,
+            unavailable: 0,
+        };
+
+        let transaction = connection.transaction()?;
+        summary.archived = archive_rejected_epic_entries(&transaction)?;
+        let discovered_external_ids = candidates
+            .iter()
+            .map(|candidate| candidate.external_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+
+        for candidate in candidates {
+            if let Some(existing_row) = existing_entries.get(&candidate.external_id) {
+                if update_epic_entry(&transaction, existing_row, &candidate)? {
+                    summary.updated += 1;
+                }
+            } else if let Some(local_row) =
+                find_matching_local_entry_for_epic_candidate(&local_entries, &candidate)
+            {
+                if promote_local_entry_to_epic(&transaction, &local_row, &candidate)? {
+                    summary.updated += 1;
+                }
+            } else {
+                insert_epic_entry(&transaction, &candidate)?;
+                summary.inserted += 1;
+            }
+        }
+
+        for (external_id, existing_row) in &existing_entries {
+            if !existing_row.is_archived
+                && !is_rejected_epic_record(&existing_row.title, Some(external_id), None)
+                && !discovered_external_ids.contains(external_id)
+                && mark_epic_entry_unavailable(&transaction, existing_row)?
+            {
+                summary.unavailable += 1;
+            }
+        }
+
+        transaction.commit()?;
+        Ok(summary)
+    }
+
     fn sync_local_games_from_roots(
         connection: &mut Connection,
         roots: &[PathBuf],
@@ -8073,6 +8321,43 @@ mod storage {
         roots.into_iter().filter(|root| root.exists()).collect()
     }
 
+    fn collect_epic_manifest_roots(connection: &Connection) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+
+        if let Some(raw_roots) = std::env::var_os("BIBLIOTECA_JOGOS_EPIC_ROOTS") {
+            for root in raw_roots
+                .to_string_lossy()
+                .split(';')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .filter_map(normalize_epic_library_root)
+            {
+                push_unique_path(&mut roots, root);
+            }
+        }
+
+        if let Ok(saved_roots) = read_epic_library_roots(connection) {
+            for root in saved_roots {
+                if let Some(root) = normalize_epic_library_root(&root) {
+                    push_unique_path(&mut roots, root);
+                }
+            }
+        }
+
+        if let Some(program_data) = std::env::var_os("PROGRAMDATA") {
+            push_unique_path(
+                &mut roots,
+                PathBuf::from(program_data)
+                    .join("Epic")
+                    .join("EpicGamesLauncher")
+                    .join("Data")
+                    .join("Manifests"),
+            );
+        }
+
+        roots.into_iter().filter(|root| root.exists()).collect()
+    }
+
     fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
         let key = normalize_path_string(&path);
 
@@ -8152,6 +8437,39 @@ mod storage {
         candidates.into_values().collect()
     }
 
+    fn discover_epic_game_candidates(roots: &[PathBuf]) -> Vec<EpicGameCandidate> {
+        let mut candidates = HashMap::new();
+
+        for root in roots {
+            let Ok(entries) = fs::read_dir(root) else {
+                continue;
+            };
+
+            for entry in entries.flatten().take(4096) {
+                let manifest_path = entry.path();
+                if !is_epic_item_manifest(&manifest_path) {
+                    continue;
+                }
+
+                if let Some(candidate) =
+                    parse_epic_manifest_candidate(&manifest_path).filter(|candidate| {
+                        !is_rejected_epic_record(
+                            &candidate.title,
+                            Some(&candidate.external_id),
+                            Some(&candidate.install_path),
+                        )
+                    })
+                {
+                    candidates
+                        .entry(candidate.external_id.clone())
+                        .or_insert(candidate);
+                }
+            }
+        }
+
+        candidates.into_values().collect()
+    }
+
     fn steamapps_directories(steam_root: &Path) -> Vec<PathBuf> {
         let mut directories = Vec::new();
         let default_steamapps = if is_steamapps_path(steam_root) {
@@ -8200,6 +8518,13 @@ mod storage {
         file_name.starts_with("appmanifest_") && file_name.ends_with(".acf")
     }
 
+    fn is_epic_item_manifest(path: &Path) -> bool {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("item"))
+            && path.is_file()
+    }
+
     fn parse_steam_manifest_candidate(manifest_path: &Path) -> Option<SteamGameCandidate> {
         let contents = fs::read_to_string(manifest_path).ok()?;
         let pairs = key_value_pairs(&contents);
@@ -8233,6 +8558,82 @@ mod storage {
             install_path,
             accent_color,
         })
+    }
+
+    fn parse_epic_manifest_candidate(manifest_path: &Path) -> Option<EpicGameCandidate> {
+        let contents = fs::read_to_string(manifest_path).ok()?;
+        let manifest = serde_json::from_str::<serde_json::Value>(&contents).ok()?;
+        let title = json_string_field(&manifest, &["DisplayName", "MandatoryAppFolderName"])?
+            .trim()
+            .to_string();
+        let app_name = json_string_field(&manifest, &["AppName", "MainGameAppName"])?
+            .trim()
+            .to_string();
+        let catalog_item_id =
+            json_string_field(&manifest, &["CatalogItemId", "MainGameCatalogItemId"])?
+                .trim()
+                .to_string();
+        let catalog_namespace = json_string_field(&manifest, &["CatalogNamespace", "NamespaceId"])?
+            .trim()
+            .to_string();
+        let install_location = json_string_field(&manifest, &["InstallLocation"])?
+            .trim()
+            .to_string();
+
+        if title.is_empty()
+            || app_name.is_empty()
+            || catalog_item_id.is_empty()
+            || catalog_namespace.is_empty()
+            || install_location.is_empty()
+        {
+            return None;
+        }
+
+        let install_path = PathBuf::from(&install_location);
+        if !install_path.is_dir() {
+            return None;
+        }
+
+        let external_id = format!("{catalog_namespace}:{catalog_item_id}:{app_name}");
+        let launch_uri = build_epic_launcher_uri(&catalog_namespace, &catalog_item_id, &app_name);
+        let slug = create_slug(&title);
+        let hash = stable_hash_hex(&external_id);
+        let accent_color = deterministic_accent_color(&title);
+        let install_path = install_path
+            .canonicalize()
+            .unwrap_or(install_path)
+            .to_string_lossy()
+            .to_string();
+
+        Some(EpicGameCandidate {
+            source_id: format!("source-epic-{slug}-{hash}"),
+            game_id: format!("game-epic-{slug}-{hash}"),
+            entry_id: format!("entry-epic-{slug}-{hash}"),
+            launch_id: format!("launch-epic-{slug}-{hash}"),
+            external_id,
+            title,
+            install_path,
+            launch_uri,
+            accent_color,
+        })
+    }
+
+    fn json_string_field<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+        keys.iter().find_map(|key| value.get(*key)?.as_str())
+    }
+
+    fn build_epic_launcher_uri(
+        namespace_id: &str,
+        catalog_item_id: &str,
+        app_name: &str,
+    ) -> String {
+        let encoded_path = [namespace_id, catalog_item_id, app_name]
+            .into_iter()
+            .map(|value| url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("%3A");
+
+        format!("com.epicgames.launcher://apps/{encoded_path}?action=launch&silent=true")
     }
 
     fn remote_steam_game_candidate(
@@ -8671,7 +9072,10 @@ mod storage {
     }
 
     fn normalize_path_string(path: &Path) -> String {
-        path.to_string_lossy().replace('/', "\\").to_lowercase()
+        path.to_string_lossy()
+            .replace('/', "\\")
+            .trim_start_matches("\\\\?\\")
+            .to_lowercase()
     }
 
     fn stable_hash_hex(value: &str) -> String {
@@ -8799,6 +9203,131 @@ mod storage {
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(entries.into_iter().collect())
+    }
+
+    fn list_epic_entries_by_source(
+        connection: &Connection,
+    ) -> rusqlite::Result<HashMap<String, EntryRow>> {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT
+              game_sources.external_id,
+              library_entries.id,
+              library_entries.primary_platform_id,
+              library_entries.install_status,
+              library_entries.last_played_label,
+              library_entries.is_archived,
+              library_entries.is_favorite,
+              library_entries.added_at,
+              library_entries.updated_at,
+              games.id,
+              games.title,
+              games.sort_title,
+              games.installed,
+              games.playtime_total_minutes,
+              games.accent_color,
+              game_sources.account_id
+            FROM library_entries
+            JOIN games ON games.id = library_entries.game_id
+            JOIN game_sources ON game_sources.game_id = library_entries.game_id
+            WHERE game_sources.platform_id = 'epic'
+            "#,
+        )?;
+
+        let entries = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    EntryRow {
+                        entry_id: row.get(1)?,
+                        primary_platform_id: row.get(2)?,
+                        install_status: row.get(3)?,
+                        last_played_label: row.get(4)?,
+                        is_archived: row.get::<_, i64>(5)? == 1,
+                        is_favorite: row.get::<_, i64>(6)? == 1,
+                        added_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                        game_id: row.get(9)?,
+                        title: row.get(10)?,
+                        sort_title: row.get(11)?,
+                        installed: row.get::<_, i64>(12)? == 1,
+                        playtime_total_minutes: row.get(13)?,
+                        accent_color: row.get(14)?,
+                        source_account_id: row.get(15)?,
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(entries.into_iter().collect())
+    }
+
+    #[derive(Clone)]
+    struct LocalEntryWithActionRow {
+        entry: EntryRow,
+        target: String,
+    }
+
+    fn list_local_entries_with_primary_action(
+        connection: &Connection,
+    ) -> rusqlite::Result<Vec<LocalEntryWithActionRow>> {
+        let mut statement = connection.prepare(
+            r#"
+            SELECT
+              library_entries.id,
+              library_entries.primary_platform_id,
+              library_entries.install_status,
+              library_entries.last_played_label,
+              library_entries.is_archived,
+              library_entries.is_favorite,
+              library_entries.added_at,
+              library_entries.updated_at,
+              games.id,
+              games.title,
+              games.sort_title,
+              games.installed,
+              games.playtime_total_minutes,
+              games.accent_color,
+              game_sources.account_id,
+              launch_actions.target
+            FROM library_entries
+            JOIN games ON games.id = library_entries.game_id
+            JOIN game_sources ON game_sources.game_id = library_entries.game_id
+            JOIN launch_actions ON launch_actions.game_id = library_entries.game_id
+            WHERE library_entries.primary_platform_id = 'local'
+              AND game_sources.platform_id = 'local'
+              AND launch_actions.platform_id = 'local'
+              AND launch_actions.kind = 'executable'
+              AND launch_actions.is_primary = 1
+            "#,
+        )?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok(LocalEntryWithActionRow {
+                    entry: EntryRow {
+                        entry_id: row.get(0)?,
+                        primary_platform_id: row.get(1)?,
+                        install_status: row.get(2)?,
+                        last_played_label: row.get(3)?,
+                        is_archived: row.get::<_, i64>(4)? == 1,
+                        is_favorite: row.get::<_, i64>(5)? == 1,
+                        added_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                        game_id: row.get(8)?,
+                        title: row.get(9)?,
+                        sort_title: row.get(10)?,
+                        installed: row.get::<_, i64>(11)? == 1,
+                        playtime_total_minutes: row.get(12)?,
+                        accent_color: row.get(13)?,
+                        source_account_id: row.get(14)?,
+                    },
+                    target: row.get(15)?,
+                })
+            })?
+            .collect();
+
+        rows
     }
 
     fn insert_steam_entry(
@@ -9164,6 +9693,359 @@ mod storage {
         }
 
         Ok(())
+    }
+
+    fn insert_epic_entry(
+        transaction: &rusqlite::Transaction<'_>,
+        candidate: &EpicGameCandidate,
+    ) -> rusqlite::Result<()> {
+        let now = now_iso();
+        transaction.execute(
+            r#"
+            INSERT INTO games (
+              id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, 1, 0, ?4, ?5, ?5)
+            "#,
+            params![
+                candidate.game_id,
+                candidate.title,
+                candidate.title,
+                candidate.accent_color,
+                now,
+            ],
+        )?;
+        transaction.execute(
+            r#"
+            INSERT INTO library_entries (
+              id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
+            ) VALUES (?1, ?2, 'epic', 'installed', 'Nunca', 0, ?3, ?3)
+            "#,
+            params![candidate.entry_id, candidate.game_id, now],
+        )?;
+        insert_epic_source(transaction, &candidate.game_id, candidate)?;
+        upsert_epic_primary_action(
+            transaction,
+            &candidate.game_id,
+            &candidate.launch_id,
+            candidate,
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Epic Games', 0)",
+            params![candidate.game_id],
+        )?;
+
+        Ok(())
+    }
+
+    fn update_epic_entry(
+        transaction: &rusqlite::Transaction<'_>,
+        existing_row: &EntryRow,
+        candidate: &EpicGameCandidate,
+    ) -> rusqlite::Result<bool> {
+        let current_action = find_epic_primary_action(transaction, &existing_row.game_id)?;
+        let needs_action_update = current_action
+            .as_ref()
+            .map(|action| {
+                action.kind != "uri"
+                    || action.label != "Epic Games"
+                    || action.target != candidate.launch_uri
+                    || action.working_directory.as_deref() != Some(candidate.install_path.as_str())
+            })
+            .unwrap_or(true);
+        let needs_entry_update = existing_row.title != candidate.title
+            || existing_row.sort_title != candidate.title
+            || existing_row.primary_platform_id != "epic"
+            || !existing_row.installed
+            || existing_row.install_status != "installed"
+            || existing_row.is_archived
+            || existing_row.accent_color.as_deref() != Some(candidate.accent_color);
+
+        if !needs_entry_update && !needs_action_update {
+            return Ok(false);
+        }
+
+        let updated_at = now_iso();
+
+        if needs_entry_update {
+            transaction.execute(
+                r#"
+                UPDATE games
+                SET title = ?2,
+                    sort_title = ?3,
+                    installed = 1,
+                    accent_color = ?4,
+                    updated_at = ?5
+                WHERE id = ?1
+                "#,
+                params![
+                    existing_row.game_id,
+                    candidate.title,
+                    candidate.title,
+                    candidate.accent_color,
+                    updated_at,
+                ],
+            )?;
+            transaction.execute(
+                r#"
+                UPDATE library_entries
+                SET primary_platform_id = 'epic',
+                    install_status = 'installed',
+                    is_archived = 0,
+                    updated_at = ?2
+                WHERE id = ?1
+                "#,
+                params![existing_row.entry_id, updated_at],
+            )?;
+        }
+
+        if needs_action_update {
+            upsert_epic_primary_action(
+                transaction,
+                &existing_row.game_id,
+                &candidate.launch_id,
+                candidate,
+            )?;
+        }
+
+        transaction.execute(
+            "INSERT OR IGNORE INTO game_genres (game_id, genre, position) VALUES (?1, 'Epic Games', 0)",
+            params![existing_row.game_id],
+        )?;
+
+        Ok(true)
+    }
+
+    fn promote_local_entry_to_epic(
+        transaction: &rusqlite::Transaction<'_>,
+        local_row: &LocalEntryWithActionRow,
+        candidate: &EpicGameCandidate,
+    ) -> rusqlite::Result<bool> {
+        insert_epic_source(transaction, &local_row.entry.game_id, candidate)?;
+        let changed = update_epic_entry(transaction, &local_row.entry, candidate)?;
+        Ok(changed || true)
+    }
+
+    fn insert_epic_source(
+        transaction: &rusqlite::Transaction<'_>,
+        game_id: &str,
+        candidate: &EpicGameCandidate,
+    ) -> rusqlite::Result<()> {
+        transaction.execute(
+            r#"
+            INSERT OR IGNORE INTO game_sources (id, game_id, platform_id, external_id)
+            VALUES (?1, ?2, 'epic', ?3)
+            "#,
+            params![candidate.source_id, game_id, candidate.external_id],
+        )?;
+
+        Ok(())
+    }
+
+    struct EpicPrimaryActionRow {
+        kind: String,
+        label: String,
+        target: String,
+        working_directory: Option<String>,
+    }
+
+    fn find_epic_primary_action(
+        transaction: &rusqlite::Transaction<'_>,
+        game_id: &str,
+    ) -> rusqlite::Result<Option<EpicPrimaryActionRow>> {
+        transaction
+            .query_row(
+                r#"
+                SELECT kind, label, target, working_directory
+                FROM launch_actions
+                WHERE game_id = ?1
+                  AND platform_id = 'epic'
+                  AND is_primary = 1
+                ORDER BY id
+                LIMIT 1
+                "#,
+                params![game_id],
+                |row| {
+                    Ok(EpicPrimaryActionRow {
+                        kind: row.get(0)?,
+                        label: row.get(1)?,
+                        target: row.get(2)?,
+                        working_directory: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    fn upsert_epic_primary_action(
+        transaction: &rusqlite::Transaction<'_>,
+        game_id: &str,
+        fallback_launch_id: &str,
+        candidate: &EpicGameCandidate,
+    ) -> rusqlite::Result<()> {
+        transaction.execute(
+            "UPDATE launch_actions SET is_primary = 0 WHERE game_id = ?1",
+            params![game_id],
+        )?;
+
+        let changed = transaction.execute(
+            r#"
+            UPDATE launch_actions
+            SET kind = 'uri',
+                label = 'Epic Games',
+                target = ?2,
+                working_directory = ?3,
+                arguments_json = '[]',
+                is_primary = 1
+            WHERE game_id = ?1
+              AND platform_id = 'epic'
+            "#,
+            params![game_id, candidate.launch_uri, candidate.install_path],
+        )?;
+
+        if changed == 0 {
+            transaction.execute(
+                r#"
+                INSERT INTO launch_actions (
+                  id, game_id, platform_id, kind, label, target, arguments_json, working_directory, is_primary
+                ) VALUES (?1, ?2, 'epic', 'uri', 'Epic Games', ?3, '[]', ?4, 1)
+                "#,
+                params![
+                    fallback_launch_id,
+                    game_id,
+                    candidate.launch_uri,
+                    candidate.install_path
+                ],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn find_matching_local_entry_for_epic_candidate(
+        local_entries: &[LocalEntryWithActionRow],
+        candidate: &EpicGameCandidate,
+    ) -> Option<LocalEntryWithActionRow> {
+        let install_key = normalize_path_string(Path::new(&candidate.install_path));
+        local_entries
+            .iter()
+            .find(|row| {
+                if row.entry.is_archived {
+                    return false;
+                }
+
+                let target_key = normalize_path_string(Path::new(&row.target));
+                target_key == install_key
+                    || target_key
+                        .strip_prefix(&install_key)
+                        .is_some_and(|suffix| suffix.starts_with('\\'))
+            })
+            .cloned()
+    }
+
+    fn mark_epic_entry_unavailable(
+        transaction: &rusqlite::Transaction<'_>,
+        existing_row: &EntryRow,
+    ) -> rusqlite::Result<bool> {
+        if !existing_row.installed && existing_row.install_status == "not_installed" {
+            return Ok(false);
+        }
+
+        let updated_at = now_iso();
+        transaction.execute(
+            "UPDATE games SET installed = 0, updated_at = ?2 WHERE id = ?1",
+            params![existing_row.game_id, updated_at],
+        )?;
+        transaction.execute(
+            r#"
+            UPDATE library_entries
+            SET install_status = 'not_installed',
+                updated_at = ?2
+            WHERE id = ?1
+            "#,
+            params![existing_row.entry_id, updated_at],
+        )?;
+
+        Ok(true)
+    }
+
+    fn archive_rejected_epic_entries(
+        transaction: &rusqlite::Transaction<'_>,
+    ) -> rusqlite::Result<usize> {
+        let updated_at = now_iso();
+
+        transaction.execute(
+            r#"
+            UPDATE library_entries
+            SET is_archived = 1,
+                updated_at = ?1
+            WHERE is_archived = 0
+              AND game_id IN (
+                SELECT games.id
+                FROM games
+                JOIN game_sources ON game_sources.game_id = games.id
+                WHERE game_sources.platform_id = 'epic'
+                  AND (
+                    lower(games.title) LIKE '%epic games launcher%'
+                    OR lower(games.title) LIKE '%epiconlineservices%'
+                    OR lower(games.title) LIKE '%epic online services%'
+                    OR lower(games.title) LIKE '%unreal engine%'
+                    OR lower(games.title) LIKE '%redistributable%'
+                    OR lower(games.title) LIKE '%runtime%'
+                    OR lower(games.title) LIKE '%prereq%'
+                    OR lower(games.title) LIKE '%directx%'
+                    OR lower(games.title) LIKE '%dlc%'
+                    OR lower(game_sources.external_id) LIKE '%epiconlineservices%'
+                    OR lower(game_sources.external_id) LIKE '%launcher%'
+                  )
+              )
+            "#,
+            params![updated_at],
+        )
+    }
+
+    fn is_rejected_epic_record(
+        title: &str,
+        external_id: Option<&str>,
+        install_path: Option<&str>,
+    ) -> bool {
+        let normalized_title = normalize_name(title);
+        let normalized_external_id = normalize_name(external_id.unwrap_or_default());
+        let normalized_path = install_path
+            .map(|path| normalize_path_string(Path::new(path)))
+            .unwrap_or_default();
+
+        if normalized_title.is_empty()
+            || normalized_title == "epicgameslauncher"
+            || normalized_title == "epiconlineservices"
+            || normalized_title == "epiconlineservicesinstaller"
+            || normalized_title == "unrealengine"
+            || normalized_title.starts_with("unrealengine")
+            || normalized_title.ends_with("launcher")
+        {
+            return true;
+        }
+
+        [
+            "epiconlineservices",
+            "epicgameslauncher",
+            "redistributable",
+            "redist",
+            "runtime",
+            "prereq",
+            "directx",
+            "dxsetup",
+            "installer",
+            "service",
+            "support",
+            "helper",
+            "dlc",
+        ]
+        .iter()
+        .any(|keyword| {
+            normalized_title.contains(keyword)
+                || normalized_external_id.contains(keyword)
+                || normalized_path.contains(keyword)
+        })
     }
 
     fn mark_steam_entry_unavailable(
@@ -9550,6 +10432,41 @@ mod storage {
                 )
                 .optional()
                 .map(|value| value.is_some())
+        }
+
+        fn write_epic_manifest(
+            manifests_root: &Path,
+            file_name: &str,
+            title: &str,
+            app_name: &str,
+            catalog_item_id: &str,
+            catalog_namespace: &str,
+            install_location: &Path,
+        ) {
+            std::fs::create_dir_all(manifests_root).expect("create epic manifests root");
+            let manifest = serde_json::json!({
+                "DisplayName": title,
+                "AppName": app_name,
+                "CatalogItemId": catalog_item_id,
+                "CatalogNamespace": catalog_namespace,
+                "InstallLocation": install_location.to_string_lossy(),
+            });
+            std::fs::write(
+                manifests_root.join(file_name),
+                serde_json::to_string_pretty(&manifest).expect("serialize epic manifest"),
+            )
+            .expect("write epic manifest");
+        }
+
+        fn create_empty_database(prefix: &str) -> (Connection, std::path::PathBuf) {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-{}-{}.sqlite3",
+                prefix,
+                timestamp_millis()
+            ));
+            let connection = open_database(&path).expect("open empty database");
+
+            (connection, path)
         }
 
         #[test]
@@ -10071,6 +10988,298 @@ mod storage {
             );
 
             let _ = std::fs::remove_dir_all(extra_library);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_epic_games_imports_item_manifests_once() {
+            let epic_root = std::env::temp_dir()
+                .join(format!("biblioteca-jogos-epic-root-{}", timestamp_millis()));
+            let manifests_root = epic_root.join("Data").join("Manifests");
+            let install_location = epic_root.join("Games").join("Hades");
+            std::fs::create_dir_all(&install_location).expect("create epic install");
+            write_epic_manifest(
+                &manifests_root,
+                "hades.item",
+                "Hades",
+                "HadesArtifact",
+                "abc123",
+                "hadesns",
+                &install_location,
+            );
+            let (mut connection, path) = create_empty_database("epic-import");
+
+            let summary =
+                sync_epic_games_from_roots(&mut connection, std::slice::from_ref(&manifests_root))
+                    .expect("sync epic games");
+            let entries = list_library_entries(&connection).expect("list epic entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 1);
+            assert_eq!(summary.updated, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].primary_platform_id, "epic");
+            assert_eq!(entries[0].game.title, "Hades");
+            assert_eq!(entries[0].game.sources[0].platform_id, "epic");
+            assert_eq!(
+                entries[0].game.sources[0].external_id,
+                "hadesns:abc123:HadesArtifact"
+            );
+            assert_eq!(entries[0].game.launch_actions[0].kind, "uri");
+            assert_eq!(entries[0].game.launch_actions[0].label, "Epic Games");
+            assert_eq!(
+                entries[0].game.launch_actions[0].target,
+                "com.epicgames.launcher://apps/hadesns%3Aabc123%3AHadesArtifact?action=launch&silent=true"
+            );
+            assert_eq!(
+                entries[0].game.launch_actions[0]
+                    .working_directory
+                    .as_deref()
+                    .map(|path| normalize_path_string(Path::new(path))),
+                Some(normalize_path_string(&install_location))
+            );
+
+            let second_summary =
+                sync_epic_games_from_roots(&mut connection, std::slice::from_ref(&manifests_root))
+                    .expect("resync epic games");
+            let entries_again = list_library_entries(&connection).expect("list epic entries again");
+
+            assert_eq!(second_summary.discovered, 1);
+            assert_eq!(second_summary.inserted, 0);
+            assert_eq!(second_summary.updated, 0);
+            assert_eq!(entries_again.len(), 1);
+
+            let _ = std::fs::remove_dir_all(epic_root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_epic_games_skips_invalid_and_missing_install_manifests() {
+            let epic_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-epic-invalid-{}",
+                timestamp_millis()
+            ));
+            let manifests_root = epic_root.join("Manifests");
+            let install_location = epic_root.join("Games").join("Installed");
+            let missing_install_location = epic_root.join("Games").join("Missing");
+            std::fs::create_dir_all(&install_location).expect("create epic install");
+            std::fs::create_dir_all(&manifests_root).expect("create manifests");
+            write_epic_manifest(
+                &manifests_root,
+                "missing-install.item",
+                "Missing Game",
+                "MissingArtifact",
+                "missing123",
+                "missingns",
+                &missing_install_location,
+            );
+            std::fs::write(manifests_root.join("malformed.item"), "{")
+                .expect("write malformed item");
+            write_epic_manifest(
+                &manifests_root,
+                "missing-ids.item",
+                "Missing IDs",
+                "",
+                "",
+                "missingids",
+                &install_location,
+            );
+            let (mut connection, path) = create_empty_database("epic-invalid");
+
+            let summary =
+                sync_epic_games_from_roots(&mut connection, std::slice::from_ref(&manifests_root))
+                    .expect("sync epic invalid");
+            let entries = list_library_entries(&connection).expect("list epic invalid entries");
+
+            assert_eq!(summary.discovered, 0);
+            assert_eq!(summary.inserted, 0);
+            assert!(entries.is_empty());
+
+            let _ = std::fs::remove_dir_all(epic_root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_epic_games_filters_launcher_eos_runtimes_unreal_and_dlc() {
+            let epic_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-epic-filtered-{}",
+                timestamp_millis()
+            ));
+            let manifests_root = epic_root.join("Manifests");
+            let filtered_titles = [
+                "Epic Games Launcher",
+                "EpicOnlineServices",
+                "Unreal Engine",
+                "DirectX Runtime",
+                "Hades DLC Pack",
+            ];
+            for (index, title) in filtered_titles.iter().enumerate() {
+                let install_location = epic_root.join("Games").join(format!("filtered-{index}"));
+                std::fs::create_dir_all(&install_location).expect("create filtered install");
+                write_epic_manifest(
+                    &manifests_root,
+                    &format!("filtered-{index}.item"),
+                    title,
+                    &format!("FilteredArtifact{index}"),
+                    &format!("filtered{index}"),
+                    "filteredns",
+                    &install_location,
+                );
+            }
+            let (mut connection, path) = create_empty_database("epic-filtered");
+
+            let summary =
+                sync_epic_games_from_roots(&mut connection, std::slice::from_ref(&manifests_root))
+                    .expect("sync epic filtered");
+            let entries = list_library_entries(&connection).expect("list epic filtered entries");
+
+            assert_eq!(summary.discovered, 0);
+            assert_eq!(summary.inserted, 0);
+            assert!(entries.is_empty());
+
+            let _ = std::fs::remove_dir_all(epic_root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn save_epic_library_roots_accepts_manifest_paths_and_preserves_config() {
+            let root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-epic-roots-{}",
+                timestamp_millis()
+            ));
+            let launcher_root = root.join("EpicGamesLauncher");
+            let manifests_root = launcher_root.join("Data").join("Manifests");
+            std::fs::create_dir_all(&manifests_root).expect("create epic manifests root");
+            let (mut connection, path) = create_empty_database("epic-roots");
+
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO provider_account_configs (provider_id, account_id, config_json, updated_at)
+                    VALUES ('epic', NULL, '{"customFlag":true}', ?1)
+                    "#,
+                    params![now_iso()],
+                )
+                .expect("seed epic config");
+
+            let dto = save_epic_library_roots(
+                &mut connection,
+                EpicLibraryRootsInput {
+                    roots: vec![launcher_root.to_string_lossy().to_string()],
+                },
+            )
+            .expect("save epic roots");
+            let saved_config: String = connection
+                .query_row(
+                    "SELECT config_json FROM provider_account_configs WHERE provider_id = 'epic'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("read epic config");
+            let saved_json: serde_json::Value =
+                serde_json::from_str(&saved_config).expect("parse saved epic config");
+
+            assert_eq!(dto.provider_id, "epic");
+            assert_eq!(
+                dto.roots
+                    .iter()
+                    .map(|root| normalize_path_string(Path::new(root)))
+                    .collect::<Vec<_>>(),
+                vec![normalize_path_string(&manifests_root)]
+            );
+            assert_eq!(
+                saved_json
+                    .get("customFlag")
+                    .and_then(|value| value.as_bool()),
+                Some(true)
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn sync_epic_games_promotes_matching_local_entry_without_duplicate() {
+            let epic_root = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-epic-dedup-{}",
+                timestamp_millis()
+            ));
+            let manifests_root = epic_root.join("Manifests");
+            let install_location = epic_root.join("Games").join("Celeste");
+            std::fs::create_dir_all(&install_location).expect("create epic install");
+            write_epic_manifest(
+                &manifests_root,
+                "celeste.item",
+                "Celeste",
+                "CelesteArtifact",
+                "celeste123",
+                "celestens",
+                &install_location,
+            );
+            let (mut connection, path) = create_empty_database("epic-dedup");
+            let now = now_iso();
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO games (
+                      id, title, sort_title, installed, playtime_total_minutes, accent_color, created_at, updated_at
+                    ) VALUES ('game-local-celeste', 'Celeste', 'Celeste', 1, 0, '#0d9488', ?1, ?1)
+                    "#,
+                    params![now],
+                )
+                .expect("seed local game");
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO library_entries (
+                      id, game_id, primary_platform_id, install_status, last_played_label, is_archived, added_at, updated_at
+                    ) VALUES ('entry-local-celeste', 'game-local-celeste', 'local', 'installed', 'Nunca', 0, ?1, ?1)
+                    "#,
+                    params![now_iso()],
+                )
+                .expect("seed local entry");
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO game_sources (id, game_id, platform_id, external_id, account_id)
+                    VALUES ('source-local-celeste', 'game-local-celeste', 'local', ?1, NULL)
+                    "#,
+                    params![install_location.to_string_lossy()],
+                )
+                .expect("seed local source");
+            connection
+                .execute(
+                    r#"
+                    INSERT INTO launch_actions (
+                      id, game_id, platform_id, kind, label, target, arguments_json, working_directory, is_primary
+                    ) VALUES ('launch-local-celeste', 'game-local-celeste', 'local', 'executable', 'Executar', ?1, '[]', ?2, 1)
+                    "#,
+                    params![
+                        install_location.join("Celeste.exe").to_string_lossy(),
+                        install_location.to_string_lossy(),
+                    ],
+                )
+                .expect("seed local launch action");
+
+            let summary =
+                sync_epic_games_from_roots(&mut connection, std::slice::from_ref(&manifests_root))
+                    .expect("sync epic dedup");
+            let entries = list_library_entries(&connection).expect("list epic dedup entries");
+
+            assert_eq!(summary.discovered, 1);
+            assert_eq!(summary.inserted, 0);
+            assert_eq!(summary.updated, 1);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].id, "entry-local-celeste");
+            assert_eq!(entries[0].primary_platform_id, "epic");
+            assert!(entries[0]
+                .game
+                .sources
+                .iter()
+                .any(|source| source.platform_id == "epic"
+                    && source.external_id == "celestens:celeste123:CelesteArtifact"));
+
+            let _ = std::fs::remove_dir_all(epic_root);
             let _ = std::fs::remove_file(path);
         }
 
