@@ -98,6 +98,12 @@ const accountProviders = Object.freeze([
   },
 ])
 
+const libraryGridSizeOptions = Object.freeze([
+  { value: 'compact', label: 'Compacta', statusLabel: 'Grid compacta' },
+  { value: 'default', label: 'Padrão', statusLabel: 'Grid padrão' },
+  { value: 'large', label: 'Grande', statusLabel: 'Grid grande' },
+])
+
 const XBOX_LIVE_LOGIN_COMPLETE_EVENT = 'xbox-live-login-complete'
 
 const normalizeSteamApiKeyStatus = (status) => {
@@ -255,12 +261,14 @@ function AccountsSettingsPage({
   isXboxSyncing,
   isEpicSyncing,
   preferredStoreId,
+  gridSize,
   localScanMode,
   localScanRootsText,
   localScanExcludedRootsText,
   microsoftClientId,
   onBackToLibrary,
   onPreferredStoreChange,
+  onGridSizeChange,
   onLocalScanModeChange,
   onLocalScanRootsChange,
   onLocalScanRootsSelect,
@@ -1572,10 +1580,12 @@ function AccountsSettingsPage({
             isLoading={isLibrarySettingsLoading}
             isSaving={isLibrarySettingsSaving}
             preferredStoreId={preferredStoreId}
+            gridSize={gridSize}
             localScanMode={localScanMode}
             localScanRootsText={localScanRootsText}
             localScanExcludedRootsText={localScanExcludedRootsText}
             onPreferredStoreChange={onPreferredStoreChange}
+            onGridSizeChange={onGridSizeChange}
             onLocalScanModeChange={onLocalScanModeChange}
             onLocalScanRootsChange={onLocalScanRootsChange}
             onLocalScanRootsSelect={onLocalScanRootsSelect}
@@ -1631,14 +1641,16 @@ function AccountsSettingsPage({
   )
 }
 
-function LibraryDefaultsCard({
+export function LibraryDefaultsCard({
   isLoading,
   isSaving,
   preferredStoreId,
+  gridSize,
   localScanMode,
   localScanRootsText,
   localScanExcludedRootsText,
   onPreferredStoreChange,
+  onGridSizeChange,
   onLocalScanModeChange,
   onLocalScanRootsChange,
   onLocalScanRootsSelect,
@@ -1647,6 +1659,7 @@ function LibraryDefaultsCard({
   onSaveLibrarySettings,
 }) {
   const normalizedPreferredStoreId = preferredStoreId === 'xbox' ? 'xbox' : 'steam'
+  const normalizedGridSize = ['compact', 'default', 'large'].includes(gridSize) ? gridSize : 'default'
   const normalizedLocalScanMode = ['automatic', 'selected_only', 'automatic_plus_extra'].includes(localScanMode)
     ? localScanMode
     : 'automatic'
@@ -1657,6 +1670,8 @@ function LibraryDefaultsCard({
       .filter(Boolean).length
   const localScanRootsCount = countConfiguredPaths(localScanRootsText)
   const localScanExcludedRootsCount = countConfiguredPaths(localScanExcludedRootsText)
+  const gridSizeStatusLabel =
+    libraryGridSizeOptions.find((option) => option.value === normalizedGridSize)?.statusLabel ?? 'Grid padrão'
   const scanModeDescription =
     normalizedLocalScanMode === 'selected_only'
       ? 'Somente as pastas escolhidas abaixo serao varridas.'
@@ -1684,6 +1699,9 @@ function LibraryDefaultsCard({
                 ? 'Somente pastas escolhidas'
                 : 'Automatico + extras'}
           </span>
+          <span className="library-defaults-pill">
+            {gridSizeStatusLabel}
+          </span>
         </div>
       </div>
 
@@ -1701,7 +1719,25 @@ function LibraryDefaultsCard({
           </select>
         </label>
 
-        <label className="library-defaults-field" htmlFor="local-scan-mode">
+        <fieldset className="library-defaults-field library-grid-size-field">
+          <legend>Tamanho da grid</legend>
+          <div className="library-grid-size-control" aria-label="Tamanho dos cards na visualizacao por capas">
+            {libraryGridSizeOptions.map((option) => (
+              <button
+                className={normalizedGridSize === option.value ? 'active' : ''}
+                key={option.value}
+                type="button"
+                disabled={isLoading || isSaving}
+                aria-pressed={normalizedGridSize === option.value}
+                onClick={() => onGridSizeChange(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <label className="library-defaults-field library-scan-mode-field" htmlFor="local-scan-mode">
           <span>Modo de scan local</span>
           <select
             id="local-scan-mode"

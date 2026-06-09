@@ -5151,6 +5151,8 @@ mod storage {
         #[serde(default)]
         preferred_store_id: String,
         #[serde(default)]
+        grid_size: String,
+        #[serde(default)]
         local_scan_mode: String,
         #[serde(default)]
         local_scan_roots: Vec<String>,
@@ -5164,6 +5166,7 @@ mod storage {
     #[serde(rename_all = "camelCase")]
     pub struct LibrarySettingsDto {
         preferred_store_id: String,
+        grid_size: String,
         local_scan_mode: String,
         local_scan_roots: Vec<String>,
         local_scan_excluded_roots: Vec<String>,
@@ -5380,6 +5383,13 @@ mod storage {
                     .and_then(|value| value.as_str())
                     .unwrap_or("steam"),
             ),
+            grid_size: normalize_library_grid_size(
+                config
+                    .as_ref()
+                    .and_then(|value| value.get("gridSize"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("default"),
+            ),
             local_scan_mode: normalize_local_scan_mode(
                 config
                     .as_ref()
@@ -5408,6 +5418,7 @@ mod storage {
         input: LibrarySettingsInput,
     ) -> rusqlite::Result<LibrarySettingsDto> {
         let preferred_store_id = normalize_preferred_store_id(&input.preferred_store_id);
+        let grid_size = normalize_library_grid_size(&input.grid_size);
         let local_scan_mode = normalize_local_scan_mode(&input.local_scan_mode);
         let local_scan_roots = normalize_library_scan_roots(&input.local_scan_roots)?;
         let local_scan_excluded_roots =
@@ -5415,7 +5426,8 @@ mod storage {
         let microsoft_client_id = normalize_xbox_live_client_id(&input.microsoft_client_id)
             .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
         let transaction = connection.transaction()?;
-        let existing_config_json = read_provider_config_json(&transaction, "library")?;
+        let existing_config_json = read_provider_config_json(&transaction, "library")?
+            .or(read_provider_config_json(&transaction, "xbox")?);
         let mut config = existing_config_json
             .as_deref()
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
@@ -5425,6 +5437,10 @@ mod storage {
         config.insert(
             "preferredStoreId".to_string(),
             serde_json::Value::String(preferred_store_id.clone()),
+        );
+        config.insert(
+            "gridSize".to_string(),
+            serde_json::Value::String(grid_size.clone()),
         );
         config.insert(
             "localScanMode".to_string(),
@@ -5460,7 +5476,7 @@ mod storage {
               config_json,
               updated_at
             )
-            VALUES ('xbox', ?1, ?2)
+            VALUES ('library', ?1, ?2)
             ON CONFLICT(provider_id) DO UPDATE SET
               config_json = excluded.config_json,
               updated_at = excluded.updated_at
@@ -5471,6 +5487,7 @@ mod storage {
 
         Ok(LibrarySettingsDto {
             preferred_store_id,
+            grid_size,
             local_scan_mode,
             local_scan_roots,
             local_scan_excluded_roots,
@@ -5695,6 +5712,14 @@ mod storage {
         }
     }
 
+    fn normalize_library_grid_size(value: &str) -> String {
+        match value.trim().to_lowercase().as_str() {
+            "compact" => "compact".to_string(),
+            "large" => "large".to_string(),
+            _ => "default".to_string(),
+        }
+    }
+
     fn read_library_settings_config(
         connection: &Connection,
     ) -> rusqlite::Result<Option<serde_json::Map<String, serde_json::Value>>> {
@@ -5703,8 +5728,8 @@ mod storage {
             return Ok(None);
         }
 
-        let config_json = read_provider_config_json(connection, "xbox")?
-            .or(read_provider_config_json(connection, "library")?);
+        let config_json = read_provider_config_json(connection, "library")?
+            .or(read_provider_config_json(connection, "xbox")?);
 
         Ok(config_json
             .as_deref()
@@ -11718,6 +11743,7 @@ mod storage {
                 &mut connection,
                 LibrarySettingsInput {
                     preferred_store_id: "Xbox".to_string(),
+                    grid_size: "large".to_string(),
                     local_scan_mode: "selected_only".to_string(),
                     local_scan_roots: vec![selected_root.to_string_lossy().to_string()],
                     local_scan_excluded_roots: vec![excluded_root.to_string_lossy().to_string()],
@@ -11728,10 +11754,19 @@ mod storage {
             let loaded = get_library_settings(&connection).expect("load library settings");
 
             assert_eq!(dto.preferred_store_id, "xbox");
+            assert_eq!(dto.grid_size, "large");
             assert_eq!(dto.local_scan_mode, "selected_only");
             assert_eq!(dto.local_scan_roots.len(), 1);
             assert_eq!(dto.local_scan_excluded_roots.len(), 1);
             assert_eq!(loaded, dto);
+            let persisted_config_json: String = connection
+                .query_row(
+                    "SELECT config_json FROM provider_account_configs WHERE provider_id = 'library'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("read library config json");
+            assert!(persisted_config_json.contains("\"gridSize\":\"large\""));
 
             let _ = std::fs::remove_dir_all(selected_root);
             let _ = std::fs::remove_dir_all(excluded_root);
@@ -11764,6 +11799,7 @@ mod storage {
                 &mut connection,
                 LibrarySettingsInput {
                     preferred_store_id: "steam".to_string(),
+                    grid_size: "default".to_string(),
                     local_scan_mode: "selected_only".to_string(),
                     local_scan_roots: vec![
                         selected_root.to_string_lossy().to_string(),

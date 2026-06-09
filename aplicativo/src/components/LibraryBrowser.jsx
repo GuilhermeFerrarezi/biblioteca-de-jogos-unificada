@@ -38,6 +38,7 @@ function LibraryBrowser({
   showLibraryLoading,
   sortMode,
   viewMode,
+  gridSize,
   onFilterChange,
   onSearchChange,
   onSelectEntry,
@@ -76,7 +77,7 @@ function LibraryBrowser({
           ))}
         </div>
       ) : (
-        <div className="game-cover-grid">
+        <div className="game-cover-grid" data-grid-size={normalizeGridSize(gridSize)}>
           {filteredEntries.map((entry) => (
             <GameCoverCard
               entry={entry}
@@ -95,6 +96,10 @@ function LibraryBrowser({
       ) : null}
     </section>
   )
+}
+
+function normalizeGridSize(gridSize) {
+  return ['compact', 'default', 'large'].includes(gridSize) ? gridSize : 'default'
 }
 
 function getEmptyStateTitle(entriesCount, searchTerm, quickFilters) {
