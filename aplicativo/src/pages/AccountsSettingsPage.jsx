@@ -11,13 +11,13 @@ import {
   LogIn,
   RefreshCw,
   Save,
-  Store,
   Trash2,
   X,
 } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import EpicIcon from '../components/icons/EpicIcon'
 import SteamIcon from '../components/icons/SteamIcon'
 import XboxIcon from '../components/icons/XboxIcon'
 import {
@@ -90,7 +90,7 @@ const accountProviders = Object.freeze([
   {
     id: 'epic',
     name: 'Epic Games',
-    icon: Store,
+    icon: EpicIcon,
     state: 'Descoberta local',
     tone: 'ready',
     detail: 'Lê manifestos instalados do Epic Games Launcher neste computador.',
@@ -2266,7 +2266,7 @@ function EpicLibraryRootsPanel({
     >
       <div className="steam-api-vault-heading">
         <div className="account-provider-icon" aria-hidden="true">
-          <Store size={22} />
+          <EpicIcon size={22} />
         </div>
 
         <div>

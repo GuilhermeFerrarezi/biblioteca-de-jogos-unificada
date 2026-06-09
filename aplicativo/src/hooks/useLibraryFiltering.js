@@ -20,6 +20,7 @@ const normalizeSearchValue = (value) =>
 const QUICK_FILTER_GROUPS = Object.freeze({
   favorites: new Set([QUICK_FILTER_IDS.FAVORITES]),
   status: new Set([QUICK_FILTER_IDS.INSTALLED, QUICK_FILTER_IDS.NOT_INSTALLED]),
+  personalRating: new Set([QUICK_FILTER_IDS.RATED, QUICK_FILTER_IDS.UNRATED]),
   platform: new Set([QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.EPIC, QUICK_FILTER_IDS.LOCAL]),
 })
 
@@ -31,6 +32,10 @@ function matchesQuickFilter(entry, quickFilterId) {
       return entry.installStatus === INSTALL_STATUS.INSTALLED
     case QUICK_FILTER_IDS.NOT_INSTALLED:
       return entry.installStatus === INSTALL_STATUS.NOT_INSTALLED
+    case QUICK_FILTER_IDS.RATED:
+      return entry?.game?.personalRating != null
+    case QUICK_FILTER_IDS.UNRATED:
+      return entry?.game?.personalRating == null
     case QUICK_FILTER_IDS.STEAM:
     case QUICK_FILTER_IDS.XBOX:
     case QUICK_FILTER_IDS.EPIC:
@@ -41,6 +46,9 @@ function matchesQuickFilter(entry, quickFilterId) {
   }
 }
 
+const getFilterScopeEntries = (entry) =>
+  Array.isArray(entry?.memberEntries) && entry.memberEntries.length > 0 ? entry.memberEntries : [entry]
+
 function getQuickFilterGroup(quickFilterId) {
   if (QUICK_FILTER_GROUPS.favorites.has(quickFilterId)) {
     return 'favorites'
@@ -48,6 +56,10 @@ function getQuickFilterGroup(quickFilterId) {
 
   if (QUICK_FILTER_GROUPS.status.has(quickFilterId)) {
     return 'status'
+  }
+
+  if (QUICK_FILTER_GROUPS.personalRating.has(quickFilterId)) {
+    return 'personalRating'
   }
 
   if (QUICK_FILTER_GROUPS.platform.has(quickFilterId)) {
@@ -59,6 +71,36 @@ function getQuickFilterGroup(quickFilterId) {
 
 function matchesQuickFilterGroup(entry, quickFilterIds) {
   return quickFilterIds.some((quickFilterId) => matchesQuickFilter(entry, quickFilterId))
+}
+
+function matchesPlatformStatusFilters(entry, platformFilterIds = [], statusFilterIds = []) {
+  if (platformFilterIds.length === 0 || statusFilterIds.length === 0) {
+    return true
+  }
+
+  return getFilterScopeEntries(entry).some(
+    (scopeEntry) =>
+      matchesQuickFilterGroup(scopeEntry, platformFilterIds) &&
+      matchesQuickFilterGroup(scopeEntry, statusFilterIds),
+  )
+}
+
+function matchesQuickFilterGroups(entry, quickFilterGroups) {
+  const platformFilterIds = quickFilterGroups.platform ?? []
+  const statusFilterIds = quickFilterGroups.status ?? []
+  const hasProviderStatusCombination = platformFilterIds.length > 0 && statusFilterIds.length > 0
+
+  if (!matchesPlatformStatusFilters(entry, platformFilterIds, statusFilterIds)) {
+    return false
+  }
+
+  return Object.entries(quickFilterGroups).every(([groupId, quickFilterIds]) => {
+    if (hasProviderStatusCombination && (groupId === 'platform' || groupId === 'status')) {
+      return true
+    }
+
+    return matchesQuickFilterGroup(entry, quickFilterIds)
+  })
 }
 
 const getEntryTitle = (entry) => String(entry?.game?.sortTitle ?? entry?.game?.title ?? '').trim()
@@ -74,6 +116,18 @@ const compareByTitle = (leftEntry, rightEntry, direction = 1) => {
 }
 
 const getPlaytimeMinutes = (entry) => Number(entry?.game?.playtime?.totalMinutes ?? 0)
+
+const getPersonalRatingValue = (entry) => {
+  const rating = entry?.game?.personalRating
+
+  if (rating == null) {
+    return null
+  }
+
+  const numericRating = Number(rating)
+
+  return Number.isFinite(numericRating) ? numericRating : null
+}
 
 export const isFavoriteEntry = (entry) => {
   if (entry?.isFavorite === true || entry?.is_favorite === true) {
@@ -106,6 +160,23 @@ const compareByAchievementProgress = (leftEntry, rightEntry, direction) => {
   return (leftProgress - rightProgress) * direction || compareByTitle(leftEntry, rightEntry)
 }
 
+const compareByPersonalRating = (leftEntry, rightEntry, direction) => {
+  const leftRating = getPersonalRatingValue(leftEntry)
+  const rightRating = getPersonalRatingValue(rightEntry)
+  const leftHasRating = leftRating !== null
+  const rightHasRating = rightRating !== null
+
+  if (leftHasRating !== rightHasRating) {
+    return leftHasRating ? -1 : 1
+  }
+
+  if (!leftHasRating && !rightHasRating) {
+    return compareByTitle(leftEntry, rightEntry)
+  }
+
+  return (leftRating - rightRating) * direction || compareByTitle(leftEntry, rightEntry)
+}
+
 export function sortLibraryEntries(entries, sortMode = SORT_MODE_IDS.ALPHA_ASC) {
   const normalizedSortMode = Object.values(SORT_MODE_IDS).includes(sortMode) ? sortMode : SORT_MODE_IDS.ALPHA_ASC
 
@@ -130,6 +201,12 @@ export function sortLibraryEntries(entries, sortMode = SORT_MODE_IDS.ALPHA_ASC) 
       }
       case SORT_MODE_IDS.ACHIEVEMENTS_ASC: {
         return compareByAchievementProgress(leftEntry, rightEntry, 1)
+      }
+      case SORT_MODE_IDS.PERSONAL_RATING_DESC: {
+        return compareByPersonalRating(leftEntry, rightEntry, -1)
+      }
+      case SORT_MODE_IDS.PERSONAL_RATING_ASC: {
+        return compareByPersonalRating(leftEntry, rightEntry, 1)
       }
       case SORT_MODE_IDS.ALPHA_ASC:
       default:
@@ -162,9 +239,7 @@ export function filterLibraryEntries(entries, searchTerm, quickFilters) {
         ].some((value) => normalizeSearchValue(value).includes(normalizedSearch))
       : true
 
-    const matchesQuickFilters = Object.values(quickFilterGroups).every((quickFilterIds) =>
-      matchesQuickFilterGroup(entry, quickFilterIds),
-    )
+    const matchesQuickFilters = matchesQuickFilterGroups(entry, quickFilterGroups)
 
     return matchesSearch && matchesQuickFilters
   })

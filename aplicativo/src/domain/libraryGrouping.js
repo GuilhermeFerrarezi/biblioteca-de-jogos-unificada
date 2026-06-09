@@ -91,6 +91,17 @@ const pickTags = (entries) =>
 const pickUserOverrides = (entries) =>
   entries.reduce((merged, entry) => ({ ...merged, ...(entry?.game?.userOverrides ?? {}) }), {})
 
+const pickPersonalReview = (entries) => {
+  const reviewedEntry =
+    entries.find((entry) => entry?.game?.personalRating != null || entry?.game?.personalReview) ??
+    pickRepresentativeEntry(entries)
+
+  return {
+    personalRating: reviewedEntry?.game?.personalRating ?? null,
+    personalReview: reviewedEntry?.game?.personalReview ?? null,
+  }
+}
+
 const pickAchievements = (entries) =>
   entries.find((entry) => entry?.primaryPlatformId === 'steam' && entry?.game?.achievements)?.game?.achievements ??
   entries.find((entry) => entry?.game?.achievements)?.game?.achievements ??
@@ -151,6 +162,7 @@ function buildGroupedEntry(entries, groupKey) {
   const representativeEntry = pickRepresentativeEntry(entries)
   const title = representativeEntry?.game?.title ?? entries[0]?.game?.title ?? 'Jogo'
   const platformIds = mergePlatforms(entries)
+  const personalReview = pickPersonalReview(entries)
 
   return {
     ...representativeEntry,
@@ -181,6 +193,8 @@ function buildGroupedEntry(entries, groupKey) {
       achievements: pickAchievements(entries),
       genres: pickGenres(entries),
       tags: pickTags(entries),
+      personalRating: personalReview.personalRating,
+      personalReview: personalReview.personalReview,
       userOverrides: pickUserOverrides(entries),
     },
   }

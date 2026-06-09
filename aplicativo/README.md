@@ -39,6 +39,8 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - A ponte com Tauri fica em `src/services/libraryService.js`, com fallback web carregado dinamicamente apenas em desenvolvimento.
 - Visualizacao padrao por capas, com alternativa em lista.
 - Sidebar, resumo da biblioteca, busca, filtros rapidos e painel de detalhes.
+- O painel de detalhes possui avaliacao pessoal por jogo agrupado: rating de `0.5` a `5` com meia estrela, review/resenha pessoal ate 4000 caracteres, salvamento em SQLite e acao `Limpar nota` que remove apenas o rating e preserva a review.
+- Cards e lista mostram badges discretos de nota quando existe avaliacao. A biblioteca inclui ordenacoes `Melhor avaliados` e `Pior avaliados`, com jogos sem nota no fim, alem dos filtros discretos `Avaliados` e `Não avaliados`.
 - Area de `Contas e integracoes` acessivel pela sidebar, com Steam, Xbox/Game Pass e Epic. Epic ja possui primeiro corte local manifest-only, sem login/API remota.
 - Fluxo `Entrar com Steam` implementado com Steam OpenID no navegador externo; o backend valida o retorno e salva apenas o SteamID64 no SQLite.
 - Selecao real de jogo por clique ou teclado.
@@ -49,8 +51,8 @@ Esse comando marca todos os arquivos de `aplicativo` como disponiveis localmente
 - Frontend migrado para JavaScript/JSX; os modelos agora sao contratos de dados mantidos pelos objetos e comandos Tauri.
 - Dados mockados concentrados em `src/data/mockLibrary.js` apenas como fallback web e referencia de seed.
 - Constantes compartilhadas de UI/dominio ficam em `src/constants/libraryConstants.js`.
-- Backend Tauri em `src-tauri` ja possui persistencia SQLite para a biblioteca, com seed idempotente dos 4 mocks e comandos `list_library_entries`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived`, `set_library_entry_favorite`, `sync_local_games` e `launch_library_entry`.
-- A biblioteca principal exclui entradas arquivadas via `is_archived`; favoritos sao persistidos via `is_favorite` e usados pelo frontend para marcar, filtrar e ordenar jogos favoritos. O frontend tem um botao de sincronizacao manual para importar jogos locais a partir de pastas conhecidas ou configuradas via ambiente. O scanner local ignora instaladores, componentes de runtime, servicos como EpicOnlineServices e diretorios de suporte, arquiva falsos positivos antigos desse tipo ao abrir o banco ou sincronizar, e encontra executaveis em subpastas comuns como `Binaries\Win64`.
+- Backend Tauri em `src-tauri` ja possui persistencia SQLite para a biblioteca, com seed idempotente dos 4 mocks e comandos `list_library_entries`, `add_manual_game`, `update_manual_game`, `set_library_entry_archived`, `set_library_entry_favorite`, `set_library_entries_personal_review`, `sync_local_games` e `launch_library_entry`.
+- A biblioteca principal exclui entradas arquivadas via `is_archived`; favoritos sao persistidos via `is_favorite` e usados pelo frontend para marcar, filtrar e ordenar jogos favoritos. Avaliacoes pessoais ficam em `game_user_reviews` e sao expostas como `game.personalRating`/`game.personalReview`; jogos agrupados Steam/Xbox/Epic compartilham a mesma avaliacao/resenha. O frontend tem um botao de sincronizacao manual para importar jogos locais a partir de pastas conhecidas ou configuradas via ambiente. O scanner local ignora instaladores, componentes de runtime, servicos como EpicOnlineServices e diretorios de suporte, arquiva falsos positivos antigos desse tipo ao abrir o banco ou sincronizar, e encontra executaveis em subpastas comuns como `Binaries\Win64`.
 - A limpeza de falsos positivos locais no boot usa indices especificos em `library_entries` e `launch_actions`, e e ignorada rapidamente quando nao ha entradas locais ativas.
 - O `LocalGamesProvider` nao varre bibliotecas Steam por padrao. A importacao Steam fica no comando `sync_steam_games`, que le `libraryfolders.vdf` e `appmanifest_*.acf` para importar jogos instalados sem exigir credenciais.
 - O frontend tem acoes separadas para sincronizar Steam local, conectar conta Steam e sincronizar biblioteca da conta. A sincronizacao Steam local cobre instalacoes locais e cria acoes `steam://rungameid/<appid>`.
@@ -137,4 +139,5 @@ A estrutura do SQLite local fica em:
 - Coletar mais evidencia de manifests reais da Epic em diferentes jogos/instalacoes antes de expandir o provider alem do corte local manifest-only.
 - Validacao manual do fluxo completo de adicionar, editar, arquivar, sincronizar Steam e sincronizar locais no Tauri.
 - Consulta filtrada/paginacao no backend para bibliotecas maiores.
+- Definir futuramente identidade canonica persistente para jogos agrupados no backend, caso dados pessoais, colecoes, tags e deduplicacao passem a exigir mais robustez do que o agrupamento sintetico atual por titulo normalizado no frontend.
 

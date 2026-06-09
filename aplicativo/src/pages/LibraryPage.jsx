@@ -134,6 +134,7 @@ function LibraryPage() {
                 onEditEntry={library.handleEditSelectedEntry}
                 onLaunchEntry={library.handleLaunchSelectedEntry}
                 onLaunchPlatformChange={library.handleLaunchPlatformChange}
+                onSavePersonalReview={library.handleSaveSelectedEntryPersonalReview}
                 onToggleFavoriteEntry={library.handleToggleFavoriteSelectedEntry}
               />
             </div>

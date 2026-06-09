@@ -1,4 +1,4 @@
-import { CircleDot, HardDrive, Heart, LayoutGrid, Library, List, Search, Store, Trophy } from 'lucide-react'
+import { CircleDot, HardDrive, Heart, LayoutGrid, Library, List, Search, Star, StarOff, Trophy } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getAchievementProgress, getAchievementSummaryLabel, getPlaytimeHours } from '../adapters/libraryEntryAdapter'
 import {
@@ -9,19 +9,23 @@ import {
   QUICK_FILTER_IDS,
   SORT_MODE_OPTIONS,
 } from '../constants/libraryConstants'
+import EpicIcon from './icons/EpicIcon'
 import SteamIcon from './icons/SteamIcon'
 import XboxIcon from './icons/XboxIcon'
 
 const STATUS_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.INSTALLED, QUICK_FILTER_IDS.NOT_INSTALLED])
+const PERSONAL_RATING_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.RATED, QUICK_FILTER_IDS.UNRATED])
 const PLATFORM_FILTER_IDS = Object.freeze([QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.EPIC, QUICK_FILTER_IDS.LOCAL])
 const QUICK_FILTER_ICONS = Object.freeze({
   [QUICK_FILTER_IDS.ALL]: Library,
   [QUICK_FILTER_IDS.FAVORITES]: Heart,
   [QUICK_FILTER_IDS.INSTALLED]: CircleDot,
   [QUICK_FILTER_IDS.NOT_INSTALLED]: HardDrive,
+  [QUICK_FILTER_IDS.RATED]: Star,
+  [QUICK_FILTER_IDS.UNRATED]: StarOff,
   [QUICK_FILTER_IDS.STEAM]: SteamIcon,
   [QUICK_FILTER_IDS.XBOX]: XboxIcon,
-  [QUICK_FILTER_IDS.EPIC]: Store,
+  [QUICK_FILTER_IDS.EPIC]: EpicIcon,
   [QUICK_FILTER_IDS.LOCAL]: HardDrive,
 })
 
@@ -110,6 +114,7 @@ function getEmptyStateDescription(entriesCount, searchTerm, quickFilters) {
   const activeQuickFilters = quickFilters.filter((filterId) => filterId !== QUICK_FILTER_IDS.ALL)
   const hasFilters = activeQuickFilters.length > 0
   const statusFilters = activeQuickFilters.filter((filterId) => STATUS_FILTER_IDS.includes(filterId))
+  const personalRatingFilters = activeQuickFilters.filter((filterId) => PERSONAL_RATING_FILTER_IDS.includes(filterId))
   const platformFilters = activeQuickFilters.filter((filterId) => PLATFORM_FILTER_IDS.includes(filterId))
   const hasFavoritesFilter = activeQuickFilters.includes(QUICK_FILTER_IDS.FAVORITES)
 
@@ -139,6 +144,14 @@ function getEmptyStateDescription(entriesCount, searchTerm, quickFilters) {
 
   if (statusFilters.length > 1) {
     return `Nenhum jogo corresponde aos status ${getFilterLabels(statusFilters).join(' e ').toLowerCase()} selecionados.`
+  }
+
+  if (personalRatingFilters.length === 1) {
+    return `Nenhum jogo corresponde ao filtro ${getFilterLabel(personalRatingFilters[0]).toLowerCase()} selecionado.`
+  }
+
+  if (personalRatingFilters.length > 1) {
+    return `Nenhum jogo corresponde aos filtros ${getFilterLabels(personalRatingFilters).join(' e ').toLowerCase()} selecionados.`
   }
 
   if (platformFilters.length === 1) {
@@ -309,6 +322,7 @@ function GameRow({ entry, isSelected, onSelectEntry }) {
         <Trophy size={14} aria-hidden="true" />
         {getAchievementSummaryLabel(entry)}
       </span>
+      <RatingBadge rating={entry.game.personalRating} />
       <span className="playtime">{getPlaytimeHours(entry.game.playtime.totalMinutes)}h</span>
     </article>
   )
@@ -340,6 +354,7 @@ function GameCoverCard({ entry, isSelected, onSelectEntry }) {
         imageAlt=""
       />
       {isFavorite ? <Heart className="favorite-badge" size={15} fill="currentColor" aria-label="Favorito" /> : null}
+      <RatingBadge rating={entry.game.personalRating} compact />
       <span className={achievementProgress.hasData ? 'achievement-badge' : 'achievement-badge muted'}>
         <Trophy size={13} aria-hidden="true" />
         {achievementProgress.hasData ? `${Math.round(achievementProgress.percentage)}%` : 'Sem dados'}
@@ -347,6 +362,19 @@ function GameCoverCard({ entry, isSelected, onSelectEntry }) {
       <strong>{entry.game.title}</strong>
       <span>{entry.platformSummary ?? PLATFORM_LABELS[entry.primaryPlatformId]}</span>
     </article>
+  )
+}
+
+function RatingBadge({ compact = false, rating }) {
+  if (rating == null) {
+    return null
+  }
+
+  return (
+    <span className={compact ? 'rating-badge compact' : 'rating-badge'} aria-label={`Avaliacao pessoal ${rating} de 5`}>
+      <Star size={compact ? 12 : 14} fill="currentColor" aria-hidden="true" />
+      {rating}
+    </span>
   )
 }
 

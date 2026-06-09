@@ -377,6 +377,8 @@ export const buildManualLibraryEntry = (form, existingEntry = null) => {
       artwork: { accentColor: getDeterministicAccentColor(title) },
       genres: genre ? [genre] : ['Sem genero'],
       tags: existingEntry?.game.tags ?? [],
+      personalRating: existingEntry?.game.personalRating ?? null,
+      personalReview: existingEntry?.game.personalReview ?? null,
       userOverrides: existingEntry?.game.userOverrides ?? {},
     },
     isArchived: existingEntry?.isArchived ?? false,

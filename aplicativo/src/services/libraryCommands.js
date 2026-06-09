@@ -297,3 +297,38 @@ export const setLibraryEntryFavorite = async (entryId, isFavorite) => {
 
   return invoke('set_library_entry_favorite', { entryId, isFavorite })
 }
+
+export const setLibraryEntriesPersonalReview = async (entryIds, input) => {
+  const normalizedEntryIds = Array.isArray(entryIds)
+    ? [...new Set(entryIds.map((entryId) => String(entryId ?? '').trim()).filter(Boolean))]
+    : []
+  const rating = input?.rating ?? null
+  const review = String(input?.review ?? '').trim()
+
+  if (normalizedEntryIds.length === 0) {
+    throw new Error('Entrada de biblioteca invalida.')
+  }
+
+  if (rating !== null) {
+    const numericRating = Number(rating)
+    if (!Number.isFinite(numericRating) || numericRating < 0.5 || numericRating > 5 || numericRating * 2 !== Math.round(numericRating * 2)) {
+      throw new Error('Escolha uma nota entre 0.5 e 5 estrelas.')
+    }
+  }
+
+  if ([...review].length > 4000) {
+    throw new Error('A resenha deve ter no maximo 4000 caracteres.')
+  }
+
+  if (!hasTauriRuntime()) {
+    return null
+  }
+
+  return invoke('set_library_entries_personal_review', {
+    entryIds: normalizedEntryIds,
+    input: {
+      rating: rating === null ? null : Number(rating),
+      review: review || null,
+    },
+  })
+}

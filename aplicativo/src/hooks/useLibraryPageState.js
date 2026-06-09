@@ -7,6 +7,7 @@ import {
   listLibraryEntries,
   setLibraryEntryArchived,
   setLibraryEntryFavorite,
+  setLibraryEntriesPersonalReview,
   syncSteamAccountGames,
   syncEpicGames,
   syncLocalGames,
@@ -55,6 +56,20 @@ const updateEntriesFavoriteState = (entries, targetIds, isFavorite) =>
           ...entry,
           isFavorite,
           is_favorite: isFavorite,
+        }
+      : entry
+  ))
+
+const updateEntriesPersonalReview = (entries, targetIds, input) =>
+  entries.map((entry) => (
+    targetIds.includes(entry.id)
+      ? {
+          ...entry,
+          game: {
+            ...entry.game,
+            personalRating: input.rating,
+            personalReview: input.review,
+          },
         }
       : entry
   ))
@@ -803,6 +818,27 @@ export function useLibraryPageState() {
     setLaunchFeedback(null)
   }
 
+  const handleSaveSelectedEntryPersonalReview = async (input) => {
+    if (!selectedEntry) {
+      throw new Error('Nenhum jogo selecionado.')
+    }
+
+    const targetIds = selectedEntry.memberEntryIds ?? [selectedEntry.id]
+    const nextReview = {
+      rating: input?.rating ?? null,
+      review: String(input?.review ?? '').trim() || null,
+    }
+
+    await setLibraryEntriesPersonalReview(targetIds, nextReview)
+    setEntries((currentEntries) => updateEntriesPersonalReview(currentEntries, targetIds, nextReview))
+    setLaunchMessage('Avaliacao pessoal salva.')
+    setLaunchFeedback(null)
+
+    if (hasTauriRuntime()) {
+      await refreshEntries()
+    }
+  }
+
   const handleEditSelectedEntry = () => {
     if (!selectedEntry || selectedEntry.primaryPlatformId !== 'manual') {
       return
@@ -1006,6 +1042,7 @@ export function useLibraryPageState() {
     closeManualModal,
     handleArchiveSelectedEntry,
     handleToggleFavoriteSelectedEntry,
+    handleSaveSelectedEntryPersonalReview,
     handleEditSelectedEntry,
     handleLaunchSelectedEntry,
     handleLaunchPlatformChange,

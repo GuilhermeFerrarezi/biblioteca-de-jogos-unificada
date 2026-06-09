@@ -1,4 +1,4 @@
-import { Archive, Clock3, Download, Eye, Heart, LockKeyhole, Pencil, Play, Search, Store, Trophy, X } from 'lucide-react'
+import { Archive, Clock3, Download, Eye, Heart, LockKeyhole, Pencil, Play, Search, Star, Store, Trophy, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -70,6 +70,7 @@ function GameDetailsPanel({
   onEditEntry,
   onLaunchEntry,
   onLaunchPlatformChange,
+  onSavePersonalReview,
   onToggleFavoriteEntry,
 }) {
   const [isLaunchChooserOpen, setIsLaunchChooserOpen] = useState(false)
@@ -305,6 +306,10 @@ function GameDetailsPanel({
                 {launchActionHint}
               </p>
             ) : null}
+            <PersonalReviewSection
+              selectedEntry={selectedEntry}
+              onSavePersonalReview={onSavePersonalReview}
+            />
             {detailsEntry?.primaryPlatformId === 'xbox' ? (
               <div className="timeline-note">
                 <Store size={16} aria-hidden="true" />
@@ -362,6 +367,93 @@ function GameDetailsPanel({
 
 const ACHIEVEMENT_PREVIEW_ACHIEVED_LIMIT = 3
 const ACHIEVEMENT_PREVIEW_LOCKED_LIMIT = 3
+const PERSONAL_RATING_OPTIONS = Object.freeze([0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5])
+
+function PersonalReviewSection({ selectedEntry, onSavePersonalReview }) {
+  const savedRating = selectedEntry?.game?.personalRating ?? null
+  const savedReview = selectedEntry?.game?.personalReview ?? ''
+  const [rating, setRating] = useState(savedRating)
+  const [review, setReview] = useState(savedReview)
+  const [status, setStatus] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const normalizedReview = review.trim()
+  const hasChanges = rating !== savedRating || normalizedReview !== String(savedReview ?? '').trim()
+
+  useEffect(() => {
+    setRating(savedRating)
+    setReview(savedReview)
+    setStatus('')
+    setIsSaving(false)
+  }, [selectedEntry?.id, savedRating, savedReview])
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    setStatus('')
+    setIsSaving(true)
+
+    try {
+      await onSavePersonalReview?.({
+        rating,
+        review: normalizedReview || null,
+      })
+      setStatus('Salvo.')
+    } catch (error) {
+      setStatus(error?.message || 'Nao foi possivel salvar.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleClear = () => {
+    setRating(null)
+    setStatus('')
+  }
+
+  return (
+    <form className="personal-review-panel" onSubmit={handleSubmit}>
+      <div className="personal-review-heading">
+        <div>
+          <span className="section-kicker">Minha avaliacao</span>
+          <strong>{rating ? `${rating} de 5 estrelas` : 'Sem nota'}</strong>
+        </div>
+        <button className="text-button" type="button" onClick={handleClear}>
+          Limpar nota
+        </button>
+      </div>
+      <div className="personal-rating-control" aria-label="Nota pessoal">
+        {PERSONAL_RATING_OPTIONS.map((option) => (
+          <button
+            className={rating === option ? 'personal-rating-option active' : 'personal-rating-option'}
+            key={option}
+            type="button"
+            aria-label={`Avaliar com ${option} estrelas`}
+            aria-pressed={rating === option}
+            title={`${option} estrelas`}
+            onClick={() => setRating(option)}
+          >
+            <Star size={14} fill={rating !== null && option <= rating ? 'currentColor' : 'none'} aria-hidden="true" />
+            <span>{option}</span>
+          </button>
+        ))}
+      </div>
+      <label className="personal-review-field">
+        <span>Resenha pessoal</span>
+        <textarea
+          maxLength={4000}
+          rows={4}
+          value={review}
+          onChange={(event) => setReview(event.target.value)}
+        />
+      </label>
+      <div className="personal-review-footer">
+        <span role="status">{status}</span>
+        <button className="secondary-button" type="submit" disabled={isSaving || !hasChanges}>
+          {isSaving ? 'Salvando...' : 'Salvar'}
+        </button>
+      </div>
+    </form>
+  )
+}
 
 function SteamAchievementsSection({
   achievements,

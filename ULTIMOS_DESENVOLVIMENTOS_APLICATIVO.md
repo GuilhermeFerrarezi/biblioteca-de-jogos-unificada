@@ -32,6 +32,7 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 - Os filtros rapidos agora combinam por categoria: status com status e plataforma com plataforma usam OR, enquanto categorias diferentes continuam combinando por AND.
 - O estado vazio da biblioteca agora diferencia biblioteca vazia de ausencia de resultados por busca ou filtros.
 - Quando os filtros eliminam todos os resultados, a mensagem aponta melhor se o bloqueio veio de status, plataforma ou da combinacao entre ambos.
+- A biblioteca agora possui avaliacao pessoal por jogo agrupado: nota de `0.5` a `5` com meia estrela, resenha livre, botao `Limpar nota` que preserva a resenha, badges discretos em cards/lista, ordenacoes `Melhor avaliados`/`Pior avaliados` e filtros `Avaliados`/`Não avaliados`, sem filtros por faixa de estrelas.
 
 ## Contas e configuracoes
 
@@ -73,11 +74,22 @@ Este arquivo resume os desenvolvimentos mais recentes criados no aplicativo. Par
 ## Persistencia SQLite
 
 - O backend Tauri usa SQLite local em `%APPDATA%\com.bibliotecajogos.unificada\library.sqlite3`.
-- O schema atual inclui `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres` e `schema_migrations`.
+- O schema atual inclui `games`, `library_entries`, `game_sources`, `launch_actions`, `game_genres`, `game_user_reviews`, caches Steam e `schema_migrations`.
 - O seed dos 4 mocks roda em background, sem bloquear a abertura do app.
 - A listagem principal vem do comando Tauri `list_library_entries`.
 - Entradas arquivadas sao preservadas no banco e ocultadas da listagem principal.
+- As avaliacoes pessoais ficam em `game_user_reviews`: `personal_rating` aceita meia estrela de `0.5` a `5` ou `null`, `personal_review` aceita texto livre ate 4000 caracteres e whitespace vazio e salvo como `null`.
 - A estrutura esta documentada em `ESTRUTURA_BANCO_DADOS.md`.
+
+## Avaliacao pessoal por jogo agrupado
+
+- O DTO da biblioteca expoe `game.personalRating` e `game.personalReview`.
+- A avaliacao pessoal funciona no nivel do jogo agrupado. Jogos Steam/Xbox/Epic agrupados compartilham a mesma nota/resenha ao alternar provider ou launcher.
+- A UI do painel de detalhes permite editar e salvar nota/resenha; `Limpar nota` remove apenas o rating e preserva a review.
+- Cards e lista mostram um badge discreto quando ha nota pessoal.
+- As ordenacoes `Melhor avaliados` e `Pior avaliados` usam `personalRating`; jogos sem nota ficam no fim em ambas.
+- Os filtros `Avaliados` e `Não avaliados` usam presenca de rating e combinam com busca, favoritos, plataforma e status.
+- Nao foram adicionados filtros por faixa de estrelas, como `4+ estrelas`.
 
 ## Jogos manuais
 
@@ -253,6 +265,25 @@ cargo test
 
 Resultado validado: frontend lint/unit/smoke/build aprovados; backend fmt/check/test aprovados. O `cargo check` manteve apenas warnings antigos de Xbox/AuthVault. A validacao manual em Tauri confirmou Epic visivel, sincronizacao local funcional, importacao apenas do jogo Epic instalado no cenario testado, ausencia de falsos positivos e acao de iniciar funcionando.
 
+Validacao do bloco de avaliacao pessoal em 2026-06-09:
+
+```powershell
+npm run lint
+npm run test:unit
+npm run test:smoke
+npm run build
+```
+
+```powershell
+cd aplicativo\src-tauri
+$env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\BibliotecaJogosUnificada\cargo-target"
+cargo fmt -- --check
+cargo check
+cargo test
+```
+
+Resultado validado: frontend lint/unit/smoke/build aprovados; backend fmt/check/test aprovados. O `cargo check` manteve apenas warnings antigos de dead code quando aplicavel. O corte inicial de rating/review registrou 156 testes Rust passando, e as suites frontend foram atualizadas nos cortes de `Limpar nota` e navegacao por avaliacao. A validacao manual confirmou rating/review persistidos apos fechar/reabrir, jogo agrupado mantendo nota/resenha ao alternar provider/launcher, `Limpar nota` preservando review, ordenacoes por melhor/pior avaliados e filtros Avaliados/Não avaliados combinados com plataforma/status.
+
 ## Commits recentes relevantes
 
 - `a99f0cf fix(steam): apply provider agent review`
@@ -276,6 +307,7 @@ Resultado validado: frontend lint/unit/smoke/build aprovados; backend fmt/check/
 6. Quando houver stack dedicada de browser automation, criar smoke/e2e real para bootstrap, login Steam, syncs e launch.
 7. Refinar a UX do bloqueio de importacao Xbox, explicando melhor ao usuario porque a operacao ainda pode falhar quando compliance/autenticacao nao estiverem concluidos.
 8. O proximo ajuste do projeto e reduzir o tempo de abertura do aplicativo, porque o Tauri esta demorando demais para mostrar a interface completa.
+9. Para dados pessoais futuros, avaliar identidade canonica persistente de jogo agrupado no backend, ja que o agrupamento cross-platform ainda e sintetico no frontend por titulo normalizado.
 
 ## Corte Xbox Public Client
 

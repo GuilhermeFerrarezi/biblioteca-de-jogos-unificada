@@ -15,6 +15,7 @@ const makeEntry = ({
   is_favorite,
   achievementProgress,
   achievements,
+  personalRating,
   primaryPlatformId = 'steam',
   installStatus = 'not_installed',
 }) => ({
@@ -30,6 +31,23 @@ const makeEntry = ({
     genres: ['RPG'],
     playtime: { totalMinutes: minutes },
     achievements,
+    personalRating,
+  },
+})
+
+const makeGroupedEntry = ({ id, title, memberEntries }) => ({
+  ...memberEntries.find((entry) => entry.installStatus === 'installed'),
+  id,
+  isGroupedCrossPlatform: true,
+  memberEntries,
+  memberEntryIds: memberEntries.map((entry) => entry.id),
+  platformIds: memberEntries.map((entry) => entry.primaryPlatformId),
+  platformSummary: memberEntries.map((entry) => entry.primaryPlatformId).join(' + '),
+  installStatus: memberEntries.some((entry) => entry.installStatus === 'installed') ? 'installed' : 'not_installed',
+  game: {
+    ...memberEntries[0].game,
+    title,
+    sortTitle: title,
   },
 })
 
@@ -97,6 +115,50 @@ test('filterLibraryEntries recognizes the Epic platform quick filter', () => {
   assert.deepEqual(getTitles(filteredEntries), ['Epic Game'])
 })
 
+test('filterLibraryEntries matches combined provider and status filters against the same grouped member', () => {
+  const groupedEntry = makeGroupedEntry({
+    id: 'group-dual-provider',
+    title: 'Dual Provider Game',
+    memberEntries: [
+      makeEntry({
+        id: 'steam-member',
+        title: 'Dual Provider Game',
+        primaryPlatformId: 'steam',
+        installStatus: 'not_installed',
+      }),
+      makeEntry({
+        id: 'xbox-member',
+        title: 'Dual Provider Game',
+        primaryPlatformId: 'xbox',
+        installStatus: 'installed',
+      }),
+    ],
+  })
+  const epicEntry = makeEntry({
+    id: 'epic-installed',
+    title: 'Epic Installed Game',
+    primaryPlatformId: 'epic',
+    installStatus: 'installed',
+  })
+
+  assert.deepEqual(
+    getTitles(filterLibraryEntries([groupedEntry, epicEntry], '', [QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.INSTALLED])),
+    [],
+  )
+  assert.deepEqual(
+    getTitles(filterLibraryEntries([groupedEntry, epicEntry], '', [QUICK_FILTER_IDS.XBOX, QUICK_FILTER_IDS.INSTALLED])),
+    ['Dual Provider Game'],
+  )
+  assert.deepEqual(
+    getTitles(filterLibraryEntries([groupedEntry, epicEntry], '', [QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.NOT_INSTALLED])),
+    ['Dual Provider Game'],
+  )
+  assert.deepEqual(
+    getTitles(filterLibraryEntries([groupedEntry, epicEntry], '', [QUICK_FILTER_IDS.EPIC, QUICK_FILTER_IDS.INSTALLED])),
+    ['Epic Installed Game'],
+  )
+})
+
 test('sortLibraryEntries keeps games without achievement data at the end in both achievement modes', () => {
   const entries = [
     makeEntry({ id: '1', title: 'No Data' }),
@@ -109,4 +171,96 @@ test('sortLibraryEntries keeps games without achievement data at the end in both
 
   assert.deepEqual(getTitles(descendingEntries), ['High', 'Low', 'No Data'])
   assert.deepEqual(getTitles(ascendingEntries), ['Low', 'High', 'No Data'])
+})
+
+test('sortLibraryEntries orders by personal rating and keeps unrated games at the end', () => {
+  const entries = [
+    makeEntry({ id: '1', title: 'Unrated Alpha' }),
+    makeEntry({ id: '2', title: 'Middle', personalRating: 3 }),
+    makeEntry({ id: '3', title: 'Perfect', personalRating: 5 }),
+    makeEntry({ id: '4', title: 'Nearly Perfect', personalRating: 4.5 }),
+    makeEntry({ id: '5', title: 'Unrated Beta' }),
+  ]
+
+  const descendingEntries = sortLibraryEntries(entries, SORT_MODE_IDS.PERSONAL_RATING_DESC)
+  const ascendingEntries = sortLibraryEntries(entries, SORT_MODE_IDS.PERSONAL_RATING_ASC)
+
+  assert.deepEqual(getTitles(descendingEntries), ['Perfect', 'Nearly Perfect', 'Middle', 'Unrated Alpha', 'Unrated Beta'])
+  assert.deepEqual(getTitles(ascendingEntries), ['Middle', 'Nearly Perfect', 'Perfect', 'Unrated Alpha', 'Unrated Beta'])
+})
+
+test('sortLibraryEntries falls back to title when personal ratings tie', () => {
+  const entries = [
+    makeEntry({ id: '1', title: 'Zelda', personalRating: 4.5 }),
+    makeEntry({ id: '2', title: 'Alpha', personalRating: 4.5 }),
+    makeEntry({ id: '3', title: 'Bastion', personalRating: 3 }),
+  ]
+
+  const sortedEntries = sortLibraryEntries(entries, SORT_MODE_IDS.PERSONAL_RATING_DESC)
+
+  assert.deepEqual(getTitles(sortedEntries), ['Alpha', 'Zelda', 'Bastion'])
+})
+
+test('filterLibraryEntries shows rated and unrated games by personal rating presence', () => {
+  const entries = [
+    makeEntry({ id: '1', title: 'Explicit Null', personalRating: null }),
+    makeEntry({ id: '2', title: 'Rated Five', personalRating: 5 }),
+    makeEntry({ id: '3', title: 'Rated Half', personalRating: 4.5 }),
+    makeEntry({ id: '4', title: 'Unrated' }),
+  ]
+
+  assert.deepEqual(
+    getTitles(filterLibraryEntries(entries, '', [QUICK_FILTER_IDS.RATED])),
+    ['Rated Five', 'Rated Half'],
+  )
+  assert.deepEqual(
+    getTitles(filterLibraryEntries(entries, '', [QUICK_FILTER_IDS.UNRATED])),
+    ['Explicit Null', 'Unrated'],
+  )
+})
+
+test('filterLibraryEntries combines rated filter with provider and status filters on grouped entries', () => {
+  const groupedEntry = makeGroupedEntry({
+    id: 'group-rated-steam',
+    title: 'Rated Steam Group',
+    memberEntries: [
+      makeEntry({
+        id: 'steam-member',
+        title: 'Rated Steam Group',
+        personalRating: 4.5,
+        primaryPlatformId: 'steam',
+        installStatus: 'installed',
+      }),
+      makeEntry({
+        id: 'xbox-member',
+        title: 'Rated Steam Group',
+        personalRating: 4.5,
+        primaryPlatformId: 'xbox',
+        installStatus: 'not_installed',
+      }),
+    ],
+  })
+  const unratedSteamEntry = makeEntry({
+    id: 'steam-unrated',
+    title: 'Unrated Steam',
+    primaryPlatformId: 'steam',
+    installStatus: 'installed',
+  })
+
+  assert.deepEqual(
+    getTitles(filterLibraryEntries(
+      [groupedEntry, unratedSteamEntry],
+      '',
+      [QUICK_FILTER_IDS.RATED, QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.INSTALLED],
+    )),
+    ['Rated Steam Group'],
+  )
+  assert.deepEqual(
+    getTitles(filterLibraryEntries(
+      [groupedEntry, unratedSteamEntry],
+      '',
+      [QUICK_FILTER_IDS.UNRATED, QUICK_FILTER_IDS.STEAM, QUICK_FILTER_IDS.INSTALLED],
+    )),
+    ['Unrated Steam'],
+  )
 })

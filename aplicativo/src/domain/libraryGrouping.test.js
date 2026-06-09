@@ -134,6 +134,24 @@ test('groupLibraryEntries marks a merged entry as favorite when any member is fa
   assert.equal(groupedEntries[0].isFavorite, true)
 })
 
+test('groupLibraryEntries exposes personal review from grouped members', () => {
+  const groupedEntries = groupLibraryEntries([
+    steamEntry,
+    {
+      ...xboxEntry,
+      game: {
+        ...xboxEntry.game,
+        personalRating: 4.5,
+        personalReview: 'Minha versao preferida.',
+      },
+    },
+  ])
+
+  assert.equal(groupedEntries.length, 1)
+  assert.equal(groupedEntries[0].game.personalRating, 4.5)
+  assert.equal(groupedEntries[0].game.personalReview, 'Minha versao preferida.')
+})
+
 test('groupLibraryEntries keeps non cross-platform entries separate', () => {
   const groupedEntries = groupLibraryEntries([manualEntry])
 
