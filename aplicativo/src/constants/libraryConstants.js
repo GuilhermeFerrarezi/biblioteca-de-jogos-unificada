@@ -27,6 +27,8 @@ export const QUICK_FILTER_IDS = Object.freeze({
   FAVORITES: 'favorites',
   INSTALLED: 'installed',
   NOT_INSTALLED: 'not_installed',
+  RATED: 'rated',
+  UNRATED: 'unrated',
   STEAM: 'steam',
   XBOX: 'xbox',
   EPIC: 'epic',
@@ -38,6 +40,8 @@ export const QUICK_FILTERS = Object.freeze([
   { id: QUICK_FILTER_IDS.FAVORITES, label: 'Favoritos' },
   { id: QUICK_FILTER_IDS.INSTALLED, label: 'Instalados' },
   { id: QUICK_FILTER_IDS.NOT_INSTALLED, label: 'Nao instalados' },
+  { id: QUICK_FILTER_IDS.RATED, label: 'Avaliados' },
+  { id: QUICK_FILTER_IDS.UNRATED, label: 'Não avaliados' },
   { id: QUICK_FILTER_IDS.STEAM, label: 'Steam' },
   { id: QUICK_FILTER_IDS.XBOX, label: 'Xbox' },
   { id: QUICK_FILTER_IDS.EPIC, label: 'Epic' },
@@ -52,6 +56,8 @@ export const SORT_MODE_IDS = Object.freeze({
   FAVORITES_FIRST: 'favorites_first',
   ACHIEVEMENTS_DESC: 'achievements_desc',
   ACHIEVEMENTS_ASC: 'achievements_asc',
+  PERSONAL_RATING_DESC: 'personal_rating_desc',
+  PERSONAL_RATING_ASC: 'personal_rating_asc',
 })
 
 export const SORT_MODE_OPTIONS = Object.freeze([
@@ -60,6 +66,8 @@ export const SORT_MODE_OPTIONS = Object.freeze([
   { id: SORT_MODE_IDS.PLAYTIME_DESC, label: 'Horas: maior' },
   { id: SORT_MODE_IDS.PLAYTIME_ASC, label: 'Horas: menor' },
   { id: SORT_MODE_IDS.FAVORITES_FIRST, label: 'Favoritos primeiro' },
+  { id: SORT_MODE_IDS.PERSONAL_RATING_DESC, label: 'Melhor avaliados' },
+  { id: SORT_MODE_IDS.PERSONAL_RATING_ASC, label: 'Pior avaliados' },
   { id: SORT_MODE_IDS.ACHIEVEMENTS_DESC, label: 'Conquistas: maior' },
   { id: SORT_MODE_IDS.ACHIEVEMENTS_ASC, label: 'Conquistas: menor' },
 ])

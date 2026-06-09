@@ -131,6 +131,7 @@ pub fn run() {
             commands::disconnect_steam_web_api_key,
             commands::set_library_entry_archived,
             commands::set_library_entry_favorite,
+            commands::set_library_entries_personal_review,
             commands::launch_library_entry,
         ])
         .run(tauri::generate_context!())
@@ -1828,6 +1829,21 @@ mod commands {
             .map_err(|_| "failed to lock local database".to_string())?;
 
         storage::set_library_entry_favorite(&mut connection, &entry_id, is_favorite)
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn set_library_entries_personal_review(
+        entry_ids: Vec<String>,
+        input: storage::PersonalReviewInput,
+        state: State<'_, AppState>,
+    ) -> Result<(), String> {
+        let mut connection = state
+            .connection
+            .lock()
+            .map_err(|_| "failed to lock local database".to_string())?;
+
+        storage::set_library_entries_personal_review(&mut connection, &entry_ids, input)
             .map_err(|error| error.to_string())
     }
 
@@ -4826,6 +4842,7 @@ mod storage {
         let compatibility_started_at = std::time::Instant::now();
         ensure_archived_column(&connection)?;
         ensure_favorite_column(&connection)?;
+        ensure_game_user_reviews_table(&connection)?;
         ensure_active_entries_index(&connection)?;
         ensure_favorite_entries_index(&connection)?;
         ensure_local_cleanup_indexes(&connection)?;
@@ -4911,6 +4928,22 @@ mod storage {
         PRIMARY KEY (game_id, genre)
       );
 
+      CREATE TABLE IF NOT EXISTS game_user_reviews (
+        game_id TEXT PRIMARY KEY,
+        personal_rating REAL,
+        personal_review TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
+        CHECK (
+          personal_rating IS NULL OR (
+            personal_rating >= 0.5
+            AND personal_rating <= 5.0
+            AND personal_rating * 2 = CAST(personal_rating * 2 AS INTEGER)
+          )
+        )
+      );
+
       CREATE TABLE IF NOT EXISTS provider_account_configs (
         provider_id TEXT PRIMARY KEY,
         account_id TEXT,
@@ -4981,6 +5014,12 @@ mod storage {
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, ?1)",
             params![now_iso()],
         )?;
+        if table_exists(connection, "schema_migrations")? {
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, ?1)",
+                params![now_iso()],
+            )?;
+        }
 
         Ok(())
     }
@@ -4992,6 +5031,13 @@ mod storage {
         genre: Option<String>,
         install_status: String,
         launch_target: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct PersonalReviewInput {
+        rating: Option<f64>,
+        review: Option<String>,
     }
 
     #[derive(Debug, Serialize)]
@@ -6173,6 +6219,8 @@ mod storage {
         achievements: Option<GameAchievementsDto>,
         genres: Vec<String>,
         tags: Vec<String>,
+        personal_rating: Option<f64>,
+        personal_review: Option<String>,
         user_overrides: serde_json::Value,
     }
 
@@ -6239,6 +6287,7 @@ mod storage {
     }
 
     pub fn list_library_entries(connection: &Connection) -> rusqlite::Result<Vec<LibraryEntryDto>> {
+        ensure_game_user_reviews_table(connection)?;
         let list_started_at = std::time::Instant::now();
         let mut statement = connection.prepare(
             r#"
@@ -6256,9 +6305,12 @@ mod storage {
         games.sort_title,
         games.installed,
         games.playtime_total_minutes,
-        games.accent_color
+        games.accent_color,
+        game_user_reviews.personal_rating,
+        game_user_reviews.personal_review
       FROM library_entries
       JOIN games ON games.id = library_entries.game_id
+      LEFT JOIN game_user_reviews ON game_user_reviews.game_id = games.id
       WHERE library_entries.is_archived = 0
       ORDER BY library_entries.added_at DESC, games.sort_title
       "#,
@@ -6281,6 +6333,8 @@ mod storage {
                 installed: row.get::<_, i64>(11)? == 1,
                 playtime_total_minutes: row.get(12)?,
                 accent_color: row.get(13)?,
+                personal_rating: row.get(14)?,
+                personal_review: row.get(15)?,
                 source_account_id: None,
             })
         })?;
@@ -6317,6 +6371,7 @@ mod storage {
     }
 
     pub fn list_manual_games(connection: &Connection) -> rusqlite::Result<Vec<LibraryEntryDto>> {
+        ensure_game_user_reviews_table(connection)?;
         let mut statement = connection.prepare(
             r#"
       SELECT
@@ -6333,9 +6388,12 @@ mod storage {
         games.sort_title,
         games.installed,
         games.playtime_total_minutes,
-        games.accent_color
+        games.accent_color,
+        game_user_reviews.personal_rating,
+        game_user_reviews.personal_review
       FROM library_entries
       JOIN games ON games.id = library_entries.game_id
+      LEFT JOIN game_user_reviews ON game_user_reviews.game_id = games.id
       WHERE library_entries.primary_platform_id = 'manual'
         AND library_entries.is_archived = 0
       ORDER BY library_entries.added_at DESC
@@ -6359,6 +6417,8 @@ mod storage {
                 installed: row.get::<_, i64>(11)? == 1,
                 playtime_total_minutes: row.get(12)?,
                 accent_color: row.get(13)?,
+                personal_rating: row.get(14)?,
+                personal_review: row.get(15)?,
                 source_account_id: None,
             })
         })?;
@@ -6533,6 +6593,8 @@ mod storage {
         installed: bool,
         playtime_total_minutes: i64,
         accent_color: Option<String>,
+        personal_rating: Option<f64>,
+        personal_review: Option<String>,
         source_account_id: Option<String>,
     }
 
@@ -6554,9 +6616,12 @@ mod storage {
           games.sort_title,
           games.installed,
           games.playtime_total_minutes,
-          games.accent_color
+          games.accent_color,
+          game_user_reviews.personal_rating,
+          game_user_reviews.personal_review
         FROM library_entries
         JOIN games ON games.id = library_entries.game_id
+        LEFT JOIN game_user_reviews ON game_user_reviews.game_id = games.id
         WHERE library_entries.id = ?1
         "#,
                 params![entry_id],
@@ -6576,6 +6641,8 @@ mod storage {
                         installed: row.get::<_, i64>(11)? == 1,
                         playtime_total_minutes: row.get(12)?,
                         accent_color: row.get(13)?,
+                        personal_rating: row.get(14)?,
+                        personal_review: row.get(15)?,
                         source_account_id: None,
                     })
                 },
@@ -6624,6 +6691,8 @@ mod storage {
                 achievements,
                 genres,
                 tags: Vec::new(),
+                personal_rating: row.personal_rating,
+                personal_review: row.personal_review,
                 user_overrides: serde_json::json!({}),
             },
         })
@@ -7035,6 +7104,37 @@ mod storage {
         Ok(())
     }
 
+    fn ensure_game_user_reviews_table(connection: &Connection) -> rusqlite::Result<()> {
+        connection.execute(
+            r#"
+            CREATE TABLE IF NOT EXISTS game_user_reviews (
+              game_id TEXT PRIMARY KEY,
+              personal_rating REAL,
+              personal_review TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
+              CHECK (
+                personal_rating IS NULL OR (
+                  personal_rating >= 0.5
+                  AND personal_rating <= 5.0
+                  AND personal_rating * 2 = CAST(personal_rating * 2 AS INTEGER)
+                )
+              )
+            )
+            "#,
+            [],
+        )?;
+        if table_exists(connection, "schema_migrations")? {
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, ?1)",
+                params![now_iso()],
+            )?;
+        }
+
+        Ok(())
+    }
+
     fn ensure_active_entries_index(connection: &Connection) -> rusqlite::Result<()> {
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_library_entries_active_added_at ON library_entries(added_at DESC) WHERE is_archived = 0",
@@ -7248,6 +7348,17 @@ mod storage {
             .collect();
 
         columns
+    }
+
+    fn table_exists(connection: &Connection, table_name: &str) -> rusqlite::Result<bool> {
+        connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table_name],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|value| value.is_some())
     }
 
     struct SeedLibraryEntry {
@@ -9092,6 +9203,7 @@ mod storage {
     fn list_local_entries_by_source(
         connection: &Connection,
     ) -> rusqlite::Result<HashMap<String, EntryRow>> {
+        ensure_game_user_reviews_table(connection)?;
         let mut statement = connection.prepare(
             r#"
             SELECT
@@ -9110,9 +9222,12 @@ mod storage {
               games.installed,
               games.playtime_total_minutes,
               games.accent_color,
+              game_user_reviews.personal_rating,
+              game_user_reviews.personal_review,
               game_sources.account_id
             FROM library_entries
             JOIN games ON games.id = library_entries.game_id
+            LEFT JOIN game_user_reviews ON game_user_reviews.game_id = games.id
             JOIN game_sources ON game_sources.game_id = library_entries.game_id
             WHERE library_entries.primary_platform_id = 'local'
               AND game_sources.platform_id = 'local'
@@ -9138,7 +9253,9 @@ mod storage {
                         installed: row.get::<_, i64>(12)? == 1,
                         playtime_total_minutes: row.get(13)?,
                         accent_color: row.get(14)?,
-                        source_account_id: row.get(15)?,
+                        personal_rating: row.get(15)?,
+                        personal_review: row.get(16)?,
+                        source_account_id: row.get(17)?,
                     },
                 ))
             })?
@@ -9150,6 +9267,7 @@ mod storage {
     fn list_steam_entries_by_source(
         connection: &Connection,
     ) -> rusqlite::Result<HashMap<String, EntryRow>> {
+        ensure_game_user_reviews_table(connection)?;
         let mut statement = connection.prepare(
             r#"
             SELECT
@@ -9168,9 +9286,12 @@ mod storage {
               games.installed,
               games.playtime_total_minutes,
               games.accent_color,
+              game_user_reviews.personal_rating,
+              game_user_reviews.personal_review,
               game_sources.account_id
             FROM library_entries
             JOIN games ON games.id = library_entries.game_id
+            LEFT JOIN game_user_reviews ON game_user_reviews.game_id = games.id
             JOIN game_sources ON game_sources.game_id = library_entries.game_id
             WHERE library_entries.primary_platform_id = 'steam'
               AND game_sources.platform_id = 'steam'
@@ -9196,7 +9317,9 @@ mod storage {
                         installed: row.get::<_, i64>(12)? == 1,
                         playtime_total_minutes: row.get(13)?,
                         accent_color: row.get(14)?,
-                        source_account_id: row.get(15)?,
+                        personal_rating: row.get(15)?,
+                        personal_review: row.get(16)?,
+                        source_account_id: row.get(17)?,
                     },
                 ))
             })?
@@ -9208,6 +9331,7 @@ mod storage {
     fn list_epic_entries_by_source(
         connection: &Connection,
     ) -> rusqlite::Result<HashMap<String, EntryRow>> {
+        ensure_game_user_reviews_table(connection)?;
         let mut statement = connection.prepare(
             r#"
             SELECT
@@ -9226,9 +9350,12 @@ mod storage {
               games.installed,
               games.playtime_total_minutes,
               games.accent_color,
+              game_user_reviews.personal_rating,
+              game_user_reviews.personal_review,
               game_sources.account_id
             FROM library_entries
             JOIN games ON games.id = library_entries.game_id
+            LEFT JOIN game_user_reviews ON game_user_reviews.game_id = games.id
             JOIN game_sources ON game_sources.game_id = library_entries.game_id
             WHERE game_sources.platform_id = 'epic'
             "#,
@@ -9253,7 +9380,9 @@ mod storage {
                         installed: row.get::<_, i64>(12)? == 1,
                         playtime_total_minutes: row.get(13)?,
                         accent_color: row.get(14)?,
-                        source_account_id: row.get(15)?,
+                        personal_rating: row.get(15)?,
+                        personal_review: row.get(16)?,
+                        source_account_id: row.get(17)?,
                     },
                 ))
             })?
@@ -9271,6 +9400,7 @@ mod storage {
     fn list_local_entries_with_primary_action(
         connection: &Connection,
     ) -> rusqlite::Result<Vec<LocalEntryWithActionRow>> {
+        ensure_game_user_reviews_table(connection)?;
         let mut statement = connection.prepare(
             r#"
             SELECT
@@ -9288,10 +9418,13 @@ mod storage {
               games.installed,
               games.playtime_total_minutes,
               games.accent_color,
+              game_user_reviews.personal_rating,
+              game_user_reviews.personal_review,
               game_sources.account_id,
               launch_actions.target
             FROM library_entries
             JOIN games ON games.id = library_entries.game_id
+            LEFT JOIN game_user_reviews ON game_user_reviews.game_id = games.id
             JOIN game_sources ON game_sources.game_id = library_entries.game_id
             JOIN launch_actions ON launch_actions.game_id = library_entries.game_id
             WHERE library_entries.primary_platform_id = 'local'
@@ -9320,9 +9453,11 @@ mod storage {
                         installed: row.get::<_, i64>(11)? == 1,
                         playtime_total_minutes: row.get(12)?,
                         accent_color: row.get(13)?,
-                        source_account_id: row.get(14)?,
+                        personal_rating: row.get(14)?,
+                        personal_review: row.get(15)?,
+                        source_account_id: row.get(16)?,
                     },
-                    target: row.get(15)?,
+                    target: row.get(17)?,
                 })
             })?
             .collect();
@@ -10354,6 +10489,122 @@ mod storage {
         }
 
         Ok(())
+    }
+
+    pub fn set_library_entries_personal_review(
+        connection: &mut Connection,
+        entry_ids: &[String],
+        input: PersonalReviewInput,
+    ) -> rusqlite::Result<()> {
+        let normalized_review = normalize_personal_review_input(input)?;
+        let mut unique_entry_ids = Vec::new();
+
+        for entry_id in entry_ids {
+            let entry_id = entry_id.trim();
+            if entry_id.is_empty()
+                || unique_entry_ids
+                    .iter()
+                    .any(|candidate| candidate == entry_id)
+            {
+                continue;
+            }
+            unique_entry_ids.push(entry_id.to_string());
+        }
+
+        if unique_entry_ids.is_empty() {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "entry_ids must not be empty".to_string(),
+            ));
+        }
+
+        let transaction = connection.transaction()?;
+        let updated_at = now_iso();
+
+        for entry_id in unique_entry_ids {
+            let game_id = transaction
+                .query_row(
+                    "SELECT game_id FROM library_entries WHERE id = ?1",
+                    params![entry_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+
+            transaction.execute(
+                r#"
+                INSERT INTO game_user_reviews (
+                  game_id,
+                  personal_rating,
+                  personal_review,
+                  created_at,
+                  updated_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?4)
+                ON CONFLICT(game_id) DO UPDATE SET
+                  personal_rating = excluded.personal_rating,
+                  personal_review = excluded.personal_review,
+                  updated_at = excluded.updated_at
+                "#,
+                params![
+                    game_id,
+                    normalized_review.rating,
+                    normalized_review.review,
+                    updated_at,
+                ],
+            )?;
+            transaction.execute(
+                r#"
+                UPDATE library_entries
+                SET updated_at = ?2
+                WHERE id = ?1
+                "#,
+                params![entry_id, updated_at],
+            )?;
+        }
+
+        transaction.commit()?;
+        Ok(())
+    }
+
+    struct NormalizedPersonalReview {
+        rating: Option<f64>,
+        review: Option<String>,
+    }
+
+    fn normalize_personal_review_input(
+        input: PersonalReviewInput,
+    ) -> rusqlite::Result<NormalizedPersonalReview> {
+        if let Some(rating) = input.rating {
+            let half_step = rating * 2.0;
+            if !rating.is_finite()
+                || !(0.5..=5.0).contains(&rating)
+                || (half_step.round() - half_step).abs() > f64::EPSILON
+            {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "rating must be null or a half-star value from 0.5 to 5".to_string(),
+                ));
+            }
+        }
+
+        let review = input.review.and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+
+        if review
+            .as_ref()
+            .map(|value| value.chars().count() > 4000)
+            .unwrap_or(false)
+        {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "review must be 4000 characters or fewer".to_string(),
+            ));
+        }
+
+        Ok(NormalizedPersonalReview {
+            rating: input.rating,
+            review,
+        })
     }
 
     fn create_slug(value: &str) -> String {
@@ -13069,7 +13320,24 @@ mod storage {
                 table_has_column(&connection, "library_entries", "is_favorite")
                     .expect("check favorite column")
             );
+            assert!(
+                connection
+                    .query_row(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'game_user_reviews'",
+                        [],
+                        |_| Ok(())
+                    )
+                    .optional()
+                    .expect("check review table")
+                    .is_some()
+            );
             assert!(entries.iter().all(|entry| !entry.is_favorite));
+            assert!(entries
+                .iter()
+                .all(|entry| entry.game.personal_rating.is_none()));
+            assert!(entries
+                .iter()
+                .all(|entry| entry.game.personal_review.is_none()));
 
             let _ = std::fs::remove_file(path);
         }
@@ -13135,6 +13403,112 @@ mod storage {
                 .expect("unfavorited entry appears in listing");
 
             assert!(!unfavorited_entry.is_favorite);
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn set_library_entries_personal_review_is_reflected_in_listing() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-personal-review-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            set_library_entries_personal_review(
+                &mut connection,
+                &["entry-manual-silksong".to_string()],
+                PersonalReviewInput {
+                    rating: Some(4.5),
+                    review: Some("  Excelente para revisitar depois.  ".to_string()),
+                },
+            )
+            .expect("save personal review");
+
+            let entries = list_library_entries(&connection).expect("list reviewed state");
+            let reviewed_entry = entries
+                .iter()
+                .find(|entry| entry.id == "entry-manual-silksong")
+                .expect("reviewed entry appears in listing");
+            let serialized_entry =
+                serde_json::to_value(reviewed_entry).expect("serialize reviewed entry");
+
+            assert_eq!(reviewed_entry.game.personal_rating, Some(4.5));
+            assert_eq!(
+                reviewed_entry.game.personal_review.as_deref(),
+                Some("Excelente para revisitar depois.")
+            );
+            assert_eq!(
+                serialized_entry["game"]["personalRating"],
+                serde_json::json!(4.5)
+            );
+            assert_eq!(
+                serialized_entry["game"]["personalReview"],
+                serde_json::json!("Excelente para revisitar depois.")
+            );
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn set_library_entries_personal_review_can_clear_values() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-personal-review-clear-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            set_library_entries_personal_review(
+                &mut connection,
+                &["entry-manual-silksong".to_string()],
+                PersonalReviewInput {
+                    rating: Some(5.0),
+                    review: Some("Primeira resenha".to_string()),
+                },
+            )
+            .expect("save personal review");
+            set_library_entries_personal_review(
+                &mut connection,
+                &["entry-manual-silksong".to_string()],
+                PersonalReviewInput {
+                    rating: None,
+                    review: Some("   ".to_string()),
+                },
+            )
+            .expect("clear personal review");
+
+            let entries = list_library_entries(&connection).expect("list cleared state");
+            let cleared_entry = entries
+                .iter()
+                .find(|entry| entry.id == "entry-manual-silksong")
+                .expect("cleared entry appears in listing");
+
+            assert_eq!(cleared_entry.game.personal_rating, None);
+            assert_eq!(cleared_entry.game.personal_review, None);
+
+            let _ = std::fs::remove_file(path);
+        }
+
+        #[test]
+        fn set_library_entries_personal_review_rejects_invalid_rating() {
+            let path = std::env::temp_dir().join(format!(
+                "biblioteca-jogos-personal-review-invalid-{}.sqlite3",
+                timestamp_millis()
+            ));
+            let mut connection = open_seeded_database(&path);
+
+            for rating in [0.0, 4.25, 5.5] {
+                let result = set_library_entries_personal_review(
+                    &mut connection,
+                    &["entry-manual-silksong".to_string()],
+                    PersonalReviewInput {
+                        rating: Some(rating),
+                        review: None,
+                    },
+                );
+
+                assert!(result.is_err(), "rating {rating} should be rejected");
+            }
 
             let _ = std::fs::remove_file(path);
         }

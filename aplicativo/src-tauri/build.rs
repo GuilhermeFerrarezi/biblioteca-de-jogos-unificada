@@ -34,6 +34,7 @@ const COMMANDS: &[&str] = &[
     "disconnect_steam_web_api_key",
     "set_library_entry_archived",
     "set_library_entry_favorite",
+    "set_library_entries_personal_review",
     "launch_library_entry",
 ];
 

@@ -38,11 +38,12 @@ games
   1 -- N game_sources
   1 -- N launch_actions
   1 -- N game_genres
+  1 -- 0/1 game_user_reviews
 
 provider_account_configs
 ```
 
-O contrato entregue ao frontend e montado como `LibraryEntryDto`: uma entrada de biblioteca (`library_entries`) com os dados principais do jogo (`games`), fontes (`game_sources`), acoes de lancamento (`launch_actions`) e generos (`game_genres`).
+O contrato entregue ao frontend e montado como `LibraryEntryDto`: uma entrada de biblioteca (`library_entries`) com os dados principais do jogo (`games`), fontes (`game_sources`), acoes de lancamento (`launch_actions`), generos (`game_genres`) e avaliacao pessoal (`game_user_reviews`).
 
 `schema_migrations` registra a migracao formal atualmente aplicada no banco, mas nao representa sozinho toda a historia de compatibilidade. O backend hoje corrige bancos legados em runtime com `ALTER TABLE` e indices `IF NOT EXISTS`, entao a presenca de uma tabela/coluna no banco nao deve ser inferida apenas pela versao persistida.
 
@@ -140,6 +141,20 @@ Chave primaria composta:
 PRIMARY KEY (game_id, genre)
 ```
 
+### `game_user_reviews`
+
+Guarda a avaliacao pessoal do usuario para cada jogo canonico. Esta tabela e separada das fontes/providers para que jogos agrupados Steam/Xbox/Epic compartilhem a mesma nota e resenha.
+
+| Coluna | Tipo | Regra | Uso |
+| --- | --- | --- | --- |
+| `game_id` | `TEXT` | `PRIMARY KEY`, FK `games(id)` `ON DELETE CASCADE` | Jogo canonico avaliado. |
+| `personal_rating` | `REAL` | Opcional | Nota pessoal em incrementos de meia estrela, de `0.5` a `5`; `NULL` representa sem avaliacao. |
+| `personal_review` | `TEXT` | Opcional | Resenha pessoal em texto livre, limitada a 4000 caracteres; texto vazio/whitespace e normalizado para `NULL`. |
+| `created_at` | `TEXT` | `NOT NULL` | Timestamp ISO de criacao da avaliacao. |
+| `updated_at` | `TEXT` | `NOT NULL` | Timestamp ISO da ultima atualizacao. |
+
+O DTO da listagem expoe esses dados como `game.personalRating` e `game.personalReview`. Quando uma entrada visual esta agrupada no frontend, a mesma avaliacao/resenha e exibida ao alternar provider ou launcher.
+
 ### `provider_account_configs`
 
 Guarda configuracoes nao secretas de conta por provider. Segredos como Steam Web API key continuam fora desta tabela e devem ficar no AuthVault do backend, usando o keyring/cofre do sistema operacional como primario e um arquivo DPAPI cifrado pelo usuario Windows como fallback quando o Credential Manager nao consegue validar leitura apos gravacao.
@@ -201,7 +216,7 @@ Indices adicionais de compatibilidade/otimizacao:
 
 ### Listagem unificada
 
-`list_library_entries` consulta `library_entries` com `games`, filtra `is_archived = 0`, ordena por `added_at DESC, sort_title`, e depois carrega fontes, acoes e generos por `game_id`.
+`list_library_entries` consulta `library_entries` com `games`, filtra `is_archived = 0`, ordena por `added_at DESC, sort_title`, e depois carrega fontes, acoes, generos e avaliacao pessoal por `game_id`.
 
 ### Cadastro manual
 
@@ -231,6 +246,14 @@ O estado `is_archived` e preservado.
 ### Favoritos
 
 `set_library_entry_favorite` altera `library_entries.is_favorite` e `updated_at`. A listagem principal continua retornando favoritos e nao favoritos; o frontend usa `isFavorite` para marcar jogos, filtrar favoritos e ordenar favoritos primeiro.
+
+### Avaliacao pessoal
+
+`set_library_entries_personal_review` grava rating e review em `game_user_reviews` para uma ou mais entradas de biblioteca. O rating aceita `NULL` ou valores de meia estrela entre `0.5` e `5`. A review e normalizada com trim; string vazia ou apenas whitespace vira `NULL`, e o limite e de 4000 caracteres.
+
+No frontend, jogos agrupados por multiplos providers usam uma avaliacao por jogo agrupado. O comando recebe os ids das entradas membros e grava o mesmo rating/review para os jogos canonicos correspondentes, preservando a experiencia de uma unica avaliacao ao alternar Steam/Xbox/Epic. A acao `Limpar nota` envia `personalRating = NULL` preservando `personalReview`; apagar a review continua sendo feito manualmente limpando o texto e salvando.
+
+A navegacao da biblioteca usa esses campos apenas no frontend: badges discretos em cards/lista, ordenacoes `Melhor avaliados` e `Pior avaliados` com jogos sem nota no fim, e filtros `Avaliados`/`Não avaliados`. Nao ha filtro por faixa de estrelas neste corte.
 
 ### Sincronizacao local
 
@@ -343,3 +366,4 @@ Quando uma migration ou ajuste de dominio aumentar esse custo, a solucao esperad
 4. Se `provider_account_configs` mudar, preservar o separador entre metadados nao secretos e segredos no AuthVault.
 5. Se a listagem principal mudar, declarar o impacto de consultas e indices e evitar piorar o N+1 sem batch/prefetch.
 6. Se a limpeza local mudar, continuar arquivando em vez de deletar, a menos que exista plano de restauracao/copia explicitamente documentado.
+7. Dados pessoais como reviews, colecoes e tags podem exigir no futuro uma identidade canonica persistente de jogo agrupado no backend; hoje o agrupamento cross-platform ainda e sintetico no frontend por titulo normalizado.

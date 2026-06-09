@@ -44,6 +44,7 @@
     "allow-disconnect-steam-web-api-key",
     "allow-set-library-entry-archived",
     "allow-set-library-entry-favorite",
+    "allow-set-library-entries-personal-review",
     "allow-launch-library-entry",
     "allow-sync-xbox-games",
     "allow-sync-xbox-achievement-games"
