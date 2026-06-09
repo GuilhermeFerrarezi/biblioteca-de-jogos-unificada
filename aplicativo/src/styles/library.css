@@ -1388,10 +1388,24 @@ button:disabled {
 }
 
 .game-cover-grid {
+  --library-cover-card-min: 132px;
+
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--library-cover-card-min)), 1fr));
   gap: 16px;
   margin-top: 16px;
+}
+
+.game-cover-grid[data-grid-size="compact"] {
+  --library-cover-card-min: 108px;
+
+  gap: 14px;
+}
+
+.game-cover-grid[data-grid-size="large"] {
+  --library-cover-card-min: 176px;
+
+  gap: 18px;
 }
 
 .game-cover-card {
@@ -1472,6 +1486,10 @@ button:disabled {
   font-size: 14px;
 }
 
+.game-cover-grid[data-grid-size="compact"] .game-cover-card strong {
+  font-size: 13px;
+}
+
 .game-cover-card > span {
   margin-top: 3px;
   color: #91a39f;
@@ -1514,6 +1532,20 @@ button:disabled {
 .achievement-badge.muted {
   border-color: rgb(145 163 159 / 28%);
   color: #91a39f;
+}
+
+.game-cover-grid[data-grid-size="compact"] .favorite-badge {
+  top: 6px;
+  right: 6px;
+  padding: 5px;
+}
+
+.game-cover-grid[data-grid-size="compact"] .achievement-badge {
+  right: 6px;
+  bottom: 44px;
+  gap: 4px;
+  padding: 5px 6px;
+  font-size: 10px;
 }
 
 .modal-backdrop {
@@ -2263,7 +2295,9 @@ button:disabled {
 .library-defaults-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  grid-template-columns: minmax(136px, 0.42fr) minmax(0, 1fr);
+  align-items: end;
 }
 
 .library-defaults-header {
@@ -2362,6 +2396,64 @@ button:disabled {
 .library-defaults-field {
   display: grid;
   gap: 8px;
+  min-width: 0;
+}
+
+.library-grid-size-field {
+  grid-column: 2;
+  justify-self: end;
+  width: min(100%, 420px);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.library-scan-mode-field {
+  grid-column: 1 / -1;
+}
+
+.library-grid-size-field legend {
+  margin: 0 0 8px;
+  padding: 0;
+  color: #b5c5c1;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.library-grid-size-control {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 3px;
+  min-height: 42px;
+  padding: 3px;
+  border: 1px solid #2a3d47;
+  border-radius: 8px;
+  background: #111a20;
+}
+
+.library-grid-size-control button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: transparent;
+  color: #91a39f;
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-grid-size-control button.active {
+  background: #263741;
+  color: #ffffff;
+}
+
+.library-grid-size-control button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgb(20 184 166 / 20%);
 }
 
 .library-defaults-field span {
@@ -2378,6 +2470,7 @@ button:disabled {
 
 .library-defaults-field select {
   width: 100%;
+  min-width: 0;
   min-height: 42px;
   padding: 0 12px;
   border: 1px solid #2a3d47;
@@ -2588,6 +2681,15 @@ button:disabled {
   }
 
   .library-defaults-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .library-grid-size-field,
+  .library-scan-mode-field {
+    grid-column: auto;
+  }
+
+  .library-grid-size-control {
     grid-template-columns: 1fr;
   }
 

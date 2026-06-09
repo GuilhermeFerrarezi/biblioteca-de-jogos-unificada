@@ -67,12 +67,14 @@ function LibraryPage() {
               isXboxSyncing={library.isXboxSyncing}
               isEpicSyncing={library.isEpicSyncing}
               preferredStoreId={library.preferredStoreId}
+              gridSize={library.gridSize}
               localScanMode={library.localScanMode}
               localScanRootsText={library.localScanRootsText}
               localScanExcludedRootsText={library.localScanExcludedRootsText}
               microsoftClientId={library.microsoftClientId}
               onBackToLibrary={() => setActiveSection('library')}
               onPreferredStoreChange={library.handlePreferredStoreChange}
+              onGridSizeChange={library.handleGridSizeChange}
               onLocalScanModeChange={library.handleLocalScanModeChange}
               onLocalScanRootsChange={library.handleLocalScanRootsChange}
               onLocalScanRootsSelect={library.handleLocalScanRootsSelect}
@@ -116,6 +118,7 @@ function LibraryPage() {
                 showLibraryLoading={library.showLibraryLoading}
                 sortMode={library.sortMode}
                 viewMode={library.viewMode}
+                gridSize={library.gridSize}
                 onFilterChange={library.handleQuickFilterChange}
                 onSearchChange={library.setSearchTerm}
                 onSelectEntry={library.handleSelectEntry}

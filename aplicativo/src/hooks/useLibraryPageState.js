@@ -16,7 +16,12 @@ import {
   syncXboxGames,
   updatePersistedManualGame,
 } from '../services/libraryCommands'
-import { getLibrarySettings, normalizeLibrarySettings, saveLibrarySettings } from '../services/librarySettings'
+import {
+  getLibrarySettings,
+  normalizeLibraryGridSize,
+  normalizeLibrarySettings,
+  saveLibrarySettings,
+} from '../services/librarySettings'
 import { normalizeProviderErrorFeedback } from '../services/providerErrorFeedback'
 import {
   buildManualLibraryEntry,
@@ -90,6 +95,7 @@ export function useLibraryPageState() {
   const [isEpicSyncing, setIsEpicSyncing] = useState(false)
   const [isSteamAccountSyncing, setIsSteamAccountSyncing] = useState(false)
   const [preferredStoreId, setPreferredStoreId] = useState('steam')
+  const [gridSize, setGridSize] = useState('default')
   const [localScanMode, setLocalScanMode] = useState('automatic')
   const [localScanRootsText, setLocalScanRootsText] = useState('')
   const [localScanExcludedRootsText, setLocalScanExcludedRootsText] = useState('')
@@ -127,6 +133,7 @@ export function useLibraryPageState() {
 
         const normalizedSettings = normalizeLibrarySettings(settings)
         setPreferredStoreId(normalizedSettings.preferredStoreId)
+        setGridSize(normalizedSettings.gridSize)
         setLocalScanMode(normalizedSettings.localScanMode)
         setLocalScanRootsText(normalizedSettings.localScanRoots.join('\n'))
         setLocalScanExcludedRootsText(normalizedSettings.localScanExcludedRoots.join('\n'))
@@ -134,6 +141,7 @@ export function useLibraryPageState() {
       } catch {
         if (isMounted) {
           setPreferredStoreId('steam')
+          setGridSize('default')
           setLocalScanMode('automatic')
           setLocalScanRootsText('')
           setLocalScanExcludedRootsText('')
@@ -893,6 +901,10 @@ export function useLibraryPageState() {
     setPreferredStoreId(normalizedPreferredStoreId)
   }, [])
 
+  const handleGridSizeChange = useCallback((nextGridSize) => {
+    setGridSize(normalizeLibraryGridSize(nextGridSize))
+  }, [])
+
   const handleLocalScanModeChange = useCallback((nextLocalScanMode) => {
     const normalizedMode = String(nextLocalScanMode ?? '').trim().toLowerCase()
 
@@ -972,6 +984,7 @@ export function useLibraryPageState() {
     try {
       const savedSettings = await saveLibrarySettings({
         preferredStoreId,
+        gridSize,
         localScanMode,
         localScanRoots: localScanRootsText.split(/\r?\n|;/),
         localScanExcludedRoots: localScanExcludedRootsText.split(/\r?\n|;/),
@@ -979,6 +992,7 @@ export function useLibraryPageState() {
       })
 
       setPreferredStoreId(savedSettings.preferredStoreId)
+      setGridSize(savedSettings.gridSize)
       setLocalScanMode(savedSettings.localScanMode)
       setLocalScanRootsText(savedSettings.localScanRoots.join('\n'))
       setLocalScanExcludedRootsText(savedSettings.localScanExcludedRoots.join('\n'))
@@ -996,13 +1010,14 @@ export function useLibraryPageState() {
     } finally {
       setIsLibrarySettingsSaving(false)
     }
-  }, [localScanExcludedRootsText, localScanMode, localScanRootsText, microsoftClientId, preferredStoreId])
+  }, [gridSize, localScanExcludedRootsText, localScanMode, localScanRootsText, microsoftClientId, preferredStoreId])
 
   return {
     entries,
     groupedEntries,
     filteredEntries,
     preferredStoreId,
+    gridSize,
     localScanMode,
     localScanRootsText,
     localScanExcludedRootsText,
@@ -1048,6 +1063,7 @@ export function useLibraryPageState() {
     handleLaunchPlatformChange,
     handleClearLibraryFilters,
     handlePreferredStoreChange,
+    handleGridSizeChange,
     handleLocalScanModeChange,
     handleLocalScanRootsChange,
     handleLocalScanRootsSelect,

@@ -5,10 +5,14 @@ const LIBRARY_SETTINGS_KEY = 'biblioteca-jogos-unificada.library-settings'
 const LIBRARY_SCAN_MODE_AUTOMATIC = 'automatic'
 const LIBRARY_SCAN_MODE_SELECTED_ONLY = 'selected_only'
 const LIBRARY_SCAN_MODE_AUTOMATIC_PLUS_EXTRA = 'automatic_plus_extra'
+export const LIBRARY_GRID_SIZE_COMPACT = 'compact'
+export const LIBRARY_GRID_SIZE_DEFAULT = 'default'
+export const LIBRARY_GRID_SIZE_LARGE = 'large'
 const DEFAULT_MICROSOFT_CLIENT_ID = String(import.meta.env?.VITE_XBOX_CLIENT_ID ?? '').trim()
 
 const defaultLibrarySettings = Object.freeze({
   preferredStoreId: 'steam',
+  gridSize: LIBRARY_GRID_SIZE_DEFAULT,
   localScanMode: LIBRARY_SCAN_MODE_AUTOMATIC,
   localScanRoots: [],
   localScanExcludedRoots: [],
@@ -26,6 +30,17 @@ const normalizeLocalScanMode = (value) => {
       return LIBRARY_SCAN_MODE_AUTOMATIC_PLUS_EXTRA
     default:
       return LIBRARY_SCAN_MODE_AUTOMATIC
+  }
+}
+
+export const normalizeLibraryGridSize = (value) => {
+  switch (String(value ?? '').trim().toLowerCase()) {
+    case LIBRARY_GRID_SIZE_COMPACT:
+      return LIBRARY_GRID_SIZE_COMPACT
+    case LIBRARY_GRID_SIZE_LARGE:
+      return LIBRARY_GRID_SIZE_LARGE
+    default:
+      return LIBRARY_GRID_SIZE_DEFAULT
   }
 }
 
@@ -67,6 +82,7 @@ export const normalizeLibrarySettings = (settings) => {
   }
 
   const preferredStoreId = normalizePreferredStoreId(settings.preferredStoreId)
+  const gridSize = normalizeLibraryGridSize(settings.gridSize)
   const localScanMode = normalizeLocalScanMode(settings.localScanMode)
   const localScanRoots = normalizePathList(settings.localScanRoots)
   const localScanExcludedRoots = normalizePathList(settings.localScanExcludedRoots)
@@ -76,6 +92,7 @@ export const normalizeLibrarySettings = (settings) => {
 
   return {
     preferredStoreId,
+    gridSize,
     localScanMode,
     localScanRoots,
     localScanExcludedRoots,
